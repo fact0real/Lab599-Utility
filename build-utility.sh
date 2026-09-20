@@ -47,6 +47,16 @@ if [ "${1:-}" = "--test" ]; then
         -IHeaders -ISources \
         tests/ScreenCaptureTests.m Sources/TX500ScreenModel.m Sources/TX500ScreenRenderer.m Sources/TX500ScreenCaptureController.m Sources/Lab599SerialPort.m -o build/ScreenCaptureTests
     ./build/ScreenCaptureTests
+    clang -O2 -Wall -Wextra -Wno-unused-parameter -Werror -fobjc-arc \
+        -mmacosx-version-min=12.0 -framework Cocoa -framework UniformTypeIdentifiers -framework AVFoundation -framework CoreAudio -framework AudioToolbox \
+        -IHeaders -ISources \
+        tests/CWStationTests.m Sources/TX500CWAudioDecoder.m Sources/TX500CWKeyer.m Sources/TX500CWQSOAssistant.m Sources/TX500CWSpectrumView.m Sources/TX500CWStationController.m -o build/CWStationTests
+    ./build/CWStationTests
+    clang -O2 -Wall -Wextra -Wno-unused-parameter -Werror -fobjc-arc \
+        -mmacosx-version-min=12.0 -framework Cocoa -framework AVFoundation -framework CoreAudio -framework AudioToolbox \
+        -IHeaders -ISources \
+        tests/AudioMonitorTests.m Sources/TX500AudioEngine.m Sources/TX500AudioVisualizerView.m Sources/TX500AudioMonitorController.m -o build/AudioMonitorTests
+    ./build/AudioMonitorTests
 fi
 
 # Auto-increment version and build number in Resources/Info.plist
@@ -81,9 +91,9 @@ sed -i '' "s/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = $NEW_BUI
 echo "Compiling universal binary for $BIN_NAME $NEW_VER ($NEW_BUILD) (arm64 & x86_64)..."
 clang -O2 -Wall -Wextra -Wno-unused-parameter -Werror -fobjc-arc \
     -arch arm64 -arch x86_64 -mmacosx-version-min=12.0 \
-    -framework Cocoa -framework UniformTypeIdentifiers \
+    -framework Cocoa -framework UniformTypeIdentifiers -framework AVFoundation -framework CoreAudio -framework AudioToolbox \
     -IHeaders -ISources \
-    Sources/Lab599Utility.m Sources/Lab599FirmwareCatalog.m Sources/TX500Transfer.m Sources/TX500TimeSync.m Sources/Lab599SerialPort.m Sources/TX500CATTest.m Sources/TX500Configuration.m Sources/TX500ProfilesAndBackup.m Sources/TX500SettingsModel.m Sources/TX500ScreenModel.m Sources/TX500ScreenRenderer.m Sources/TX500ScreenCaptureController.m Sources/Lab599ToolsController.m Sources/Lab599DriverController.m Sources/Lab599DocsController.m Sources/TXGaugeView.m Sources/TX500TelemetryEngine.m Sources/Lab599TelemetryController.m Sources/Lab599FeedbackController.m \
+    Sources/Lab599Utility.m Sources/Lab599FirmwareCatalog.m Sources/TX500Transfer.m Sources/TX500TimeSync.m Sources/Lab599SerialPort.m Sources/TX500CATTest.m Sources/TX500Configuration.m Sources/TX500ProfilesAndBackup.m Sources/TX500SettingsModel.m Sources/TX500ScreenModel.m Sources/TX500ScreenRenderer.m Sources/TX500ScreenCaptureController.m Sources/Lab599ToolsController.m Sources/Lab599DriverController.m Sources/Lab599DocsController.m Sources/TXGaugeView.m Sources/TX500TelemetryEngine.m Sources/Lab599TelemetryController.m Sources/Lab599FeedbackController.m Sources/TX500CWAudioDecoder.m Sources/TX500CWKeyer.m Sources/TX500CWQSOAssistant.m Sources/TX500CWSpectrumView.m Sources/TX500CWStationController.m Sources/TX500AudioEngine.m Sources/TX500AudioVisualizerView.m Sources/TX500AudioMonitorController.m \
     -o "build/$BIN_NAME"
 
 /bin/cp "build/$BIN_NAME" "$APP_NAME/Contents/MacOS/$BIN_NAME"

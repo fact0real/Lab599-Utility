@@ -11,7 +11,7 @@ NSString *TXExportMemoryToCSV(NSArray<TXMemoryChannel *> *channels);
 NSArray<TXMemoryChannel *> * _Nullable TXImportMemoryFromCSV(NSString *csvString, NSError **error);
 
 // =============================================================================
-// Operating Profiles (پروفایل‌های کاری)
+// Operating Profiles
 // =============================================================================
 
 @interface TXOperatingProfile : NSObject
@@ -30,7 +30,7 @@ NSArray<TXMemoryChannel *> * _Nullable TXImportMemoryFromCSV(NSString *csvString
 @end
 
 // =============================================================================
-// Backup Comparison Engine (مقایسهٔ پشتیبان‌ها)
+// Backup Comparison Engine
 // =============================================================================
 
 @interface TXSettingsDiffItem : NSObject

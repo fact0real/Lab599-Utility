@@ -1807,7 +1807,7 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
     });
 }
 
-#pragma mark - CSV Import & Export (ورود/خروج CSV)
+#pragma mark - CSV Import & Export
 
 - (void)exportCSVAction:(id)sender {
     (void)sender;
@@ -1871,7 +1871,7 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
     }];
 }
 
-#pragma mark - Operating Profiles (پروفایل‌های کاری)
+#pragma mark - Operating Profiles
 
 - (void)populateProfilesMenu {
     [self.profilesPopup removeAllItems];
@@ -1960,7 +1960,7 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
     [self alert:@"Profile Applied" message:[msg stringByAppendingString:@"\n\nClick 'Write 100 Channels…' to update your radio."]];
 }
 
-#pragma mark - Backup Comparison (مقایسهٔ پشتیبان‌ها)
+#pragma mark - Backup Comparison
 
 - (void)compareSettingsAction:(id)sender {
     (void)sender;

@@ -9,6 +9,8 @@
 #import "Lab599DocsController.h"
 #import "Lab599FeedbackController.h"
 #import "TX500ScreenCaptureController.h"
+#import "TX500CWStationController.h"
+#import "TX500AudioMonitorController.h"
 
 static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
                                     NSTimeInterval timeout, NSError **error) {
@@ -60,6 +62,10 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
         self.action = action;
         self.bezelStyle = NSBezelStyleRegularSquare;
         self.bordered = NO;
+        self.focusRingType = NSFocusRingTypeNone;
+        if ([self.cell respondsToSelector:@selector(setFocusRingType:)]) {
+            [self.cell setFocusRingType:NSFocusRingTypeNone];
+        }
         self.imagePosition = NSImageLeft;
         self.alignment = NSTextAlignmentLeft;
         self.wantsLayer = YES;
@@ -70,26 +76,49 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     return self;
 }
 
+- (BOOL)acceptsFirstResponder {
+    return NO;
+}
+
+- (void)drawFocusRingMask {
+    // Suppress default AppKit focus ring glow around the icon
+}
+
 - (void)setIsSelected:(BOOL)isSelected {
     _isSelected = isSelected;
     [self updateStyle];
 }
 
 - (void)updateStyle {
+    // Resolve system symbol image with explicit weight
     NSImage *img = [NSImage imageWithSystemSymbolName:_iconName accessibilityDescription:nil];
     if (!img) {
         if ([_iconName isEqualToString:@"gauge.with.needle"]) img = [NSImage imageWithSystemSymbolName:@"gauge" accessibilityDescription:nil];
         else if ([_iconName isEqualToString:@"display"]) img = [NSImage imageWithSystemSymbolName:@"tv" accessibilityDescription:nil];
         else if ([_iconName isEqualToString:@"bubble.left.and.bubble.right"]) img = [NSImage imageWithSystemSymbolName:@"text.bubble" accessibilityDescription:nil];
+        else if ([_iconName isEqualToString:@"waveform.badge.plus"] || [_iconName isEqualToString:@"waveform"]) img = [NSImage imageWithSystemSymbolName:@"waveform" accessibilityDescription:nil];
     }
+
+    NSColor *iconColor = _isSelected ? [NSColor controlAccentColor] : [NSColor secondaryLabelColor];
+    if (@available(macOS 11.0, *)) {
+        NSImageSymbolConfiguration *sizeConfig = [NSImageSymbolConfiguration
+            configurationWithPointSize:14.0 weight:NSFontWeightMedium scale:NSImageSymbolScaleSmall];
+        img = [img imageWithSymbolConfiguration:sizeConfig];
+    }
+
+    if (img) {
+        img = [img copy];
+        [img setTemplate:YES];
+    }
+
     self.image = img;
-    
+    self.contentTintColor = iconColor;
+
     if (_isSelected) {
-        self.layer.backgroundColor = [[NSColor controlAccentColor] colorWithAlphaComponent:0.18].CGColor;
-        self.layer.borderColor = [[NSColor controlAccentColor] colorWithAlphaComponent:0.40].CGColor;
+        self.layer.backgroundColor = [[NSColor controlAccentColor] colorWithAlphaComponent:0.15].CGColor;
+        self.layer.borderColor = [[NSColor controlAccentColor] colorWithAlphaComponent:0.35].CGColor;
         self.layer.borderWidth = 1.0;
-        self.contentTintColor = [NSColor controlAccentColor];
-        
+
         NSMutableAttributedString *mas = [[NSMutableAttributedString alloc] initWithString:[NSString stringWithFormat:@"  %@", _rawTitle]];
         [mas addAttributes:@{
             NSFontAttributeName: [NSFont systemFontOfSize:13.0 weight:NSFontWeightSemibold],
@@ -100,8 +129,7 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
         self.layer.backgroundColor = [NSColor clearColor].CGColor;
         self.layer.borderColor = [NSColor clearColor].CGColor;
         self.layer.borderWidth = 0.0;
-        self.contentTintColor = [NSColor secondaryLabelColor];
-        
+
         NSMutableAttributedString *mas = [[NSMutableAttributedString alloc] initWithString:[NSString stringWithFormat:@"  %@", _rawTitle]];
         [mas addAttributes:@{
             NSFontAttributeName: [NSFont systemFontOfSize:13.0 weight:NSFontWeightRegular],
@@ -110,6 +138,7 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
         self.attributedTitle = mas;
     }
 }
+
 
 - (void)setEnabled:(BOOL)enabled {
     [super setEnabled:enabled];
@@ -147,6 +176,9 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
 @property(nonatomic, strong) Lab599DocsController *docsController;
 @property(nonatomic, strong) Lab599FeedbackController *feedbackController;
 @property(nonatomic, strong) TX500ScreenCaptureController *screenController;
+@property(nonatomic, strong) TX500CWStationController *cwStationController;
+@property(nonatomic, strong) TX500AudioMonitorController *audioMonitorController;
+@property(nonatomic, strong) Lab599SerialPort *cwSerialPort;
 
 // Modern Sidebar & Card UI Properties
 @property(nonatomic, strong) NSMutableArray<TX500SidebarButton *> *sidebarItems;
@@ -281,6 +313,9 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     consoleItem.target = self;
     NSMenuItem *outdoorItem = [viewMenu addItemWithTitle:@"Toggle Field Mode" action:@selector(toggleOutdoorMode:) keyEquivalent:@"F"];
     outdoorItem.target = self;
+    [viewMenu addItem:[NSMenuItem separatorItem]];
+    NSMenuItem *cwStationItem = [viewMenu addItemWithTitle:@"CW Station & QSO Studio" action:@selector(selectCWStationTab:) keyEquivalent:@"K"];
+    cwStationItem.target = self;
     viewItem.submenu = viewMenu;
 
     NSMenuItem *helpItem = [[NSMenuItem alloc] initWithTitle:@"Help" action:NULL keyEquivalent:@""];
@@ -301,7 +336,7 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
 
     // Setup legacy operation picker for CLI arguments and underlying state
     self.operationPicker = [NSSegmentedControl segmentedControlWithLabels:@[
-        @"Firmware Update", @"Time Sync", @"Telemetry", @"Radio Screen", @"CAT Test", @"Settings", @"Memory", @"Driver Install", @"Documentation", @"Feedback & Suggestion"
+        @"Firmware Update", @"Time Sync", @"Telemetry", @"Radio Screen", @"CAT Test", @"Settings", @"Memory", @"Driver Install", @"Documentation", @"Feedback & Suggestion", @"CW Station", @"Live Audio (AD-508)"
     ] trackingMode:NSSegmentSwitchTrackingSelectOne target:self action:@selector(operationChanged:)];
     self.operationPicker.selectedSegment = 0;
     self.operationPicker.hidden = YES;
@@ -392,9 +427,11 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     TX500SidebarButton *btnDriver = [[TX500SidebarButton alloc] initWithTitle:@"Driver Install" iconName:@"wrench.and.screwdriver" tag:7 target:self action:@selector(sidebarItemClicked:)];
     TX500SidebarButton *btnDocs = [[TX500SidebarButton alloc] initWithTitle:@"Documentation" iconName:@"doc.text" tag:8 target:self action:@selector(sidebarItemClicked:)];
     TX500SidebarButton *btnFeedback = [[TX500SidebarButton alloc] initWithTitle:@"Feedback" iconName:@"bubble.left.and.bubble.right" tag:9 target:self action:@selector(sidebarItemClicked:)];
+    TX500SidebarButton *btnCW = [[TX500SidebarButton alloc] initWithTitle:@"CW Station" iconName:@"waveform" tag:10 target:self action:@selector(sidebarItemClicked:)];
+    TX500SidebarButton *btnAudio = [[TX500SidebarButton alloc] initWithTitle:@"Live Audio (AD-508)" iconName:@"headphones" tag:11 target:self action:@selector(sidebarItemClicked:)];
 
     [self.sidebarItems addObjectsFromArray:@[
-        btnFw, btnTime, btnTelemetry, btnScreen, btnCat, btnSettings, btnMemory, btnDriver, btnDocs, btnFeedback
+        btnFw, btnTime, btnTelemetry, btnScreen, btnCat, btnSettings, btnMemory, btnDriver, btnDocs, btnFeedback, btnCW, btnAudio
     ]];
 
     for (TX500SidebarButton *b in self.sidebarItems) {
@@ -419,7 +456,7 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     NSStackView *sidebarStack = [NSStackView stackViewWithViews:@[
         brandHeaderStack,
         makeSectionHeader(@"RADIO & LIVE"),
-        btnScreen, btnTelemetry, btnCat,
+        btnAudio, btnCW, btnScreen, btnTelemetry, btnCat,
         makeSectionHeader(@"CONFIGURATION"),
         btnTime, btnSettings, btnMemory,
         makeSectionHeader(@"FIRMWARE & DRIVER"),
@@ -523,6 +560,7 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     self.portMenu.controlSize = NSControlSizeSmall;
     self.portMenu.font = [NSFont systemFontOfSize:11];
     self.portMenu.bordered = NO;
+    self.portMenu.focusRingType = NSFocusRingTypeNone;
     [self.portMenu.widthAnchor constraintEqualToConstant:200].active = YES;
 
     NSBox *portDivider = [NSBox new];
@@ -534,6 +572,7 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     self.refreshButton.translatesAutoresizingMaskIntoConstraints = NO;
     self.refreshButton.bordered = NO;
     self.refreshButton.controlSize = NSControlSizeSmall;
+    self.refreshButton.focusRingType = NSFocusRingTypeNone;
     self.refreshButton.toolTip = @"Refresh Serial Ports (⌘R)";
     if (@available(macOS 11.0, *)) {
         self.refreshButton.image = [NSImage imageWithSystemSymbolName:@"arrow.clockwise" accessibilityDescription:@"Refresh"];
@@ -753,6 +792,88 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     };
     self.feedbackController.view.hidden = YES;
 
+    // CW Station Controller (AD-508 CoreAudio DSP & CAT Studio)
+    self.cwStationController = [TX500CWStationController new];
+    self.cwStationController.selectedPortProvider = ^NSString * { return weakSelf.hasPorts ? weakSelf.portMenu.selectedItem.title : nil; };
+    self.cwStationController.logHandler = ^(NSString *message) { [weakSelf appendLog:message]; };
+    self.cwStationController.serialCommandSender = ^BOOL(NSString *catCommand) {
+        if (!weakSelf.hasPorts) return NO;
+        NSString *portPath = weakSelf.portMenu.selectedItem.title;
+        if (!portPath || ![portPath hasPrefix:@"/dev/cu."]) return NO;
+        if (!weakSelf.cwSerialPort) {
+            NSError *err = nil;
+            weakSelf.cwSerialPort = [Lab599SerialPort openPath:portPath speed:B9600 error:&err];
+            if (!weakSelf.cwSerialPort) {
+                [weakSelf appendLog:[NSString stringWithFormat:@"[CW] Failed to open CAT serial port: %@", err.localizedDescription]];
+                return NO;
+            }
+        }
+        NSData *cmdData = [catCommand dataUsingEncoding:NSASCIIStringEncoding];
+        NSError *writeErr = nil;
+        BOOL ok = [weakSelf.cwSerialPort writeData:cmdData timeout:0.5 cancellation:nil error:&writeErr];
+        if (!ok) {
+            [weakSelf appendLog:[NSString stringWithFormat:@"[CW] CAT write error: %@", writeErr.localizedDescription]];
+            [weakSelf.cwSerialPort close];
+            weakSelf.cwSerialPort = nil;
+        }
+        return ok;
+    };
+    self.cwStationController.decoderStateChangedHandler = ^(BOOL isListening) {
+        (void)isListening; // state is read directly via decoder.isListening in updateConnectionStatusBar
+        [weakSelf updateConnectionStatusBar];
+    };
+    self.cwStationController.view.hidden = YES;
+
+    // Live Audio Monitor Controller (AD-508 CoreAudio Low-Latency & DSP Studio)
+    self.audioMonitorController = [TX500AudioMonitorController new];
+    self.audioMonitorController.logHandler = ^(NSString *message) { [weakSelf appendLog:message]; };
+    self.audioMonitorController.onMonitoringStateChanged = ^(BOOL isMonitoring) {
+        (void)isMonitoring;
+        [weakSelf updateConnectionStatusBar];
+    };
+    self.audioMonitorController.selectedPortProvider = ^NSString *{
+        if (!weakSelf.hasPorts) return nil;
+        NSString *portPath = weakSelf.portMenu.selectedItem.title;
+        if (!portPath || ![portPath hasPrefix:@"/dev/cu."]) return nil;
+        return portPath;
+    };
+    self.audioMonitorController.serialCommandSender = ^BOOL(NSString *catCommand) {
+        if (!weakSelf.hasPorts) return NO;
+        NSString *portPath = weakSelf.portMenu.selectedItem.title;
+        if (!portPath || ![portPath hasPrefix:@"/dev/cu."]) return NO;
+        if (!weakSelf.cwSerialPort) {
+            NSError *err = nil;
+            weakSelf.cwSerialPort = [Lab599SerialPort openPath:portPath speed:B9600 error:&err];
+            if (!weakSelf.cwSerialPort) return NO;
+        }
+        NSData *cmdData = [catCommand dataUsingEncoding:NSASCIIStringEncoding];
+        NSError *writeErr = nil;
+        BOOL ok = [weakSelf.cwSerialPort writeData:cmdData timeout:0.5 cancellation:nil error:&writeErr];
+        if (!ok) {
+            [weakSelf.cwSerialPort close];
+            weakSelf.cwSerialPort = nil;
+        }
+        return ok;
+    };
+    self.audioMonitorController.catQueryHandler = ^NSString *(NSString *catCommand, NSTimeInterval timeout) {
+        if (!weakSelf.hasPorts) return nil;
+        NSString *portPath = weakSelf.portMenu.selectedItem.title;
+        if (!portPath || ![portPath hasPrefix:@"/dev/cu."]) return nil;
+        if (!weakSelf.cwSerialPort) {
+            NSError *err = nil;
+            weakSelf.cwSerialPort = [Lab599SerialPort openPath:portPath speed:B9600 error:&err];
+            if (!weakSelf.cwSerialPort) return nil;
+        }
+        NSError *qErr = nil;
+        NSString *reply = Lab599ReadCATFrame(weakSelf.cwSerialPort, catCommand, timeout > 0 ? timeout : 0.35, &qErr);
+        if (!reply) {
+            [weakSelf.cwSerialPort close];
+            weakSelf.cwSerialPort = nil;
+        }
+        return reply;
+    };
+    self.audioMonitorController.view.hidden = YES;
+
     // Feature Card Container
     NSBox *featureCardBox = [NSBox new];
     featureCardBox.titlePosition = NSNoTitle;
@@ -770,7 +891,7 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
 
     NSStackView *featureStack = [NSStackView stackViewWithViews:@[
         fileRow, self.radioPreviewBox, self.powerSafetyBox, timeRow,
-        self.telemetryController.view, self.screenController.view, self.tools.view,
+        self.audioMonitorController.view, self.cwStationController.view, self.telemetryController.view, self.screenController.view, self.tools.view,
         self.driverController.view, self.docsController.view, self.feedbackController.view,
         self.progressBar, self.statusLabel,
         self.actionRow,
@@ -791,6 +912,8 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
 
         [self.radioPreviewBox.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor],
         [self.powerSafetyBox.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor],
+        [self.audioMonitorController.view.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor],
+        [self.cwStationController.view.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor],
         [self.telemetryController.view.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor],
         [self.screenController.view.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor],
         [self.tools.view.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor],
@@ -933,6 +1056,14 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
         self.operationPicker.selectedSegment = 9;
         [self operationChanged:self.operationPicker];
     }
+    if ([[NSProcessInfo processInfo].arguments containsObject:@"--cw"] || [[NSProcessInfo processInfo].arguments containsObject:@"--cw-station"]) {
+        self.operationPicker.selectedSegment = 10;
+        [self operationChanged:self.operationPicker];
+    }
+    if ([[NSProcessInfo processInfo].arguments containsObject:@"--audio"] || [[NSProcessInfo processInfo].arguments containsObject:@"--audio-monitor"]) {
+        self.operationPicker.selectedSegment = 11;
+        [self operationChanged:self.operationPicker];
+    }
     if ([[NSProcessInfo processInfo].arguments containsObject:@"--field-mode"]) {
         [self toggleOutdoorMode:nil];
     }
@@ -1057,6 +1188,12 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     [self operationChanged:self.operationPicker];
 }
 
+- (void)selectCWStationTab:(id)sender {
+    (void)sender;
+    self.operationPicker.selectedSegment = 10;
+    [self operationChanged:self.operationPicker];
+}
+
 - (void)captureRadioScreenshotMenuAction:(id)sender {
     (void)sender;
     self.operationPicker.selectedSegment = 3;
@@ -1136,26 +1273,55 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
 }
 
 - (void)updateConnectionStatusBar {
-    if (self.screenController.liveSyncActive || self.telemetryController.engine.isRunning) {
+    BOOL audioLive     = self.audioMonitorController.engine.isMonitoring;
+    BOOL screenLive    = self.screenController.liveSyncActive;
+    BOOL telemetryLive = self.telemetryController.engine.isRunning;
+    BOOL cwListening   = self.cwStationController.decoder.isListening;
+
+    if (audioLive) {
+        // Live Audio Monitoring via AD-508 active — vivid green
+        self.statusLEDView.layer.backgroundColor = [NSColor colorWithSRGBRed:0.10 green:0.85 blue:0.45 alpha:1.0].CGColor;
+        self.connectionStatusLabel.stringValue = @"Live Audio (AD-508)";
+        self.connectionStatusLabel.textColor = [NSColor colorWithSRGBRed:0.08 green:0.75 blue:0.38 alpha:1.0];
+        self.statusPillBox.fillColor   = [NSColor colorWithSRGBRed:0.10 green:0.85 blue:0.45 alpha:0.14];
+        self.statusPillBox.borderColor = [NSColor colorWithSRGBRed:0.10 green:0.85 blue:0.45 alpha:0.40];
+    } else if (screenLive) {
+        // Radio Screen live sync — call it "Live Streaming"
         self.statusLEDView.layer.backgroundColor = [NSColor colorWithSRGBRed:0.16 green:0.82 blue:0.25 alpha:1.0].CGColor;
         self.connectionStatusLabel.stringValue = @"Live Streaming";
         self.connectionStatusLabel.textColor = [NSColor colorWithSRGBRed:0.12 green:0.68 blue:0.22 alpha:1.0];
-        self.statusPillBox.fillColor = [NSColor colorWithSRGBRed:0.16 green:0.82 blue:0.25 alpha:0.14];
+        self.statusPillBox.fillColor   = [NSColor colorWithSRGBRed:0.16 green:0.82 blue:0.25 alpha:0.14];
         self.statusPillBox.borderColor = [NSColor colorWithSRGBRed:0.16 green:0.82 blue:0.25 alpha:0.40];
+    } else if (cwListening) {
+        // CW decoder active — amber/teal to distinguish from screen streaming
+        self.statusLEDView.layer.backgroundColor = [NSColor colorWithSRGBRed:0.0 green:0.70 blue:0.85 alpha:1.0].CGColor;
+        self.connectionStatusLabel.stringValue = @"CW Decoding";
+        self.connectionStatusLabel.textColor = [NSColor colorWithSRGBRed:0.0 green:0.60 blue:0.78 alpha:1.0];
+        self.statusPillBox.fillColor   = [NSColor colorWithSRGBRed:0.0 green:0.70 blue:0.85 alpha:0.12];
+        self.statusPillBox.borderColor = [NSColor colorWithSRGBRed:0.0 green:0.70 blue:0.85 alpha:0.38];
+    } else if (telemetryLive) {
+        // Telemetry polling active
+        self.statusLEDView.layer.backgroundColor = [NSColor colorWithSRGBRed:0.20 green:0.75 blue:0.35 alpha:1.0].CGColor;
+        self.connectionStatusLabel.stringValue = @"Monitoring";
+        self.connectionStatusLabel.textColor = [NSColor colorWithSRGBRed:0.12 green:0.65 blue:0.25 alpha:1.0];
+        self.statusPillBox.fillColor   = [NSColor colorWithSRGBRed:0.20 green:0.75 blue:0.35 alpha:0.12];
+        self.statusPillBox.borderColor = [NSColor colorWithSRGBRed:0.20 green:0.75 blue:0.35 alpha:0.35];
     } else if (self.hasPorts) {
+        // CAT port detected but nothing actively streaming
         self.statusLEDView.layer.backgroundColor = [NSColor colorWithSRGBRed:0.20 green:0.75 blue:0.35 alpha:1.0].CGColor;
         self.connectionStatusLabel.stringValue = @"Radio Ready";
         self.connectionStatusLabel.textColor = [NSColor labelColor];
-        self.statusPillBox.fillColor = [NSColor colorWithSRGBRed:0.20 green:0.75 blue:0.35 alpha:0.12];
+        self.statusPillBox.fillColor   = [NSColor colorWithSRGBRed:0.20 green:0.75 blue:0.35 alpha:0.12];
         self.statusPillBox.borderColor = [NSColor colorWithSRGBRed:0.20 green:0.75 blue:0.35 alpha:0.35];
     } else {
         self.statusLEDView.layer.backgroundColor = [NSColor systemGrayColor].CGColor;
         self.connectionStatusLabel.stringValue = @"Disconnected";
         self.connectionStatusLabel.textColor = [NSColor secondaryLabelColor];
-        self.statusPillBox.fillColor = [NSColor colorWithCalibratedWhite:0.5 alpha:0.08];
+        self.statusPillBox.fillColor   = [NSColor colorWithCalibratedWhite:0.5 alpha:0.08];
         self.statusPillBox.borderColor = [NSColor colorWithCalibratedWhite:0.5 alpha:0.22];
     }
 }
+
 
 - (void)operationChanged:(id)sender {
     (void)sender;
@@ -1169,6 +1335,8 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     BOOL isDriver = (operation == 7);
     BOOL isDocs = (operation == 8);
     BOOL isFeedback = (operation == 9);
+    BOOL isCWStation = (operation == 10);
+    BOOL isAudio = (operation == 11);
 
     for (TX500SidebarButton *btn in self.sidebarItems) {
         btn.isSelected = (btn.operationTag == operation);
@@ -1187,7 +1355,9 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
             @6: @"Memory Channel Manager (100 Channels)",
             @7: @"FTDI D2XX Driver Installation",
             @8: @"Documentation & Official Manuals",
-            @9: @"Feedback & Bug Reports"
+            @9: @"Feedback & Bug Reports",
+            @10: @"CW Station & Semi-Automated QSO Studio (AD-508 & CAT)",
+            @11: @"AD-508 Live Audio Monitor & DSP Studio"
         };
     });
     self.sectionTitleLabel.stringValue = titles[@(operation)] ?: @"Lab599 Utility";
@@ -1198,6 +1368,19 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     if (!isScreen && self.screenController.liveSyncActive) {
         [self.screenController stopLiveSync];
     }
+    if (!isCWStation) {
+        [self.cwStationController stopStation];
+    }
+    if (!isAudio) {
+        [self.audioMonitorController pauseTabUI];
+    }
+    if (!isCWStation && !isAudio) {
+        if (self.cwSerialPort) {
+            [self.cwSerialPort close];
+            self.cwSerialPort = nil;
+        }
+    }
+    [self updateConnectionStatusBar];
 
     self.telemetryController.view.hidden = !isTelemetry;
     self.screenController.view.hidden = !isScreen;
@@ -1206,6 +1389,45 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
             [self.screenController startLiveSync];
         } else if (self.screenController.demoModeActive) {
             [self.screenController startDemoTimer];
+        }
+    }
+
+    self.audioMonitorController.view.hidden = !isAudio;
+    if (isAudio) {
+        [self.audioMonitorController resumeTabUI];
+    }
+
+    self.cwStationController.view.hidden = !isCWStation;
+    if (isCWStation) {
+        [self.cwStationController startStation];
+        if (self.hasPorts) {
+            NSString *portPath = self.portMenu.selectedItem.title;
+            if (portPath && [portPath hasPrefix:@"/dev/cu."]) {
+                __weak typeof(self) weakSelf = self;
+                dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                    NSError *err = nil;
+                    Lab599SerialPort *queryPort = [Lab599SerialPort openPath:portPath speed:B9600 error:&err];
+                    if (queryPort) {
+                        NSString *faReply = Lab599ReadCATFrame(queryPort, @"FA;", 0.5, nil);
+                        NSString *mdReply = Lab599ReadCATFrame(queryPort, @"MD;", 0.5, nil);
+                        [queryPort close];
+
+                        uint64_t freqHz = 14025000;
+                        if ([faReply hasPrefix:@"FA"] && faReply.length >= 13) {
+                            freqHz = (uint64_t)[[faReply substringWithRange:NSMakeRange(2, 11)] longLongValue];
+                        }
+                        NSString *modeStr = @"CW";
+                        if ([mdReply hasPrefix:@"MD"] && mdReply.length >= 3) {
+                            unichar mCode = [mdReply characterAtIndex:2];
+                            if (mCode == '3') modeStr = @"CW";
+                            else if (mCode == '7') modeStr = @"CW-R";
+                        }
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            [weakSelf.cwStationController updateFrequencyHz:freqHz mode:modeStr];
+                        });
+                    }
+                });
+            }
         }
     }
 
@@ -1232,8 +1454,8 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     self.updateButton.keyEquivalent = isFW ? @"\r" : @"";
     self.syncButton.keyEquivalent = isSync ? @"\r" : @"";
     self.progressBar.doubleValue = 0;
-    self.progressBar.hidden = (isTelemetry || isScreen || isFeedback);
-    self.statusLabel.hidden = (isTelemetry || isScreen || isFeedback);
+    self.progressBar.hidden = (isTelemetry || isScreen || isFeedback || isCWStation || isAudio);
+    self.statusLabel.hidden = (isTelemetry || isScreen || isFeedback || isCWStation || isAudio);
 
     if (isFW) {
         self.instructions.stringValue = @"Connect the CAT-USB cable and stable external power. Close other radio applications. On your transceiver (TX-500 Discovery / TX-500MP), hold the third top function key while pressing POWER. Start only when the screen displays \"The loader is waiting...\". Keep power and cable connected until completion.";
@@ -1265,6 +1487,12 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     } else if (isFeedback) {
         self.instructions.stringValue = @"Share your feedback, feature requests, or report bugs directly to GitHub Issues. Callsign and contact info are saved locally for convenience.";
         self.statusLabel.stringValue = @"Ready to prepare and submit feedback to GitHub Issues.";
+    } else if (isCWStation) {
+        self.instructions.stringValue = @"CW Station & Semi-Automated QSO Studio. Real-time Goertzel DSP Morse decoding via AD-508 audio, Kenwood CAT keying (KS/KY), automatic CQ detection, heard station roster, one-click answer, auto-sequenced exchanges, and ADIF 3.1 contact logging. Includes built-in practice/simulation generator for radio-less operation.";
+        self.statusLabel.stringValue = @"Ready. Select AD-508 audio input and CAT serial port, or enable Practice Mode.";
+    } else if (isAudio) {
+        self.instructions.stringValue = @"Live Radio Audio Monitor & DSP Studio for Lab599 TX-500 Discovery / TX-500MP. Listen directly to live radio audio on your Mac via the AD-508 USB-C audio cable with low-latency CoreAudio passthrough, real-time FFT spectrum & oscilloscope visualizers, precision VU meters, customizable audio bandpass/notch filters, squelch, and studio WAV recording.";
+        self.statusLabel.stringValue = @"Ready. Connect AD-508 USB-C audio cable to REM/DATA port and click 'LISTEN LIVE' to hear your radio.";
     }
     [self updateClockPreview:nil];
     [self updateConnectionStatusBar];
@@ -1959,15 +2187,19 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
                                               target:self
                                               action:@selector(openGitHubRepo:)];
         gitBtn.bezelStyle = NSBezelStyleInline;
+        gitBtn.focusRingType = NSFocusRingTypeNone;
 
         NSButton *webBtn = [NSButton buttonWithTitle:@"Official Lab599 Website: https://lab599.com"
                                               target:self
                                               action:@selector(openLab599Website:)];
         webBtn.bezelStyle = NSBezelStyleInline;
+        webBtn.focusRingType = NSFocusRingTypeNone;
 
         NSButton *closeBtn = [NSButton buttonWithTitle:@"Close" target:self action:@selector(closeAboutWindow:)];
         closeBtn.bezelStyle = NSBezelStyleRounded;
         closeBtn.keyEquivalent = @"\r";
+        closeBtn.focusRingType = NSFocusRingTypeNone;
+        self.aboutWindow.initialFirstResponder = closeBtn;
 
         NSStackView *aboutStack = [NSStackView stackViewWithViews:@[
             iconView, appName, appVer, hwLabel, authorLabel, callsignLabel, featuresBox, disclaimer, gitBtn, webBtn, closeBtn
@@ -2164,6 +2396,12 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
 - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender {
     (void)sender;
     [self.telemetryController stopMonitoring];
+    [self.cwStationController stopStation];
+    [self.audioMonitorController stopController];
+    if (self.cwSerialPort) {
+        [self.cwSerialPort close];
+        self.cwSerialPort = nil;
+    }
     if (!self.busy) return [self.tools confirmDiscard] ? NSTerminateNow : NSTerminateCancel;
     NSBeep();
     return NSTerminateCancel;

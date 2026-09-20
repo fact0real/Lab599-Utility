@@ -97,64 +97,7 @@ static NSBox *CreateCardBox(void) {
     self.view.translatesAutoresizingMaskIntoConstraints = NO;
 
     // =========================================================================
-    // HEADER ROW
-    // =========================================================================
-    NSImageView *iconView = nil;
-    if (@available(macOS 11.0, *)) {
-        NSImage *icon = [NSImage imageWithSystemSymbolName:@"bubble.left.and.bubble.right.fill" accessibilityDescription:@"Feedback"];
-        if (!icon) icon = [NSImage imageWithSystemSymbolName:@"text.bubble.fill" accessibilityDescription:@"Feedback"];
-        if (icon) {
-            iconView = [NSImageView imageViewWithImage:icon];
-            iconView.translatesAutoresizingMaskIntoConstraints = NO;
-            iconView.contentTintColor = [NSColor colorWithSRGBRed:0.0 green:0.48 blue:1.0 alpha:1.0];
-            [iconView.widthAnchor constraintEqualToConstant:26].active = YES;
-            [iconView.heightAnchor constraintEqualToConstant:26].active = YES;
-        }
-    }
-
-    NSTextField *titleHeader = CreateLabel(@"Lab599 Feedback & Suggestions", YES, 15, NSColor.labelColor);
-    NSTextField *subHeader = CreateLabel(@"Share feature requests, report shortcomings/bugs, or submit transceiver & utility feedback anytime.", NO, 11, NSColor.secondaryLabelColor);
-
-    NSStackView *titleStack = [NSStackView stackViewWithViews:@[titleHeader, subHeader]];
-    titleStack.translatesAutoresizingMaskIntoConstraints = NO;
-    titleStack.orientation = NSUserInterfaceLayoutOrientationVertical;
-    titleStack.alignment = NSLayoutAttributeLeading;
-    titleStack.spacing = 2;
-
-    NSButton *viewIssuesBtn = [NSButton buttonWithTitle:@"View All GitHub Issues" target:self action:@selector(openGitHubIssuesPage:)];
-    viewIssuesBtn.translatesAutoresizingMaskIntoConstraints = NO;
-    viewIssuesBtn.bezelStyle = NSBezelStyleRounded;
-    viewIssuesBtn.controlSize = NSControlSizeSmall;
-    if (@available(macOS 11.0, *)) {
-        viewIssuesBtn.image = [NSImage imageWithSystemSymbolName:@"arrow.up.right.square" accessibilityDescription:nil];
-        viewIssuesBtn.imagePosition = NSImageLeading;
-    }
-
-    NSMutableArray *headerViews = [NSMutableArray array];
-    if (iconView) [headerViews addObject:iconView];
-    [headerViews addObject:titleStack];
-
-    NSStackView *headerLeft = [NSStackView stackViewWithViews:headerViews];
-    headerLeft.translatesAutoresizingMaskIntoConstraints = NO;
-    headerLeft.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    headerLeft.alignment = NSLayoutAttributeCenterY;
-    headerLeft.spacing = 10;
-
-    NSView *headerRow = [NSView new];
-    headerRow.translatesAutoresizingMaskIntoConstraints = NO;
-    [headerRow addSubview:headerLeft];
-    [headerRow addSubview:viewIssuesBtn];
-
-    [NSLayoutConstraint activateConstraints:@[
-        [headerLeft.leadingAnchor constraintEqualToAnchor:headerRow.leadingAnchor],
-        [headerLeft.topAnchor constraintEqualToAnchor:headerRow.topAnchor],
-        [headerLeft.bottomAnchor constraintEqualToAnchor:headerRow.bottomAnchor],
-        [viewIssuesBtn.trailingAnchor constraintEqualToAnchor:headerRow.trailingAnchor],
-        [viewIssuesBtn.centerYAnchor constraintEqualToAnchor:headerRow.centerYAnchor]
-    ]];
-
-    // =========================================================================
-    // CATEGORY & PRIORITY ROW
+    // CATEGORY, PRIORITY & ISSUES LINK (TOP ROW)
     // =========================================================================
     NSTextField *catLabel = CreateLabel(@"Category:", YES, 11, NSColor.labelColor);
     self.categoryPicker = [NSSegmentedControl segmentedControlWithLabels:@[
@@ -175,13 +118,35 @@ static NSBox *CreateCardBox(void) {
     catPrioSep.boxType = NSBoxSeparator;
     [catPrioSep.heightAnchor constraintEqualToConstant:18].active = YES;
 
+    NSButton *viewIssuesBtn = [NSButton buttonWithTitle:@"View All GitHub Issues" target:self action:@selector(openGitHubIssuesPage:)];
+    viewIssuesBtn.translatesAutoresizingMaskIntoConstraints = NO;
+    viewIssuesBtn.bezelStyle = NSBezelStyleRounded;
+    viewIssuesBtn.controlSize = NSControlSizeSmall;
+    if (@available(macOS 11.0, *)) {
+        viewIssuesBtn.image = [NSImage imageWithSystemSymbolName:@"arrow.up.right.square" accessibilityDescription:nil];
+        viewIssuesBtn.imagePosition = NSImageLeading;
+    }
+
     NSStackView *categoryRow = [NSStackView stackViewWithViews:@[
         catLabel, self.categoryPicker, catPrioSep, prioLabel, self.priorityPicker
     ]];
     categoryRow.translatesAutoresizingMaskIntoConstraints = NO;
     categoryRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     categoryRow.alignment = NSLayoutAttributeCenterY;
-    categoryRow.spacing = 12;
+    categoryRow.spacing = 10;
+
+    NSView *topRow = [NSView new];
+    topRow.translatesAutoresizingMaskIntoConstraints = NO;
+    [topRow addSubview:categoryRow];
+    [topRow addSubview:viewIssuesBtn];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [categoryRow.leadingAnchor constraintEqualToAnchor:topRow.leadingAnchor],
+        [categoryRow.centerYAnchor constraintEqualToAnchor:topRow.centerYAnchor],
+        [viewIssuesBtn.trailingAnchor constraintEqualToAnchor:topRow.trailingAnchor],
+        [viewIssuesBtn.centerYAnchor constraintEqualToAnchor:topRow.centerYAnchor],
+        [topRow.heightAnchor constraintEqualToConstant:28]
+    ]];
 
     // =========================================================================
     // CALLSIGN & CONTACT ROW
@@ -348,8 +313,7 @@ static NSBox *CreateCardBox(void) {
     // MASTER VERTICAL STACK
     // =========================================================================
     NSStackView *masterStack = [NSStackView stackViewWithViews:@[
-        headerRow,
-        categoryRow,
+        topRow,
         userRow,
         titleLbl, self.titleField,
         detailsHeader, detailsScroll,
@@ -368,8 +332,7 @@ static NSBox *CreateCardBox(void) {
         [masterStack.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
         [masterStack.topAnchor constraintEqualToAnchor:self.view.topAnchor],
         [masterStack.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
-        [headerRow.widthAnchor constraintEqualToAnchor:masterStack.widthAnchor],
-        [categoryRow.widthAnchor constraintEqualToAnchor:masterStack.widthAnchor],
+        [topRow.widthAnchor constraintEqualToAnchor:masterStack.widthAnchor],
         [userRow.widthAnchor constraintEqualToAnchor:masterStack.widthAnchor],
         [self.titleField.widthAnchor constraintEqualToAnchor:masterStack.widthAnchor],
         [detailsHeader.widthAnchor constraintEqualToAnchor:masterStack.widthAnchor],

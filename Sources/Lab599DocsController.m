@@ -62,14 +62,13 @@ static NSTextField *Label(NSString *text, BOOL bold, CGFloat size, NSColor *colo
 - (void)buildUI {
     self.view = [NSView new];
     self.view.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.view.heightAnchor constraintEqualToConstant:410].active = YES;
-
-    NSTextField *title = Label(@"Official Lab599 Documentation & Downloads", YES, 15, NSColor.labelColor);
-    NSTextField *sub = Label(@"Browse, search, and download official manuals, firmware releases, utilities, and drivers from lab599.com and lab599.ru.", NO, 12, NSColor.secondaryLabelColor);
+    [self.view.heightAnchor constraintEqualToConstant:375].active = YES;
 
     // Filter controls
     self.categoryPopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
     self.categoryPopup.translatesAutoresizingMaskIntoConstraints = NO;
+    self.categoryPopup.controlSize = NSControlSizeSmall;
+    self.categoryPopup.font = [NSFont systemFontOfSize:11];
     [self.categoryPopup addItemsWithTitles:@[
         @"All Categories",
         @"Manuals & Guides (PDF)",
@@ -82,24 +81,93 @@ static NSTextField *Label(NSString *text, BOOL bold, CGFloat size, NSColor *colo
 
     self.searchField = [[NSSearchField alloc] initWithFrame:NSZeroRect];
     self.searchField.translatesAutoresizingMaskIntoConstraints = NO;
+    self.searchField.controlSize = NSControlSizeSmall;
+    self.searchField.font = [NSFont systemFontOfSize:11];
     self.searchField.placeholderString = @"Search by title or filename...";
     self.searchField.target = self;
     self.searchField.action = @selector(filterChanged:);
 
-    self.refreshButton = [NSButton buttonWithTitle:@"Refresh from Web" target:self action:@selector(refreshFromWebClicked:)];
+    self.refreshButton = [NSButton buttonWithTitle:@"" target:self action:@selector(refreshFromWebClicked:)];
+    self.refreshButton.translatesAutoresizingMaskIntoConstraints = NO;
     self.refreshButton.bezelStyle = NSBezelStyleRounded;
+    self.refreshButton.controlSize = NSControlSizeSmall;
+    self.refreshButton.toolTip = @"Refresh Catalog from Web";
+    if (@available(macOS 11.0, *)) {
+        self.refreshButton.image = [NSImage imageWithSystemSymbolName:@"arrow.clockwise" accessibilityDescription:@"Refresh"];
+    } else {
+        self.refreshButton.title = @"⟳";
+    }
 
-    NSStackView *filterRow = [NSStackView stackViewWithViews:@[
-        Label(@"Category:", NO, 12, NSColor.labelColor),
+    [self.categoryPopup.widthAnchor constraintEqualToConstant:150].active = YES;
+    [self.searchField.widthAnchor constraintEqualToConstant:165].active = YES;
+    [self.refreshButton.widthAnchor constraintEqualToConstant:28].active = YES;
+
+    NSStackView *filterLeft = [NSStackView stackViewWithViews:@[
+        Label(@"Category:", NO, 11, NSColor.labelColor),
         self.categoryPopup,
         self.searchField,
         self.refreshButton
     ]];
-    filterRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    filterRow.alignment = NSLayoutAttributeCenterY;
-    filterRow.spacing = 10;
-    [self.categoryPopup.widthAnchor constraintEqualToConstant:190].active = YES;
-    [self.searchField.widthAnchor constraintEqualToConstant:230].active = YES;
+    filterLeft.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    filterLeft.alignment = NSLayoutAttributeCenterY;
+    filterLeft.spacing = 6;
+    filterLeft.translatesAutoresizingMaskIntoConstraints = NO;
+
+    // Action buttons
+    self.openBrowserButton = [NSButton buttonWithTitle:@"Web" target:self action:@selector(openInBrowserSelected:)];
+    self.openBrowserButton.translatesAutoresizingMaskIntoConstraints = NO;
+    self.openBrowserButton.bezelStyle = NSBezelStyleRounded;
+    self.openBrowserButton.controlSize = NSControlSizeSmall;
+    self.openBrowserButton.font = [NSFont systemFontOfSize:11];
+    self.openBrowserButton.enabled = NO;
+    if (@available(macOS 11.0, *)) {
+        self.openBrowserButton.image = [NSImage imageWithSystemSymbolName:@"safari" accessibilityDescription:nil];
+        self.openBrowserButton.imagePosition = NSImageLeading;
+    }
+
+    self.openLocalButton = [NSButton buttonWithTitle:@"Open File" target:self action:@selector(openLocalSelected:)];
+    self.openLocalButton.translatesAutoresizingMaskIntoConstraints = NO;
+    self.openLocalButton.bezelStyle = NSBezelStyleRounded;
+    self.openLocalButton.controlSize = NSControlSizeSmall;
+    self.openLocalButton.font = [NSFont systemFontOfSize:11];
+    self.openLocalButton.enabled = NO;
+    if (@available(macOS 11.0, *)) {
+        self.openLocalButton.image = [NSImage imageWithSystemSymbolName:@"doc.text" accessibilityDescription:nil];
+        self.openLocalButton.imagePosition = NSImageLeading;
+    }
+
+    self.downloadButton = [NSButton buttonWithTitle:@"Download & Save As..." target:self action:@selector(downloadSelected:)];
+    self.downloadButton.translatesAutoresizingMaskIntoConstraints = NO;
+    self.downloadButton.bezelStyle = NSBezelStyleRounded;
+    self.downloadButton.controlSize = NSControlSizeSmall;
+    self.downloadButton.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
+    self.downloadButton.keyEquivalent = @"\r";
+    self.downloadButton.enabled = NO;
+    if (@available(macOS 11.0, *)) {
+        self.downloadButton.image = [NSImage imageWithSystemSymbolName:@"arrow.down.circle.fill" accessibilityDescription:nil];
+        self.downloadButton.imagePosition = NSImageLeading;
+    }
+
+    NSStackView *actionsRight = [NSStackView stackViewWithViews:@[
+        self.openBrowserButton, self.openLocalButton, self.downloadButton
+    ]];
+    actionsRight.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    actionsRight.alignment = NSLayoutAttributeCenterY;
+    actionsRight.spacing = 6;
+    actionsRight.translatesAutoresizingMaskIntoConstraints = NO;
+
+    NSView *topToolbar = [NSView new];
+    topToolbar.translatesAutoresizingMaskIntoConstraints = NO;
+    [topToolbar addSubview:filterLeft];
+    [topToolbar addSubview:actionsRight];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [filterLeft.leadingAnchor constraintEqualToAnchor:topToolbar.leadingAnchor],
+        [filterLeft.centerYAnchor constraintEqualToAnchor:topToolbar.centerYAnchor],
+        [actionsRight.trailingAnchor constraintEqualToAnchor:topToolbar.trailingAnchor],
+        [actionsRight.centerYAnchor constraintEqualToAnchor:topToolbar.centerYAnchor],
+        [topToolbar.heightAnchor constraintEqualToConstant:28]
+    ]];
 
     // Table view
     self.tableView = [NSTableView new];
@@ -108,25 +176,27 @@ static NSTextField *Label(NSString *text, BOOL bold, CGFloat size, NSColor *colo
     self.tableView.rowHeight = 22;
     self.tableView.usesAlternatingRowBackgroundColors = YES;
     self.tableView.allowsMultipleSelection = NO;
+    self.tableView.target = self;
+    self.tableView.doubleAction = @selector(tableDoubleClicked:);
 
     NSTableColumn *cTitle = [[NSTableColumn alloc] initWithIdentifier:@"title"];
     cTitle.title = @"Document / Item Name";
-    cTitle.width = 320;
+    cTitle.width = 300;
     [self.tableView addTableColumn:cTitle];
 
     NSTableColumn *cCat = [[NSTableColumn alloc] initWithIdentifier:@"category"];
     cCat.title = @"Category";
-    cCat.width = 150;
+    cCat.width = 140;
     [self.tableView addTableColumn:cCat];
 
     NSTableColumn *cFmt = [[NSTableColumn alloc] initWithIdentifier:@"format"];
     cFmt.title = @"Format";
-    cFmt.width = 65;
+    cFmt.width = 60;
     [self.tableView addTableColumn:cFmt];
 
     NSTableColumn *cSize = [[NSTableColumn alloc] initWithIdentifier:@"size"];
     cSize.title = @"Size";
-    cSize.width = 75;
+    cSize.width = 70;
     [self.tableView addTableColumn:cSize];
 
     NSTableColumn *cStat = [[NSTableColumn alloc] initWithIdentifier:@"status"];
@@ -139,7 +209,7 @@ static NSTextField *Label(NSString *text, BOOL bold, CGFloat size, NSColor *colo
     tableScroll.hasVerticalScroller = YES;
     tableScroll.borderType = NSBezelBorder;
     tableScroll.documentView = self.tableView;
-    [tableScroll.heightAnchor constraintEqualToConstant:175].active = YES;
+    [tableScroll.heightAnchor constraintEqualToConstant:260].active = YES;
 
     // Details box
     self.detailsLabel = Label(@"Select an item above to view details.", NO, 11, NSColor.labelColor);
@@ -151,7 +221,7 @@ static NSTextField *Label(NSString *text, BOOL bold, CGFloat size, NSColor *colo
     detailsStack.translatesAutoresizingMaskIntoConstraints = NO;
     detailsStack.orientation = NSUserInterfaceLayoutOrientationVertical;
     detailsStack.alignment = NSLayoutAttributeLeading;
-    detailsStack.spacing = 3;
+    detailsStack.spacing = 2;
 
     // Progress
     self.downloadProgress = [NSProgressIndicator new];
@@ -164,29 +234,9 @@ static NSTextField *Label(NSString *text, BOOL bold, CGFloat size, NSColor *colo
     self.downloadStatus = Label(@"", NO, 11, NSColor.secondaryLabelColor);
     self.downloadStatus.hidden = YES;
 
-    // Action buttons
-    self.downloadButton = [NSButton buttonWithTitle:@"Download & Save As..." target:self action:@selector(downloadSelected:)];
-    self.downloadButton.bezelStyle = NSBezelStyleRounded;
-    self.downloadButton.enabled = NO;
-
-    self.openLocalButton = [NSButton buttonWithTitle:@"Open Local File" target:self action:@selector(openLocalSelected:)];
-    self.openLocalButton.bezelStyle = NSBezelStyleRounded;
-    self.openLocalButton.enabled = NO;
-
-    self.openBrowserButton = [NSButton buttonWithTitle:@"Open in Browser" target:self action:@selector(openInBrowserSelected:)];
-    self.openBrowserButton.bezelStyle = NSBezelStyleRounded;
-    self.openBrowserButton.enabled = NO;
-
-    NSStackView *buttonRow = [NSStackView stackViewWithViews:@[
-        self.downloadButton, self.openLocalButton, self.openBrowserButton
-    ]];
-    buttonRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    buttonRow.spacing = 10;
-    buttonRow.alignment = NSLayoutAttributeCenterY;
-
     NSStackView *mainStack = [NSStackView stackViewWithViews:@[
-        title, sub, filterRow, tableScroll, detailsStack,
-        self.downloadProgress, self.downloadStatus, buttonRow
+        topToolbar, tableScroll, detailsStack,
+        self.downloadProgress, self.downloadStatus
     ]];
     mainStack.translatesAutoresizingMaskIntoConstraints = NO;
     mainStack.orientation = NSUserInterfaceLayoutOrientationVertical;
@@ -201,7 +251,7 @@ static NSTextField *Label(NSString *text, BOOL bold, CGFloat size, NSColor *colo
         [mainStack.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
         [mainStack.topAnchor constraintEqualToAnchor:self.view.topAnchor],
         [mainStack.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
-        [filterRow.widthAnchor constraintEqualToAnchor:mainStack.widthAnchor],
+        [topToolbar.widthAnchor constraintEqualToAnchor:mainStack.widthAnchor],
         [tableScroll.widthAnchor constraintEqualToAnchor:mainStack.widthAnchor],
         [detailsStack.widthAnchor constraintEqualToAnchor:mainStack.widthAnchor],
         [self.downloadProgress.widthAnchor constraintEqualToAnchor:mainStack.widthAnchor],
@@ -209,6 +259,10 @@ static NSTextField *Label(NSString *text, BOOL bold, CGFloat size, NSColor *colo
     ]];
 
     [self.tableView reloadData];
+    if (self.filteredItems.count > 0) {
+        [self.tableView selectRowIndexes:[NSIndexSet indexSetWithIndex:0] byExtendingSelection:NO];
+        [self updateSelectionDetails];
+    }
 }
 
 - (void)checkLocalCopiesForItems:(NSArray<Lab599DocItem *> *)items {
@@ -398,6 +452,27 @@ static NSTextField *Label(NSString *text, BOOL bold, CGFloat size, NSColor *colo
 - (void)refreshFromWebClicked:(id)sender {
     (void)sender;
     [self fetchCatalogFromWeb];
+}
+
+- (void)tableDoubleClicked:(id)sender {
+    (void)sender;
+    NSInteger row = self.tableView.clickedRow;
+    if (row < 0 || row >= (NSInteger)self.filteredItems.count) return;
+    Lab599DocItem *item = self.filteredItems[row];
+    if (item.isLocalAvailable) {
+        [[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:item.localPath]];
+        if (self.log) self.log([NSString stringWithFormat:@"Opened local document: %@", item.localPath]);
+    } else {
+        [self downloadSelected:nil];
+    }
+}
+
+- (void)focusSearchField {
+    if (self.searchField.window) {
+        [self.searchField.window makeFirstResponder:self.searchField];
+    } else if (self.window) {
+        [self.window makeFirstResponder:self.searchField];
+    }
 }
 
 #pragma mark - NSURLSessionDownloadDelegate

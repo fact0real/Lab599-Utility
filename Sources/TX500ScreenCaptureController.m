@@ -555,7 +555,7 @@
         _showChassisBezel = YES;
         _showPixelGrid = YES;
         _displayScale = 2.0;
-        _liveSyncActive = YES;
+        _liveSyncActive = NO;
         _demoModeActive = NO;
         _tuneAngle = 0.0;
         _afGainAngle = 0.0;
@@ -563,9 +563,6 @@
         _screenState = [TX500ScreenState defaultDemoState];
         _serialQueue = dispatch_queue_create("com.lab599.screencapture.serial", DISPATCH_QUEUE_SERIAL);
         [self setupUI];
-        if (_liveSyncActive) {
-            [self startLiveSync];
-        }
         [self renderAndUpdateDisplay];
     }
     return self;

@@ -16,7 +16,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 typedef NS_ENUM(NSInteger, TX500ChassisControlTag) {
     TX500ControlNone = 0,
-    // Right panel vertical buttons
+    // Right panel vertical buttons (immediately right of LCD)
     TX500ControlPower = 1,
     TX500ControlBandUp = 2,
     TX500ControlBandDown = 3,
@@ -26,6 +26,15 @@ typedef NS_ENUM(NSInteger, TX500ChassisControlTag) {
     // Right panel rotary knobs
     TX500ControlTuneKnob = 10,
     TX500ControlAFGainKnob = 11,
+    TX500ControlRITXITKnob = 12,
+    // Far-right panel small ROUND buttons (R/X, CLR, V/M, LOCK, +, -)
+    // Note: ANT, CAT, CW KEY are CONNECTORS — not interactive buttons
+    TX500ControlRX = 41,
+    TX500ControlClear = 42,
+    TX500ControlVM = 43,
+    TX500ControlLock = 45,
+    TX500ControlPlus = 46,
+    TX500ControlMinus = 47,
     // Top physical soft keys (above LCD)
     TX500ControlTopKey1 = 21,
     TX500ControlTopKey2 = 22,
@@ -38,6 +47,7 @@ typedef NS_ENUM(NSInteger, TX500ChassisControlTag) {
     TX500ControlBottomKey4 = 34
 };
 
+
 // Renders the screen framed in the authentic CNC-milled black anodized duralumin chassis of the TX-500
 + (NSImage *)renderChassisImageWithState:(TX500ScreenState *)state
                                    theme:(TX500ScreenTheme)theme
@@ -49,6 +59,14 @@ typedef NS_ENUM(NSInteger, TX500ChassisControlTag) {
                            pressedButton:(NSInteger)pressedTag
                                tuneAngle:(CGFloat)tuneAngle
                              afGainAngle:(CGFloat)afGainAngle;
+
++ (NSImage *)renderChassisImageWithState:(TX500ScreenState *)state
+                                   theme:(TX500ScreenTheme)theme
+                               pixelGrid:(BOOL)pixelGrid
+                           pressedButton:(NSInteger)pressedTag
+                               tuneAngle:(CGFloat)tuneAngle
+                             afGainAngle:(CGFloat)afGainAngle
+                             ritXITAngle:(CGFloat)ritXITAngle;
 
 // Image export helpers
 + (nullable NSData *)pngDataForImage:(NSImage *)image;

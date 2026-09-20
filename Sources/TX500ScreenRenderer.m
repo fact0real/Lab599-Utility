@@ -269,11 +269,9 @@
     NSString *subStr = [NSString stringWithFormat:@"%llu", ones];
     [subStr drawAtPoint:NSMakePoint(subX + 1.2, subY + 0.5) withAttributes:subAttrs];
 
-    // Mode Inverted Badge: [ DIG ]
-    NSString *mode = state.operatingMode ?: @"DIG";
-    if ([mode isEqualToString:@"USB"] || [mode isEqualToString:@"FSK"] || [mode isEqualToString:@"DIGITAL"]) {
-        mode = @"DIG";
-    }
+    // Mode Inverted Badge: [ USB ], [ LSB ], [ DIG ], etc.
+    NSString *mode = state.operatingMode ?: @"USB";
+    // No remapping — show the actual mode string from radio
     NSRect modeRect = NSMakeRect(152.0, 80.0, 24.0, 13.0);
     [fg setFill];
     NSRectFill(modeRect);
@@ -525,6 +523,22 @@
                            pressedButton:(NSInteger)pressedTag
                                tuneAngle:(CGFloat)tuneAngle
                              afGainAngle:(CGFloat)afGainAngle {
+    return [self renderChassisImageWithState:state
+                                       theme:theme
+                                   pixelGrid:pixelGrid
+                               pressedButton:pressedTag
+                                   tuneAngle:tuneAngle
+                                 afGainAngle:afGainAngle
+                                ritXITAngle:0.0];
+}
+
++ (NSImage *)renderChassisImageWithState:(TX500ScreenState *)state
+                                   theme:(TX500ScreenTheme)theme
+                               pixelGrid:(BOOL)pixelGrid
+                           pressedButton:(NSInteger)pressedTag
+                               tuneAngle:(CGFloat)tuneAngle
+                             afGainAngle:(CGFloat)afGainAngle
+                             ritXITAngle:(CGFloat)ritXITAngle {
     NSSize chassisSize = [self nativeChassisSize]; // 840 x 440
     NSImage *image = [[NSImage alloc] initWithSize:chassisSize];
     [image lockFocus];
@@ -556,12 +570,12 @@
     // 3. Four Stainless Steel Hex Socket Cap Screws (Corners)
     [self drawHexScrewAtPoint:NSMakePoint(26.0, chassisSize.height - 30.0) inContext:ctx];
     [self drawHexScrewAtPoint:NSMakePoint(26.0, 30.0) inContext:ctx];
-    [self drawHexScrewAtPoint:NSMakePoint(582.0, chassisSize.height - 30.0) inContext:ctx];
-    [self drawHexScrewAtPoint:NSMakePoint(582.0, 30.0) inContext:ctx];
+    [self drawHexScrewAtPoint:NSMakePoint(562.0, chassisSize.height - 30.0) inContext:ctx];
+    [self drawHexScrewAtPoint:NSMakePoint(562.0, 30.0) inContext:ctx];
 
     // 4. Center LCD Glass Bezel Area
-    // Inset frame: x: 74, y: 56, width: 494, height: 326
-    NSRect glassFrame = NSMakeRect(74.0, 56.0, 494.0, 326.0);
+    // Inset frame: x: 66, y: 56, width: 488, height: 326
+    NSRect glassFrame = NSMakeRect(66.0, 56.0, 488.0, 326.0);
 
     // Deep recessed frame around glass
     [[NSColor colorWithCalibratedWhite:0.03 alpha:1.0] setFill];
@@ -576,11 +590,13 @@
     NSBezierPath *glassPath = [NSBezierPath bezierPathWithRoundedRect:glassFrame xRadius:6.0 yRadius:6.0];
     [glassPath fill];
 
-    // 5. Active LCD Screen (256 x 128 rendered at 1.84x = 472 x 236)
+    // 5. Active LCD Screen (256 x 128 rendered to authentically fill window)
+    // Gap to top bezel reduced to ~1/4 (~11.5px) matching physical TX-500 Discovery front panel
+    CGFloat topGap = 11.5;
     CGFloat lcdW = 472.0;
-    CGFloat lcdH = 236.0;
+    CGFloat lcdH = 268.0;
     CGFloat lcdX = glassFrame.origin.x + (glassFrame.size.width - lcdW) / 2.0;
-    CGFloat lcdY = glassFrame.origin.y + 44.0; // Leave 44px at bottom for logo and text
+    CGFloat lcdY = NSMaxY(glassFrame) - topGap - lcdH; // 382.0 - 11.5 - 268.0 = 102.5
     NSRect lcdTargetRect = NSMakeRect(lcdX, lcdY, lcdW, lcdH);
 
     NSImage *screenImg = [self renderScreenImageWithState:state theme:theme scale:2.0 pixelGrid:pixelGrid];
@@ -591,43 +607,66 @@
                      fromRect:NSMakeRect(0, 0, screenImg.size.width, screenImg.size.height)
                     operation:NSCompositingOperationSourceOver
                      fraction:1.0
-               respectFlipped:NO
-                        hints:@{NSImageHintInterpolation: @(NSImageInterpolationHigh)}];
+                respectFlipped:NO
+                         hints:@{NSImageHintInterpolation: @(NSImageInterpolationHigh)}];
         CGContextRestoreGState(ctx);
 
-        // Inner shadow around LCD edge
+        // Inner shadow around LCD edge (rounded corners matching real radio LCD mask)
         [[NSColor colorWithCalibratedWhite:0.0 alpha:0.40] setStroke];
-        NSBezierPath *lcdBorder = [NSBezierPath bezierPathWithRect:lcdTargetRect];
+        NSBezierPath *lcdBorder = [NSBezierPath bezierPathWithRoundedRect:lcdTargetRect xRadius:4.0 yRadius:4.0];
         lcdBorder.lineWidth = 1.0;
         [lcdBorder stroke];
     }
 
+
     // 6. Brand Inscription & Logo Under LCD (On the Glass Border)
-    [self drawGlassBrandAndLogoAtRect:NSMakeRect(glassFrame.origin.x + 14.0, glassFrame.origin.y + 12.0, glassFrame.size.width - 28.0, 24.0)];
+    // Vertically centered between bottom glass border and active LCD bottom edge
+    NSRect brandBandRect = NSMakeRect(glassFrame.origin.x + 14.0,
+                                      glassFrame.origin.y,
+                                      glassFrame.size.width - 28.0,
+                                      lcdY - glassFrame.origin.y);
+    [self drawGlassBrandAndLogoAtRect:brandBandRect];
 
     // 7. Four Top Physical Buttons (Above LCD)
+    // Shifted UP to be horizontally parallel and aligned with the two top corner screws (center y = 410.0)
+    CGFloat topBtnH = 15.0;
+    CGFloat topScrewY = chassisSize.height - 30.0; // 410.0
+    CGFloat topBtnY = topScrewY - (topBtnH / 2.0); // 402.5
     [self drawFourPhysicalButtonsInContext:ctx
-                                    startX:glassFrame.origin.x + 22.0
-                                         y:chassisSize.height - 42.0
-                                     width:glassFrame.size.width - 44.0
+                                    startX:glassFrame.origin.x + 20.0
+                                         y:topBtnY
+                                     width:glassFrame.size.width - 40.0
                                      isTop:YES
                                 pressedTag:pressedTag];
 
     // 8. Four Bottom Physical Buttons (Below Glass Bezel)
+    // Bottom buttons: top edge at glassFrame.origin.y - 22 = 34, bottom = 34-15=19
     [self drawFourPhysicalButtonsInContext:ctx
-                                    startX:glassFrame.origin.x + 22.0
-                                         y:18.0
-                                     width:glassFrame.size.width - 44.0
+                                    startX:glassFrame.origin.x + 20.0
+                                         y:glassFrame.origin.y - 22.0 - 15.0
+                                     width:glassFrame.size.width - 40.0
                                      isTop:NO
                                 pressedTag:pressedTag];
 
-    // 9. Right-Side Controls: "DISCOVERY", Buttons (POWER, BAND, MODE, FILTER, MENU) & Rotary Knobs
+    // 9. Right-Side Controls: Model Title, Buttons, Knobs, Far-Right Round Buttons, Connectors
     [self drawRightControlPanelInContext:ctx
-                                  startX:610.0
+                                  startX:572.0
                            chassisHeight:chassisSize.height
+                               modelName:state.hardwareModelName ?: @"DISCOVERY"
                               pressedTag:pressedTag
                                tuneAngle:tuneAngle
-                             afGainAngle:afGainAngle];
+                             afGainAngle:afGainAngle
+                             ritXITAngle:ritXITAngle];
+
+
+
+    // 10. Rounded border around LCD panel (matching real radio rounded corners)
+    CGContextSaveGState(ctx);
+    [[NSColor colorWithCalibratedWhite:0.0 alpha:0.45] setStroke];
+    NSBezierPath *lcdBorder = [NSBezierPath bezierPathWithRoundedRect:lcdTargetRect xRadius:4.0 yRadius:4.0];
+    lcdBorder.lineWidth = 1.5;
+    [lcdBorder stroke];
+    CGContextRestoreGState(ctx);
 
     [image unlockFocus];
     return image;
@@ -720,14 +759,14 @@
     }
 
     if (logoImg) {
-        CGFloat targetH = 18.0;
+        CGFloat targetH = 27.0;   // 1.5× the previous 18pt
         CGFloat aspect = 648.0 / 234.0; // 2.769
         CGFloat targetW = targetH * aspect;
         CGFloat logoY = rect.origin.y + (rect.size.height - targetH) / 2.0;
         NSRect logoRect = NSMakeRect(rect.origin.x, logoY, targetW, targetH);
         [logoImg drawInRect:logoRect fromRect:NSZeroRect operation:NSCompositingOperationSourceOver fraction:1.0];
     } else {
-        NSFont *logoFont = [NSFont systemFontOfSize:15.0 weight:NSFontWeightBlack];
+        NSFont *logoFont = [NSFont systemFontOfSize:22.0 weight:NSFontWeightBlack];
         NSDictionary *labAttrs = @{
             NSFontAttributeName: logoFont,
             NSForegroundColorAttributeName: [NSColor colorWithCalibratedWhite:0.92 alpha:1.0]
@@ -736,18 +775,19 @@
             NSFontAttributeName: logoFont,
             NSForegroundColorAttributeName: [NSColor colorWithCalibratedRed:0.92 green:0.18 blue:0.18 alpha:1.0]
         };
-        [@"lab" drawAtPoint:NSMakePoint(rect.origin.x, rect.origin.y + 2.0) withAttributes:labAttrs];
-        [@"599" drawAtPoint:NSMakePoint(rect.origin.x + 32.0, rect.origin.y + 2.0) withAttributes:redAttrs];
+        CGFloat logoFallbackY = rect.origin.y + (rect.size.height - 24.0) / 2.0;
+        [@"lab" drawAtPoint:NSMakePoint(rect.origin.x, logoFallbackY) withAttributes:labAttrs];
+        [@"599" drawAtPoint:NSMakePoint(rect.origin.x + 48.0, logoFallbackY) withAttributes:redAttrs];
     }
 
-    // Right: "HF/50MHz TRANSCEIVER"
+    // Right: "HF/50MHz TRANSCEIVER" (1.2× larger = 17.1pt, precisely vertically centered)
     NSDictionary *subAttrs = @{
-        NSFontAttributeName: [NSFont systemFontOfSize:9.5 weight:NSFontWeightBold],
-        NSForegroundColorAttributeName: [NSColor colorWithCalibratedWhite:0.75 alpha:1.0]
+        NSFontAttributeName: [NSFont systemFontOfSize:17.1 weight:NSFontWeightBold],
+        NSForegroundColorAttributeName: [NSColor colorWithCalibratedWhite:0.78 alpha:1.0]
     };
     NSString *subText = @"HF/50MHz TRANSCEIVER";
     NSSize textSize = [subText sizeWithAttributes:subAttrs];
-    CGFloat subY = rect.origin.y + (rect.size.height - textSize.height) / 2.0;
+    CGFloat subY = rect.origin.y + (rect.size.height - textSize.height) / 2.0 + 0.5;
     [subText drawAtPoint:NSMakePoint(NSMaxX(rect) - textSize.width, subY) withAttributes:subAttrs];
 }
 
@@ -783,131 +823,271 @@
     CGContextRestoreGState(ctx);
 }
 
-// Right Control Panel: DISCOVERY, Buttons, Rotary Knobs
+// Right Control Panel — Faithful TX-500 Discovery layout
+// Layout (left→right in right section, startX≈610):
+//   Col A (startX+5):  Buttons POWER/BAND+/BAND-/MODE/FILTER/MENU
+//   Col B (x≈675):     AF GAIN small knob + label
+//   Col C (x≈728):     RIT/XIT small knob + label
+//   Centered (x≈702):  TUNE/MULTI large knob label below col B/C gap
+//   Far right (x≈772): Round buttons R/X, CLR, V/M, LOCK🔒, +, -
+//   Edge (x≈818):      Connectors ANT, CAT, CW KEY (graphics only)
 + (void)drawRightControlPanelInContext:(CGContextRef)ctx
                                 startX:(CGFloat)startX
                          chassisHeight:(CGFloat)chassisH
+                             modelName:(NSString *)modelName
                             pressedTag:(NSInteger)pressedTag
                              tuneAngle:(CGFloat)tuneAngle
-                           afGainAngle:(CGFloat)afGainAngle {
-    // Header text: "DISCOVERY"
-    NSDictionary *discAttrs = @{
-        NSFontAttributeName: [NSFont systemFontOfSize:14.0 weight:NSFontWeightBlack],
-        NSForegroundColorAttributeName: [NSColor colorWithCalibratedWhite:0.85 alpha:1.0]
-    };
-    [@"DISCOVERY" drawAtPoint:NSMakePoint(startX + 18.0, chassisH - 42.0) withAttributes:discAttrs];
+                           afGainAngle:(CGFloat)afGainAngle
+                           ritXITAngle:(CGFloat)ritXITAngle {
 
-    // Vertical Buttons Stack: POWER, BAND+, BAND-, MODE, FILTER, MENU
+    // ── Model Title (e.g. DISCOVERY, TX-500MP, TX-500PRO, PRO ALTAI) ─────────
+    NSString *discStr = modelName.length > 0 ? modelName : @"DISCOVERY";
+    NSDictionary *discAttrs = @{
+        NSFontAttributeName: [NSFont fontWithName:@"Helvetica-BoldOblique" size:13.5] ?: [NSFont systemFontOfSize:13.5 weight:NSFontWeightBlack],
+        NSForegroundColorAttributeName: [NSColor colorWithCalibratedWhite:0.86 alpha:1.0]
+    };
+    NSSize discSize = [discStr sizeWithAttributes:discAttrs];
+    // Center title directly over the middle knob area (centered at x = 685)
+    CGFloat discX = 685.0 - (discSize.width / 2.0);
+    [discStr drawAtPoint:NSMakePoint(discX, chassisH - 42.0) withAttributes:discAttrs];
+
+    // ── Authentic Hex Allen Screws on chassis milled ridges ──────────────────
+    [self drawHexScrewAtPoint:NSMakePoint(816.0, chassisH - 52.0) inContext:ctx];
+    [self drawHexScrewAtPoint:NSMakePoint(816.0, 52.0) inContext:ctx];
+
+    // ── Vertical separator line between LCD section and right panel ──────────
+    CGContextSaveGState(ctx);
+    CGContextSetStrokeColorWithColor(ctx, [NSColor colorWithCalibratedWhite:0.22 alpha:1.0].CGColor);
+    CGContextSetLineWidth(ctx, 1.0);
+    CGContextMoveToPoint(ctx, startX - 2.0, chassisH - 28.0);
+    CGContextAddLineToPoint(ctx, startX - 2.0, 28.0);
+    CGContextStrokePath(ctx);
+    CGContextRestoreGState(ctx);
+
+    // ══ COLUMN A: Six capsule buttons (POWER, BAND+, BAND-, MODE, FILTER, MENU) ══
+    // Placed at x=576..622, completely separated from knobs (which start at x>=636)
     NSArray *btnNames = @[@"POWER", @"BAND+", @"BAND-", @"MODE", @"FILTER", @"MENU"];
-    CGFloat btnW = 60.0;
-    CGFloat btnH = 19.0;
-    CGFloat btnY = chassisH - 85.0;
+    CGFloat btnW = 46.0;
+    CGFloat btnH = 22.0;
+    CGFloat btnX = startX + 4.0; // 576.0
+    CGFloat btnTopY = 346.0;
+    CGFloat btnSpacing = 52.0;
 
     for (NSUInteger i = 0; i < btnNames.count; i++) {
         NSString *name = btnNames[i];
-        NSInteger currentTag = (NSInteger)(i + 1); // 1 = POWER, 2 = BAND+, 3 = BAND-, 4 = MODE, 5 = FILTER, 6 = MENU
-        NSRect btnRect = NSMakeRect(startX + 10.0, btnY - (i * 30.0), btnW, btnH);
+        NSInteger currentTag = (NSInteger)(i + 1);
+        CGFloat by = btnTopY - (CGFloat)i * btnSpacing;
+        NSRect btnRect = NSMakeRect(btnX, by, btnW, btnH);
         BOOL isPressed = (pressedTag == currentTag);
 
-        // Recessed cavity under button
-        NSRect cavityRect = NSInsetRect(btnRect, -1.5, -1.5);
+        // Recessed cavity — authentic capsule shape
         [[NSColor colorWithCalibratedWhite:0.04 alpha:1.0] setFill];
-        NSBezierPath *cavity = [NSBezierPath bezierPathWithRoundedRect:cavityRect xRadius:7.0 yRadius:7.0];
-        [cavity fill];
+        [[NSBezierPath bezierPathWithRoundedRect:NSInsetRect(btnRect, -2, -2) xRadius:btnH/2.0+1.0 yRadius:btnH/2.0+1.0] fill];
 
         if (isPressed) {
-            // Luminous neon glow aura radiating from bezel
             CGContextSaveGState(ctx);
-            NSColor *glow = (currentTag == 1) ?
-                [NSColor colorWithCalibratedRed:1.0 green:0.22 blue:0.22 alpha:0.95] :
-                [NSColor colorWithCalibratedRed:0.0 green:0.85 blue:1.0 alpha:0.95];
+            NSColor *glow = (currentTag == 1)
+                ? [NSColor colorWithCalibratedRed:1.0 green:0.22 blue:0.22 alpha:0.95]
+                : [NSColor colorWithCalibratedRed:0.0 green:0.85 blue:1.0 alpha:0.95];
             CGContextSetShadowWithColor(ctx, CGSizeZero, 14.0, glow.CGColor);
-            NSBezierPath *halo = [NSBezierPath bezierPathWithRoundedRect:btnRect xRadius:6.0 yRadius:6.0];
-            [glow setFill];
-            [halo fill];
+            NSBezierPath *halo = [NSBezierPath bezierPathWithRoundedRect:btnRect xRadius:btnH/2.0 yRadius:btnH/2.0];
+            [glow setFill]; [halo fill];
             CGContextRestoreGState(ctx);
 
-            // Depressed button face shifted down by 1.5px
-            NSRect pressedRect = NSMakeRect(btnRect.origin.x, btnRect.origin.y - 1.5, btnRect.size.width, btnRect.size.height);
-            NSBezierPath *btn = [NSBezierPath bezierPathWithRoundedRect:pressedRect xRadius:6.0 yRadius:6.0];
-            NSGradient *btnGrad = [[NSGradient alloc] initWithStartingColor:[NSColor colorWithCalibratedWhite:0.10 alpha:1.0]
-                                                                endingColor:[NSColor colorWithCalibratedWhite:0.16 alpha:1.0]];
-            [btnGrad drawInBezierPath:btn angle:270.0];
+            NSRect pr = NSMakeRect(btnRect.origin.x, btnRect.origin.y - 1.5, btnW, btnH);
+            NSBezierPath *btn = [NSBezierPath bezierPathWithRoundedRect:pr xRadius:btnH/2.0 yRadius:btnH/2.0];
+            [[[NSGradient alloc] initWithStartingColor:[NSColor colorWithCalibratedWhite:0.10 alpha:1.0]
+                                           endingColor:[NSColor colorWithCalibratedWhite:0.18 alpha:1.0]]
+             drawInBezierPath:btn angle:270.0];
+            NSColor *glow2 = (currentTag == 1)
+                ? [NSColor colorWithCalibratedRed:1.0 green:0.22 blue:0.22 alpha:0.95]
+                : [NSColor colorWithCalibratedRed:0.0 green:0.85 blue:1.0 alpha:0.95];
+            [glow2 setStroke]; btn.lineWidth = 1.5; [btn stroke];
 
-            // Illuminated border stroke
-            [glow setStroke];
-            btn.lineWidth = 1.5;
-            [btn stroke];
-
-            // Shifted text with vivid highlight
-            NSMutableParagraphStyle *style = [NSMutableParagraphStyle new];
-            style.alignment = NSTextAlignmentCenter;
-            NSColor *tColor = (currentTag == 1) ?
-                [NSColor colorWithCalibratedRed:1.0 green:0.40 blue:0.40 alpha:1.0] :
-                [NSColor colorWithCalibratedRed:0.85 green:0.95 blue:1.0 alpha:1.0];
-            NSDictionary *attrs = @{
-                NSFontAttributeName: [NSFont systemFontOfSize:8.5 weight:NSFontWeightBold],
-                NSForegroundColorAttributeName: tColor,
-                NSParagraphStyleAttributeName: style
-            };
-            NSSize textSize = [name sizeWithAttributes:attrs];
-            CGFloat textY = pressedRect.origin.y + floor((btnH - textSize.height) / 2.0);
-            NSRect textRect = NSMakeRect(pressedRect.origin.x, textY, btnW, textSize.height);
-            [name drawInRect:textRect withAttributes:attrs];
+            NSMutableParagraphStyle *ps = [NSMutableParagraphStyle new]; ps.alignment = NSTextAlignmentCenter;
+            NSColor *tc = (currentTag == 1)
+                ? [NSColor colorWithCalibratedRed:1.0 green:0.40 blue:0.40 alpha:1.0]
+                : [NSColor colorWithCalibratedRed:0.85 green:0.95 blue:1.0 alpha:1.0];
+            NSDictionary *ta = @{ NSFontAttributeName: [NSFont systemFontOfSize:8.0 weight:NSFontWeightBold],
+                                  NSForegroundColorAttributeName: tc, NSParagraphStyleAttributeName: ps };
+            NSSize ts = [name sizeWithAttributes:ta];
+            [name drawInRect:NSMakeRect(pr.origin.x, pr.origin.y + (btnH-ts.height)/2.0, btnW, ts.height) withAttributes:ta];
         } else {
-            // Normal button body
-            NSBezierPath *btn = [NSBezierPath bezierPathWithRoundedRect:btnRect xRadius:6.0 yRadius:6.0];
-            NSGradient *btnGrad = [[NSGradient alloc] initWithStartingColor:[NSColor colorWithCalibratedWhite:0.22 alpha:1.0]
-                                                                endingColor:[NSColor colorWithCalibratedWhite:0.14 alpha:1.0]];
-            [btnGrad drawInBezierPath:btn angle:90.0];
+            NSBezierPath *btn = [NSBezierPath bezierPathWithRoundedRect:btnRect xRadius:btnH/2.0 yRadius:btnH/2.0];
+            [[[NSGradient alloc] initWithStartingColor:[NSColor colorWithCalibratedWhite:0.24 alpha:1.0]
+                                           endingColor:[NSColor colorWithCalibratedWhite:0.14 alpha:1.0]]
+             drawInBezierPath:btn angle:90.0];
+            [[NSColor colorWithCalibratedWhite:0.32 alpha:1.0] setStroke]; btn.lineWidth = 1.0; [btn stroke];
 
-            [[NSColor colorWithCalibratedWhite:0.30 alpha:1.0] setStroke];
-            btn.lineWidth = 1.0;
-            [btn stroke];
-
-            // Text: POWER in Red, others in White
-            NSColor *textColor = [name isEqualToString:@"POWER"] ?
-                [NSColor colorWithCalibratedRed:0.95 green:0.25 blue:0.25 alpha:1.0] :
-                [NSColor colorWithCalibratedWhite:0.88 alpha:1.0];
-
-            NSMutableParagraphStyle *style = [NSMutableParagraphStyle new];
-            style.alignment = NSTextAlignmentCenter;
-            NSDictionary *attrs = @{
-                NSFontAttributeName: [NSFont systemFontOfSize:8.5 weight:NSFontWeightBold],
-                NSForegroundColorAttributeName: textColor,
-                NSParagraphStyleAttributeName: style
-            };
-            NSSize textSize = [name sizeWithAttributes:attrs];
-            CGFloat textY = btnRect.origin.y + floor((btnH - textSize.height) / 2.0);
-            NSRect textRect = NSMakeRect(btnRect.origin.x, textY, btnW, textSize.height);
-            [name drawInRect:textRect withAttributes:attrs];
+            NSColor *tc = [name isEqualToString:@"POWER"]
+                ? [NSColor colorWithCalibratedRed:0.95 green:0.25 blue:0.25 alpha:1.0]
+                : [NSColor colorWithCalibratedWhite:0.88 alpha:1.0];
+            NSMutableParagraphStyle *ps = [NSMutableParagraphStyle new]; ps.alignment = NSTextAlignmentCenter;
+            NSDictionary *ta = @{ NSFontAttributeName: [NSFont systemFontOfSize:8.0 weight:NSFontWeightBold],
+                                  NSForegroundColorAttributeName: tc, NSParagraphStyleAttributeName: ps };
+            NSSize ts = [name sizeWithAttributes:ta];
+            [name drawInRect:NSMakeRect(btnRect.origin.x, btnRect.origin.y + (btnH-ts.height)/2.0, btnW, ts.height) withAttributes:ta];
         }
     }
 
-    // Rotary Knobs: AF GAIN (Top) and TUNE (Bottom)
-    // 1. AF GAIN Knob
-    CGFloat knobX = startX + 115.0;
-    CGFloat afY = chassisH - 120.0;
+    // ══ COLUMN B & C: AF GAIN & RIT/XIT small knobs side by side ══
+    // Center AF GAIN: (658, 315), radius 22 -> span [636..680] (14px gap from buttons at x=622!)
+    NSPoint afCenter = NSMakePoint(658.0, 315.0);
     BOOL isAFPressed = (pressedTag == TX500ControlAFGainKnob);
-    [self drawRotaryKnobAtPoint:NSMakePoint(knobX, afY)
-                         radius:26.0
-                          label:@"AF GAIN"
-                      hasDimple:NO
-                          angle:afGainAngle
-                      isPressed:isAFPressed
-                      inContext:ctx];
+    [self drawRotaryKnobAtPoint:afCenter radius:22.0 label:@"AF GAIN"
+                      hasDimple:NO angle:afGainAngle isPressed:isAFPressed inContext:ctx];
 
-    // 2. TUNE Main VFO Knob
-    CGFloat tuneY = 120.0;
+    // Center RIT/XIT: (712, 315), radius 22 -> span [690..734] (10px gap between knobs!)
+    NSPoint ritCenter = NSMakePoint(712.0, 315.0);
+    BOOL isRITPressed = (pressedTag == TX500ControlRITXITKnob);
+    [self drawRotaryKnobAtPoint:ritCenter radius:22.0 label:@"RIT / XIT"
+                      hasDimple:NO angle:ritXITAngle isPressed:isRITPressed inContext:ctx];
+
+    // ══ TUNE/MULTI large knob centered below AF GAIN & RIT/XIT ══
+    // Center: (685, 168), radius 46 -> span [639..731] (17px gap from buttons, 20px gap from round buttons!)
+    CGFloat tuneX = (afCenter.x + ritCenter.x) / 2.0; // 685.0
+    CGFloat tuneY = 168.0;
     BOOL isTunePressed = (pressedTag == TX500ControlTuneKnob);
-    [self drawRotaryKnobAtPoint:NSMakePoint(knobX, tuneY)
-                         radius:44.0
-                          label:@"TUNE"
-                      hasDimple:YES
-                          angle:tuneAngle
-                      isPressed:isTunePressed
-                      inContext:ctx];
+    [self drawRotaryKnobAtPoint:NSMakePoint(tuneX, tuneY) radius:46.0 label:@"TUNE / MULTI"
+                      hasDimple:YES angle:tuneAngle isPressed:isTunePressed inContext:ctx];
+
+    // ══ FAR-RIGHT: Small ROUND buttons (R/X, CLR, V/M, LOCK🔒, +, -) ══
+    // Center: x = 762.0, radius = 11.0 -> span [751..773]
+    CGFloat roundBtnCX = 762.0;
+    CGFloat roundBtnR  = 11.0;
+    NSArray *roundBtnLabels = @[@"R/X", @"CLR", @"V/M", @"", @"+", @"-"];
+    NSArray *roundBtnTags   = @[@(TX500ControlRX), @(TX500ControlClear), @(TX500ControlVM),
+                                @(TX500ControlLock), @(TX500ControlPlus), @(TX500ControlMinus)];
+
+    for (NSUInteger i = 0; i < roundBtnLabels.count; i++) {
+        NSString *blabel = roundBtnLabels[i];
+        NSInteger btag   = [roundBtnTags[i] integerValue];
+        // Perfectly aligned horizontally with corresponding capsule button
+        CGFloat by = btnTopY - (CGFloat)i * btnSpacing;
+        CGFloat cy = by + (btnH / 2.0);
+        NSPoint bc = NSMakePoint(roundBtnCX, cy);
+        BOOL bPressed = (pressedTag == btag);
+
+        NSRect circRect = NSMakeRect(bc.x - roundBtnR, bc.y - roundBtnR, roundBtnR*2, roundBtnR*2);
+
+        // Recessed cavity
+        [[NSColor colorWithCalibratedWhite:0.04 alpha:1.0] setFill];
+        [[NSBezierPath bezierPathWithOvalInRect:NSInsetRect(circRect, -2.5, -2.5)] fill];
+
+        if (bPressed) {
+            CGContextSaveGState(ctx);
+            NSColor *glow = (btag == TX500ControlRX)
+                ? [NSColor colorWithCalibratedRed:1.0 green:0.2 blue:0.2 alpha:0.9]
+                : [NSColor colorWithCalibratedRed:0.0 green:0.85 blue:1.0 alpha:0.9];
+            CGContextSetShadowWithColor(ctx, CGSizeZero, 12.0, glow.CGColor);
+            NSBezierPath *circ = [NSBezierPath bezierPathWithOvalInRect:circRect];
+            [glow setFill]; [circ fill];
+            CGContextRestoreGState(ctx);
+        } else {
+            NSBezierPath *circ = [NSBezierPath bezierPathWithOvalInRect:circRect];
+            CGContextSaveGState(ctx);
+            [circ addClip];
+            NSGradient *grad = [[NSGradient alloc] initWithStartingColor:[NSColor colorWithCalibratedWhite:0.35 alpha:1.0]
+                                                             endingColor:[NSColor colorWithCalibratedWhite:0.14 alpha:1.0]];
+            [grad drawInRect:circRect angle:90.0];
+            CGContextRestoreGState(ctx);
+            [[NSColor colorWithCalibratedWhite:0.40 alpha:1.0] setStroke];
+            circ.lineWidth = 0.8;
+            [circ stroke];
+            // Highlight arc on top
+            CGContextSaveGState(ctx);
+            [[NSColor colorWithCalibratedWhite:0.65 alpha:0.45] setStroke];
+            CGContextSetLineWidth(ctx, 1.0);
+            CGContextBeginPath(ctx);
+            CGContextAddArc(ctx, bc.x, bc.y, roundBtnR - 2.0, M_PI*0.2, M_PI*0.8, 0);
+            CGContextStrokePath(ctx);
+            CGContextRestoreGState(ctx);
+        }
+
+        // Button label or padlock icon
+        if (btag == TX500ControlLock) {
+            // Authentic Padlock Icon on button face
+            NSColor *lockColor = bPressed
+                ? [NSColor colorWithCalibratedRed:1.0 green:0.75 blue:0.20 alpha:1.0]
+                : [NSColor colorWithCalibratedWhite:0.88 alpha:1.0];
+
+            // 1. Shackle (arched loop on top)
+            NSBezierPath *shackle = [NSBezierPath bezierPath];
+            shackle.lineWidth = 1.8;
+            shackle.lineCapStyle = NSLineCapStyleRound;
+            [shackle moveToPoint:NSMakePoint(bc.x - 3.2, bc.y - 0.2)];
+            [shackle lineToPoint:NSMakePoint(bc.x - 3.2, bc.y + 2.8)];
+            [shackle appendBezierPathWithArcWithCenter:NSMakePoint(bc.x, bc.y + 2.8)
+                                                radius:3.2
+                                            startAngle:180.0
+                                              endAngle:0.0
+                                             clockwise:YES];
+            [shackle lineToPoint:NSMakePoint(bc.x + 3.2, bc.y - 0.2)];
+            [lockColor setStroke];
+            [shackle stroke];
+
+            // 2. Lock Body (solid block at bottom)
+            NSRect bodyRect = NSMakeRect(bc.x - 5.0, bc.y - 5.8, 10.0, 7.2);
+            NSBezierPath *body = [NSBezierPath bezierPathWithRoundedRect:bodyRect xRadius:1.5 yRadius:1.5];
+            [lockColor setFill];
+            [body fill];
+
+            // 3. Keyhole (circular hole + vertical key slot)
+            NSColor *holeColor = [NSColor colorWithCalibratedWhite:0.12 alpha:1.0];
+            [holeColor setFill];
+            NSBezierPath *holeDot = [NSBezierPath bezierPathWithOvalInRect:NSMakeRect(bc.x - 0.9, bc.y - 2.8, 1.8, 1.8)];
+            [holeDot fill];
+            NSBezierPath *holeSlot = [NSBezierPath bezierPathWithRect:NSMakeRect(bc.x - 0.5, bc.y - 4.5, 1.0, 2.0)];
+            [holeSlot fill];
+        } else if (blabel.length > 0) {
+
+            NSColor *tc;
+            if (btag == TX500ControlRX)
+                tc = bPressed ? [NSColor whiteColor] : [NSColor colorWithCalibratedRed:0.95 green:0.30 blue:0.30 alpha:1.0];
+            else if (btag == TX500ControlPlus || btag == TX500ControlMinus)
+                tc = bPressed ? [NSColor whiteColor] : [NSColor colorWithCalibratedRed:0.40 green:0.90 blue:1.0 alpha:1.0];
+            else
+                tc = bPressed ? [NSColor whiteColor] : [NSColor colorWithCalibratedWhite:0.85 alpha:1.0];
+
+            NSMutableParagraphStyle *ps = [NSMutableParagraphStyle new]; ps.alignment = NSTextAlignmentCenter;
+            NSDictionary *ta = @{ NSFontAttributeName: [NSFont systemFontOfSize:6.8 weight:NSFontWeightBold],
+                                  NSForegroundColorAttributeName: tc, NSParagraphStyleAttributeName: ps };
+            NSSize ts = [blabel sizeWithAttributes:ta];
+            [blabel drawInRect:NSMakeRect(bc.x - roundBtnR, bc.y - ts.height/2.0, roundBtnR*2, ts.height) withAttributes:ta];
+        }
+    }
+
+    // ══ FAR-RIGHT: Vertical separator line before connectors ══
+    CGFloat farSepX = 782.0;
+    CGContextSaveGState(ctx);
+    CGContextSetStrokeColorWithColor(ctx, [NSColor colorWithCalibratedWhite:0.25 alpha:1.0].CGColor);
+    CGContextSetLineWidth(ctx, 0.8);
+    CGContextMoveToPoint(ctx, farSepX, chassisH - 28.0);
+    CGContextAddLineToPoint(ctx, farSepX, 28.0);
+    CGContextStrokePath(ctx);
+    CGContextRestoreGState(ctx);
+
+    // ══ FAR-RIGHT EDGE: Connector Markings (ANT, CAT, CW KEY) — Pure text markings matching left flank ══
+    NSDictionary *connLblAttrs = @{
+        NSFontAttributeName: [NSFont systemFontOfSize:8.5 weight:NSFontWeightBold],
+        NSForegroundColorAttributeName: [NSColor colorWithCalibratedWhite:0.65 alpha:1.0]
+    };
+    CGFloat connCenterX = 808.0;
+
+    NSArray *rightConnLabels = @[
+        @{@"text": @"ANT", @"y": @(350.0)},
+        @{@"text": @"CAT", @"y": @(227.0)},
+        @{@"text": @"CW KEY", @"y": @(100.0)}
+    ];
+
+    for (NSDictionary *conn in rightConnLabels) {
+        NSString *lbl = conn[@"text"];
+        CGFloat ly = [conn[@"y"] doubleValue];
+        NSSize ls = [lbl sizeWithAttributes:connLblAttrs];
+        [lbl drawAtPoint:NSMakePoint(connCenterX - (ls.width / 2.0), ly - (ls.height / 2.0)) withAttributes:connLblAttrs];
+    }
 }
+
 
 // Rotary Knob with Knurled Rim, Face, and Finger Dimple / Pointer
 + (void)drawRotaryKnobAtPoint:(NSPoint)center

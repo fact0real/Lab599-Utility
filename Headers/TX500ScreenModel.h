@@ -12,6 +12,7 @@ typedef NS_ENUM(NSInteger, TX500ScreenTheme) {
 @interface TX500ScreenState : NSObject <NSCopying>
 
 // Frequencies & Modes
+@property (nonatomic, copy) NSString *hardwareModelName; // e.g. "DISCOVERY", "TX-500MP", "TX-500PRO", "PRO ALTAI"
 @property (nonatomic, assign) uint64_t frequencyHz;
 @property (nonatomic, assign) uint64_t vfoBFrequencyHz;
 @property (nonatomic, assign) NSInteger activeVFO; // 0 = VFO A, 1 = VFO B

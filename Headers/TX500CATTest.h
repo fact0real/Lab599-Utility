@@ -34,7 +34,7 @@ FOUNDATION_EXPORT TXCATCode TXClassifyCATReply(NSData *reply);
 @property(nonatomic, copy) NSString *operatingMode;    // e.g. "USB", "LSB", "CW", "DIG", "FM", "AM"
 @property(nonatomic) NSInteger modeCode;               // 1-7
 @property(nonatomic) double rfPowerWatts;              // 1.0 - 10.0
-@property(nonatomic) NSInteger filterNumber;           // 1, 2, 3
+@property(nonatomic) NSInteger filterNumber;           // 1, 2, 3, 4
 @property(nonatomic) BOOL preampOn;
 @property(nonatomic) BOOL attenuatorOn;
 @property(nonatomic) double voltage;                   // e.g. 13.8 V

@@ -200,7 +200,8 @@ static NSString *SendOverPort(Lab599SerialPort *port, NSString *cmd, NSTimeInter
     double deadline = started + timeout;
     double completeAt = 0;
     while (Lab599MonotonicTime() < deadline) {
-        NSData *chunk = [port readMaximum:256 timeout:MIN(0.04, deadline - Lab599MonotonicTime()) cancellation:token error:error];
+        NSError *readErr = nil;
+        NSData *chunk = [port readMaximum:256 timeout:MIN(0.04, deadline - Lab599MonotonicTime()) cancellation:token error:&readErr];
         if (chunk.length > 0) {
             [resp appendData:chunk];
             NSData *semi = [@";" dataUsingEncoding:NSASCIIStringEncoding];
@@ -209,7 +210,11 @@ static NSString *SendOverPort(Lab599SerialPort *port, NSString *cmd, NSTimeInter
                 completeAt = Lab599MonotonicTime();
                 break;
             }
-        } else if (error && *error) {
+        } else if (readErr) {
+            if (readErr.code == Lab599SerialTimeout) {
+                continue;
+            }
+            if (error) *error = readErr;
             break;
         }
     }
@@ -218,6 +223,9 @@ static NSString *SendOverPort(Lab599SerialPort *port, NSString *cmd, NSTimeInter
     }
     if (resp.length > 0) {
         return [[NSString alloc] initWithData:resp encoding:NSASCIIStringEncoding];
+    }
+    if (error && !*error) {
+        *error = [NSError errorWithDomain:Lab599SerialErrorDomain code:Lab599SerialTimeout userInfo:@{NSLocalizedDescriptionKey: @"No serial data within the read deadline."}];
     }
     return nil;
 }
@@ -329,7 +337,12 @@ TXRadioState *TXReadRadioState(NSString *path, NSTimeInterval timeout, NSError *
     if (pcReply && [pcReply hasPrefix:@"PC"] && pcReply.length >= 5) {
         state.rawPCReply = pcReply;
         int p = [[pcReply substringWithRange:NSMakeRange(2, 3)] intValue];
-        if (p > 0) state.rfPowerWatts = (double)p;
+        // TX-500 power is in tenths of a watt (e.g. PC050; = 5.0 W, PC100; = 10.0 W, PC010; = 1.0 W)
+        if (p > 10) {
+            state.rfPowerWatts = p / 10.0;
+        } else if (p > 0) {
+            state.rfPowerWatts = (double)p;
+        }
     }
 
     // 6. Preamp (PA;)
@@ -348,8 +361,16 @@ TXRadioState *TXReadRadioState(NSString *path, NSTimeInterval timeout, NSError *
     // 8. Filter (FL;)
     NSString *flReply = SendOverPort(port, @"FL;", cmdTimeout, NULL, nil);
     if (flReply && [flReply hasPrefix:@"FL"] && flReply.length >= 3) {
-        int fl = [[flReply substringFromIndex:2] intValue];
-        if (fl > 0) state.filterNumber = fl;
+        // Radio returns e.g. FL21; or FL2; where character at index 2 is active filter
+        unichar c = [flReply characterAtIndex:2];
+        if (c >= '1' && c <= '4') {
+            state.filterNumber = (NSInteger)(c - '0');
+        } else if (c == '0') {
+            state.filterNumber = 1;
+        } else {
+            int fl = [[flReply substringFromIndex:2] intValue];
+            if (fl >= 1 && fl <= 4) state.filterNumber = fl;
+        }
     }
 
     // 9. Supply Voltage (VL;)
@@ -376,9 +397,13 @@ BOOL TXSetRadioFrequency(NSString *path, uint64_t freqHz, NSError **error) {
     }
     NSString *cmd = [NSString stringWithFormat:@"FA%011llu;", freqHz];
     double rtt = 0;
-    NSString *reply = TXExecuteCATCommand(path, cmd, 0.3, &rtt, error);
-    (void)reply;
-    return (error && *error) ? NO : YES;
+    NSError *cmdErr = nil;
+    TXExecuteCATCommand(path, cmd, 0.1, &rtt, &cmdErr);
+    if (cmdErr && cmdErr.code != Lab599SerialTimeout) {
+        if (error) *error = cmdErr;
+        return NO;
+    }
+    return YES;
 }
 
 BOOL TXSetRadioMode(NSString *path, NSInteger modeCode, NSError **error) {
@@ -388,44 +413,67 @@ BOOL TXSetRadioMode(NSString *path, NSInteger modeCode, NSError **error) {
     }
     NSString *cmd = [NSString stringWithFormat:@"MD%ld;", (long)modeCode];
     double rtt = 0;
-    NSString *reply = TXExecuteCATCommand(path, cmd, 0.3, &rtt, error);
-    (void)reply;
-    return (error && *error) ? NO : YES;
+    NSError *cmdErr = nil;
+    TXExecuteCATCommand(path, cmd, 0.1, &rtt, &cmdErr);
+    if (cmdErr && cmdErr.code != Lab599SerialTimeout) {
+        if (error) *error = cmdErr;
+        return NO;
+    }
+    return YES;
 }
 
 BOOL TXSetRadioPower(NSString *path, double watts, NSError **error) {
-    int p = (int)round(watts);
-    if (p < 1) p = 1;
-    if (p > 10) p = 10;
-    NSString *cmd = [NSString stringWithFormat:@"PC%03d;", p];
+    if (watts < 1.0) watts = 1.0;
+    if (watts > 10.0) watts = 10.0;
+    // TX-500 power is in tenths of a watt (e.g. 5 W -> PC050;, 10 W -> PC100;)
+    int tenths = (int)round(watts * 10.0);
+    NSString *cmd = [NSString stringWithFormat:@"PC%03d;", tenths];
     double rtt = 0;
-    NSString *reply = TXExecuteCATCommand(path, cmd, 0.3, &rtt, error);
-    (void)reply;
-    return (error && *error) ? NO : YES;
+    NSError *cmdErr = nil;
+    TXExecuteCATCommand(path, cmd, 0.1, &rtt, &cmdErr);
+    if (cmdErr && cmdErr.code != Lab599SerialTimeout) {
+        if (error) *error = cmdErr;
+        return NO;
+    }
+    return YES;
 }
 
 BOOL TXSetRadioPreamp(NSString *path, BOOL on, NSError **error) {
     NSString *cmd = [NSString stringWithFormat:@"PA%d;", on ? 1 : 0];
     double rtt = 0;
-    NSString *reply = TXExecuteCATCommand(path, cmd, 0.3, &rtt, error);
-    (void)reply;
-    return (error && *error) ? NO : YES;
+    NSError *cmdErr = nil;
+    TXExecuteCATCommand(path, cmd, 0.1, &rtt, &cmdErr);
+    if (cmdErr && cmdErr.code != Lab599SerialTimeout) {
+        if (error) *error = cmdErr;
+        return NO;
+    }
+    return YES;
 }
 
 BOOL TXSetRadioAttenuator(NSString *path, BOOL on, NSError **error) {
     NSString *cmd = [NSString stringWithFormat:@"RA%02d;", on ? 1 : 0];
     double rtt = 0;
-    NSString *reply = TXExecuteCATCommand(path, cmd, 0.3, &rtt, error);
-    (void)reply;
-    return (error && *error) ? NO : YES;
+    NSError *cmdErr = nil;
+    TXExecuteCATCommand(path, cmd, 0.1, &rtt, &cmdErr);
+    if (cmdErr && cmdErr.code != Lab599SerialTimeout) {
+        if (error) *error = cmdErr;
+        return NO;
+    }
+    return YES;
 }
 
 BOOL TXSetRadioFilter(NSString *path, NSInteger filterNumber, NSError **error) {
-    if (filterNumber < 1 || filterNumber > 3) filterNumber = 1;
-    NSString *cmd = [NSString stringWithFormat:@"FL%ld;", (long)filterNumber];
+    if (filterNumber < 1) filterNumber = 1;
+    if (filterNumber > 4) filterNumber = 4;
+    // TX-500 filter parameter is 0-indexed: Filter 1 is FL0;, Filter 4 is FL3;
+    NSString *cmd = [NSString stringWithFormat:@"FL%ld;", (long)(filterNumber - 1)];
     double rtt = 0;
-    NSString *reply = TXExecuteCATCommand(path, cmd, 0.3, &rtt, error);
-    (void)reply;
-    return (error && *error) ? NO : YES;
+    NSError *cmdErr = nil;
+    TXExecuteCATCommand(path, cmd, 0.1, &rtt, &cmdErr);
+    if (cmdErr && cmdErr.code != Lab599SerialTimeout) {
+        if (error) *error = cmdErr;
+        return NO;
+    }
+    return YES;
 }
 

@@ -22,6 +22,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, assign) BOOL demoModeActive;
 @property (nonatomic, assign) CGFloat tuneAngle;
 @property (nonatomic, assign) CGFloat afGainAngle;
+@property (nonatomic, assign) CGFloat ritXITAngle;
 @property (nonatomic, assign) NSInteger pressedTag;
 
 // Actions
@@ -29,6 +30,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)handleChassisControlPress:(TX500ChassisControlTag)tag atChassisPoint:(NSPoint)pt;
 - (void)handleTuneKnobDelta:(CGFloat)delta;
 - (void)handleAFGainKnobDelta:(CGFloat)delta;
+- (void)handleRITXITKnobDelta:(CGFloat)delta;
 - (void)startLiveSync;
 - (void)stopLiveSync;
 - (void)startDemoTimer;

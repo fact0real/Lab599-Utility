@@ -20,6 +20,15 @@
 @property (nonatomic, assign) NSPoint lastDragPoint;
 @property (nonatomic, assign) BOOL isDraggingTuneKnob;
 @property (nonatomic, assign) BOOL isDraggingAFGainKnob;
+@property (nonatomic, assign) BOOL isDraggingRITXITKnob;
+// Pixel accumulators for smooth drag feel
+@property (nonatomic, assign) CGFloat tuneDragAccum;
+@property (nonatomic, assign) CGFloat afGainDragAccum;
+@property (nonatomic, assign) CGFloat ritXITDragAccum;
+// Scroll accumulators (trackpad momentum)
+@property (nonatomic, assign) CGFloat tuneScrollAccum;
+@property (nonatomic, assign) CGFloat afGainScrollAccum;
+@property (nonatomic, assign) CGFloat ritXITScrollAccum;
 
 - (NSRect)currentChassisTargetRect;
 - (NSPoint)chassisPointFromViewPoint:(NSPoint)viewPt;
@@ -106,47 +115,63 @@
     if (!self.showChassisBezel) return TX500ControlNone;
     if (cp.x < 0 || cp.x > 840.0 || cp.y < 0 || cp.y > 440.0) return TX500ControlNone;
 
-    // 1. Right-side vertical buttons (startX = 610.0, btnX = 620.0, btnW = 60.0, btnH = 19.0)
-    if (cp.x >= 614.0 && cp.x <= 686.0) {
-        if (cp.y >= 350.0 && cp.y <= 378.0) return TX500ControlPower;     // Tag 1
-        if (cp.y >= 320.0 && cp.y <= 348.0) return TX500ControlBandUp;    // Tag 2
-        if (cp.y >= 290.0 && cp.y <= 318.0) return TX500ControlBandDown;  // Tag 3
-        if (cp.y >= 260.0 && cp.y <= 288.0) return TX500ControlMode;      // Tag 4
-        if (cp.y >= 230.0 && cp.y <= 258.0) return TX500ControlFilter;    // Tag 5
-        if (cp.y >= 200.0 && cp.y <= 228.0) return TX500ControlMenu;      // Tag 6
+    // Layout constants (must match TX500ScreenRenderer.m drawRightControlPanelInContext)
+    static const CGFloat kStartX = 572.0;
+
+    // 1. Right-side vertical buttons (col A): x=[574..624]
+    if (cp.x >= kStartX + 2.0 && cp.x <= kStartX + 52.0) {
+        if (cp.y >= 342.0 && cp.y <= 372.0) return TX500ControlPower;     // Tag 1 (346..368)
+        if (cp.y >= 290.0 && cp.y <= 320.0) return TX500ControlBandUp;    // Tag 2 (294..316)
+        if (cp.y >= 238.0 && cp.y <= 268.0) return TX500ControlBandDown;  // Tag 3 (242..264)
+        if (cp.y >= 186.0 && cp.y <= 216.0) return TX500ControlMode;      // Tag 4 (190..212)
+        if (cp.y >= 134.0 && cp.y <= 164.0) return TX500ControlFilter;    // Tag 5 (138..160)
+        if (cp.y >= 82.0  && cp.y <= 112.0) return TX500ControlMenu;      // Tag 6 (86..108)
     }
 
-    // 2. Right-side Rotary Knobs
-    // AF GAIN: center (725.0, 320.0), radius 26.0
-    CGFloat distAF = hypot(cp.x - 725.0, cp.y - 320.0);
-    if (distAF <= 32.0) {
-        return TX500ControlAFGainKnob; // Tag 11
+    // 2. Rotary Knobs — check by distance from center
+    // AF GAIN: center (658, 315), radius 22
+    CGFloat distAF = hypot(cp.x - 658.0, cp.y - 315.0);
+    if (distAF <= 28.0) return TX500ControlAFGainKnob;
+
+    // RIT/XIT: center (712, 315), radius 22
+    CGFloat distRIT = hypot(cp.x - 712.0, cp.y - 315.0);
+    if (distRIT <= 28.0) return TX500ControlRITXITKnob;
+
+    // TUNE/MULTI: center (685, 168), radius 46
+    CGFloat distTune = hypot(cp.x - 685.0, cp.y - 168.0);
+    if (distTune <= 52.0) return TX500ControlTuneKnob;
+
+    // 3. Far-right round buttons: circle centers at cx=762.0, radius=11.0
+    // Centers horizontally aligned with corresponding capsule buttons: cy = 357, 305, 253, 201, 149, 97
+    CGFloat roundCX = 762.0;
+    CGFloat roundCYs[] = {357.0, 305.0, 253.0, 201.0, 149.0, 97.0};
+    TX500ChassisControlTag roundTags[] = {TX500ControlRX, TX500ControlClear, TX500ControlVM,
+                                           TX500ControlLock, TX500ControlPlus, TX500ControlMinus};
+    for (int ri = 0; ri < 6; ri++) {
+        if (hypot(cp.x - roundCX, cp.y - roundCYs[ri]) <= 15.0) return roundTags[ri];
     }
 
-    // TUNE: center (725.0, 120.0), radius 44.0
-    CGFloat distTune = hypot(cp.x - 725.0, cp.y - 120.0);
-    if (distTune <= 50.0) {
-        return TX500ControlTuneKnob; // Tag 10
+    // 4. Top physical soft keys (above LCD)
+    // Parallel and aligned with top screws (bounds: y=402.5..417.5)
+    if (cp.y >= 395.0 && cp.y <= 422.0) {
+        if (cp.x >= 80.0 && cp.x <= 146.0) return TX500ControlTopKey1;
+        if (cp.x >= 212.0 && cp.x <= 278.0) return TX500ControlTopKey2;
+        if (cp.x >= 342.0 && cp.x <= 408.0) return TX500ControlTopKey3;
+        if (cp.x >= 474.0 && cp.x <= 540.0) return TX500ControlTopKey4;
     }
 
-    // 3. Top physical soft keys (above LCD): y ~ 398.0, h = 15.0, w = 54.0
-    if (cp.y >= 392.0 && cp.y <= 420.0) {
-        if (cp.x >= 90.0 && cp.x <= 155.0) return TX500ControlTopKey1; // Tag 21 (PRE)
-        if (cp.x >= 222.0 && cp.x <= 287.0) return TX500ControlTopKey2; // Tag 22 (ATT)
-        if (cp.x >= 354.0 && cp.x <= 419.0) return TX500ControlTopKey3; // Tag 23 (NR)
-        if (cp.x >= 486.0 && cp.x <= 551.0) return TX500ControlTopKey4; // Tag 24 (NB)
-    }
-
-    // 4. Bottom physical soft keys (below LCD): y ~ 18.0, h = 15.0, w = 54.0
-    if (cp.y >= 12.0 && cp.y <= 40.0) {
-        if (cp.x >= 90.0 && cp.x <= 155.0) return TX500ControlBottomKey1; // Tag 31 (VFO)
-        if (cp.x >= 222.0 && cp.x <= 287.0) return TX500ControlBottomKey2; // Tag 32 (SPLIT)
-        if (cp.x >= 354.0 && cp.x <= 419.0) return TX500ControlBottomKey3; // Tag 33 (RIT)
-        if (cp.x >= 486.0 && cp.x <= 551.0) return TX500ControlBottomKey4; // Tag 34 (TX/PTT)
+    // 5. Bottom physical soft keys (below LCD)
+    if (cp.y >= 18.0 && cp.y <= 36.0) {
+        if (cp.x >= 80.0 && cp.x <= 146.0) return TX500ControlBottomKey1;
+        if (cp.x >= 212.0 && cp.x <= 278.0) return TX500ControlBottomKey2;
+        if (cp.x >= 342.0 && cp.x <= 408.0) return TX500ControlBottomKey3;
+        if (cp.x >= 474.0 && cp.x <= 540.0) return TX500ControlBottomKey4;
     }
 
     return TX500ControlNone;
+
 }
+
 
 - (void)cursorUpdate:(NSEvent *)event {
     NSPoint viewPt = [self convertPoint:[event locationInWindow] fromView:nil];
@@ -209,18 +234,13 @@
     TX500ChassisControlTag tag = [self controlTagAtChassisPoint:cp];
 
     if (tag != TX500ControlNone) {
-        // Haptic feedback
         [[NSHapticFeedbackManager defaultPerformer] performFeedbackPattern:NSHapticFeedbackPatternGeneric
                                                            performanceTime:NSHapticFeedbackPerformanceTimeNow];
-
-        // Trigger dynamic ripple shockwave animation
         [self startRippleAtChassisPoint:cp forTag:tag];
 
-        // Visual tactile button depression
         self.controller.pressedTag = tag;
         [self.controller renderAndUpdateDisplay];
 
-        // Auto-release button after 140ms
         [self.pressReleaseTimer invalidate];
         __weak typeof(self) weakSelf = self;
         self.pressReleaseTimer = [NSTimer scheduledTimerWithTimeInterval:0.14 repeats:NO block:^(NSTimer * _Nonnull timer) {
@@ -231,32 +251,56 @@
             }
         }];
 
-        // Dispatch action to controller
         [self.controller handleChassisControlPress:tag atChassisPoint:cp];
 
-        // Check if dragging knob
+        // Initialize drag state for knobs
         self.lastDragPoint = viewPt;
-        self.isDraggingTuneKnob = (tag == TX500ControlTuneKnob);
+        self.isDraggingTuneKnob   = (tag == TX500ControlTuneKnob);
         self.isDraggingAFGainKnob = (tag == TX500ControlAFGainKnob);
+        self.isDraggingRITXITKnob = (tag == TX500ControlRITXITKnob);
+        self.tuneDragAccum    = 0.0;
+        self.afGainDragAccum  = 0.0;
+        self.ritXITDragAccum  = 0.0;
     } else {
         [super mouseDown:event];
     }
 }
 
 - (void)mouseDragged:(NSEvent *)event {
-    if (self.isDraggingTuneKnob) {
+    if (self.isDraggingTuneKnob || self.isDraggingAFGainKnob || self.isDraggingRITXITKnob) {
         NSPoint viewPt = [self convertPoint:[event locationInWindow] fromView:nil];
         CGFloat dy = viewPt.y - self.lastDragPoint.y;
         self.lastDragPoint = viewPt;
-        if (fabs(dy) >= 1.0) {
-            [self.controller handleTuneKnobDelta:dy];
-        }
-    } else if (self.isDraggingAFGainKnob) {
-        NSPoint viewPt = [self convertPoint:[event locationInWindow] fromView:nil];
-        CGFloat dy = viewPt.y - self.lastDragPoint.y;
-        self.lastDragPoint = viewPt;
-        if (fabs(dy) >= 1.0) {
-            [self.controller handleAFGainKnobDelta:dy];
+
+        // Accumulator-based: fires one discrete step per kPixelsPerStep pixels dragged.
+        // This gives a genuine "turning a physical detented knob" feel.
+        static const CGFloat kTunePixelsPerStep   = 3.0;  // 3px = one 500Hz step
+        static const CGFloat kAFGainPixelsPerStep = 4.0;  // 4px = one 5-unit step
+
+        if (self.isDraggingTuneKnob) {
+            self.tuneDragAccum += dy;
+            CGFloat steps = floor(fabs(self.tuneDragAccum) / kTunePixelsPerStep);
+            if (steps >= 1.0) {
+                CGFloat sign = (self.tuneDragAccum > 0) ? 1.0 : -1.0;
+                [self.controller handleTuneKnobDelta:sign * 1.0]; // delta=1.0 → 500Hz per step
+                self.tuneDragAccum -= sign * steps * kTunePixelsPerStep;
+            }
+        } else if (self.isDraggingAFGainKnob) {
+            self.afGainDragAccum += dy;
+            CGFloat steps = floor(fabs(self.afGainDragAccum) / kAFGainPixelsPerStep);
+            if (steps >= 1.0) {
+                CGFloat sign = (self.afGainDragAccum > 0) ? 1.0 : -1.0;
+                [self.controller handleAFGainKnobDelta:sign * 1.0]; // delta=1.0 → 5 units
+                self.afGainDragAccum -= sign * steps * kAFGainPixelsPerStep;
+            }
+        } else if (self.isDraggingRITXITKnob) {
+            self.ritXITDragAccum += dy;
+            CGFloat steps = floor(fabs(self.ritXITDragAccum) / kAFGainPixelsPerStep);
+            if (steps >= 1.0) {
+                CGFloat sign = (self.ritXITDragAccum > 0) ? 1.0 : -1.0;
+                [self.controller handleRITXITKnobDelta:sign * 1.0];
+                self.ritXITDragAccum -= sign * steps * kAFGainPixelsPerStep;
+            }
         }
     } else {
         [super mouseDragged:event];
@@ -264,8 +308,12 @@
 }
 
 - (void)mouseUp:(NSEvent *)event {
-    self.isDraggingTuneKnob = NO;
+    self.isDraggingTuneKnob   = NO;
     self.isDraggingAFGainKnob = NO;
+    self.isDraggingRITXITKnob = NO;
+    self.tuneDragAccum   = 0.0;
+    self.afGainDragAccum = 0.0;
+    self.ritXITDragAccum = 0.0;
     [super mouseUp:event];
 }
 
@@ -274,20 +322,59 @@
     NSPoint cp = [self chassisPointFromViewPoint:viewPt];
     TX500ChassisControlTag tag = [self controlTagAtChassisPoint:cp];
 
-    if (tag == TX500ControlTuneKnob) {
-        CGFloat delta = event.scrollingDeltaY;
-        if (fabs(delta) > 0.05) {
-            [self.controller handleTuneKnobDelta:delta];
-        }
-    } else if (tag == TX500ControlAFGainKnob) {
-        CGFloat delta = event.scrollingDeltaY;
-        if (fabs(delta) > 0.05) {
-            [self.controller handleAFGainKnobDelta:delta];
+    if (tag == TX500ControlTuneKnob || tag == TX500ControlAFGainKnob || tag == TX500ControlRITXITKnob) {
+
+        if (event.hasPreciseScrollingDeltas) {
+            // Trackpad: accumulate sub-pixel deltas, fire one step per threshold
+            // This makes trackpad scroll feel just like the physical detented knob
+            CGFloat kTuneThresh   = 5.0;   // px of trackpad movement = one TUNE step
+            CGFloat kGainThresh   = 6.0;   // px = one AF/RIT step
+            CGFloat delta = event.scrollingDeltaY;
+
+            // Apply damping for momentum phase
+            BOOL isMomentum = (event.phase == NSEventPhaseNone && event.momentumPhase == NSEventPhaseChanged);
+            if (isMomentum) delta *= 0.25;
+
+            if (tag == TX500ControlTuneKnob) {
+                self.tuneScrollAccum += delta;
+                while (fabs(self.tuneScrollAccum) >= kTuneThresh) {
+                    CGFloat sign = (self.tuneScrollAccum > 0) ? 1.0 : -1.0;
+                    [self.controller handleTuneKnobDelta:sign * 1.0];
+                    self.tuneScrollAccum -= sign * kTuneThresh;
+                }
+            } else if (tag == TX500ControlAFGainKnob) {
+                self.afGainScrollAccum += delta;
+                while (fabs(self.afGainScrollAccum) >= kGainThresh) {
+                    CGFloat sign = (self.afGainScrollAccum > 0) ? 1.0 : -1.0;
+                    [self.controller handleAFGainKnobDelta:sign * 1.0];
+                    self.afGainScrollAccum -= sign * kGainThresh;
+                }
+            } else {
+                self.ritXITScrollAccum += delta;
+                while (fabs(self.ritXITScrollAccum) >= kGainThresh) {
+                    CGFloat sign = (self.ritXITScrollAccum > 0) ? 1.0 : -1.0;
+                    [self.controller handleRITXITKnobDelta:sign * 1.0];
+                    self.ritXITScrollAccum -= sign * kGainThresh;
+                }
+            }
+        } else {
+            // Classic mouse scroll wheel: each click = one step, direction = delta sign
+            CGFloat delta = event.scrollingDeltaY;
+            if (fabs(delta) >= 0.5) {
+                CGFloat sign = (delta > 0) ? 1.0 : -1.0;
+                if (tag == TX500ControlTuneKnob)
+                    [self.controller handleTuneKnobDelta:sign * 1.0];
+                else if (tag == TX500ControlAFGainKnob)
+                    [self.controller handleAFGainKnobDelta:sign * 1.0];
+                else
+                    [self.controller handleRITXITKnobDelta:sign * 1.0];
+            }
         }
     } else {
         [super scrollWheel:event];
     }
 }
+
 
 - (void)drawRect:(NSRect)dirtyRect {
     [super drawRect:dirtyRect];
@@ -626,20 +713,17 @@
     self.statusFeedbackLabel.textColor = [NSColor colorWithCalibratedRed:0.35 green:0.85 blue:0.45 alpha:1.0];
     self.statusFeedbackLabel.alignment = NSTextAlignmentRight;
 
-    NSView *hudContainer = [NSView new];
-    hudContainer.translatesAutoresizingMaskIntoConstraints = NO;
-    [hudContainer addSubview:self.hudTelemetryLabel];
-    [hudContainer addSubview:self.statusFeedbackLabel];
+    [hudBox addSubview:self.hudTelemetryLabel];
+    [hudBox addSubview:self.statusFeedbackLabel];
 
     [NSLayoutConstraint activateConstraints:@[
-        [self.hudTelemetryLabel.leadingAnchor constraintEqualToAnchor:hudContainer.leadingAnchor constant:12],
-        [self.hudTelemetryLabel.centerYAnchor constraintEqualToAnchor:hudContainer.centerYAnchor],
-        [self.statusFeedbackLabel.trailingAnchor constraintEqualToAnchor:hudContainer.trailingAnchor constant:-12],
-        [self.statusFeedbackLabel.centerYAnchor constraintEqualToAnchor:hudContainer.centerYAnchor],
+        [self.hudTelemetryLabel.leadingAnchor constraintEqualToAnchor:hudBox.leadingAnchor constant:14],
+        [self.hudTelemetryLabel.centerYAnchor constraintEqualToAnchor:hudBox.centerYAnchor],
+        [self.statusFeedbackLabel.trailingAnchor constraintEqualToAnchor:hudBox.trailingAnchor constant:-14],
+        [self.statusFeedbackLabel.centerYAnchor constraintEqualToAnchor:hudBox.centerYAnchor],
         [self.hudTelemetryLabel.trailingAnchor constraintLessThanOrEqualToAnchor:self.statusFeedbackLabel.leadingAnchor constant:-8]
     ]];
 
-    hudBox.contentView = hudContainer;
 
     [self.containerView addSubview:controlsBar];
     [self.containerView addSubview:self.displayView];
@@ -659,8 +743,8 @@
         [hudBox.topAnchor constraintEqualToAnchor:self.displayView.bottomAnchor constant:8],
         [hudBox.leadingAnchor constraintEqualToAnchor:self.containerView.leadingAnchor],
         [hudBox.trailingAnchor constraintEqualToAnchor:self.containerView.trailingAnchor],
-        [hudBox.heightAnchor constraintEqualToConstant:32],
-        [hudBox.bottomAnchor constraintEqualToAnchor:self.containerView.bottomAnchor constant:-4]
+        [hudBox.heightAnchor constraintEqualToConstant:36],
+        [hudBox.bottomAnchor constraintEqualToAnchor:self.containerView.bottomAnchor constant:-12]
     ]];
 }
 
@@ -674,7 +758,8 @@
                                                        pixelGrid:self.showPixelGrid
                                                    pressedButton:self.pressedTag
                                                        tuneAngle:self.tuneAngle
-                                                     afGainAngle:self.afGainAngle];
+                                                     afGainAngle:self.afGainAngle
+                                                     ritXITAngle:self.ritXITAngle];
     } else {
         image = [TX500ScreenRenderer renderScreenImageWithState:self.screenState
                                                           theme:self.currentTheme
@@ -787,25 +872,26 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
             [self handleMenuAction];
             break;
         case TX500ControlTuneKnob: {
-            CGFloat dy = pt.y - 120.0;
-            CGFloat dx = pt.x - 725.0;
-            if (dy > 0 || dx > 0) {
-                [self handleTuneKnobDelta:2.0];
-            } else {
-                [self handleTuneKnobDelta:-2.0];
-            }
+            // Single click on knob edge = one step
+            CGFloat dy = pt.y - 168.0;
+            CGFloat dx = pt.x - 685.0;
+            [self handleTuneKnobDelta:(dy > 0 || dx > 0) ? 1.0 : -1.0];
             break;
         }
         case TX500ControlAFGainKnob: {
-            CGFloat dy = pt.y - 320.0;
-            CGFloat dx = pt.x - 725.0;
-            if (dy > 0 || dx > 0) {
-                [self handleAFGainKnobDelta:2.0];
-            } else {
-                [self handleAFGainKnobDelta:-2.0];
-            }
+            CGFloat dy = pt.y - 315.0;
+            CGFloat dx = pt.x - 658.0;
+            [self handleAFGainKnobDelta:(dy > 0 || dx > 0) ? 1.0 : -1.0];
             break;
         }
+        case TX500ControlRITXITKnob: {
+            CGFloat dy = pt.y - 315.0;
+            CGFloat dx = pt.x - 712.0;
+            [self handleRITXITKnobDelta:(dy > 0 || dx > 0) ? 1.0 : -1.0];
+            break;
+        }
+
+
         case TX500ControlTopKey1:
             [self handleTopKey1];
             break;
@@ -830,6 +916,57 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
         case TX500ControlBottomKey4:
             [self handleBottomKey4];
             break;
+
+        // Far-right panel round buttons
+        case TX500ControlRX: {
+            // Toggle RX/TX manually (software PTT)
+            BOOL nowTX = !self.screenState.isTransmitting;
+            self.screenState.isTransmitting = nowTX;
+            [self renderAndUpdateDisplay];
+            NSString *pttCmd = nowTX ? @"TX;": @"RX;";
+            [self showTemporaryFeedback:nowTX ? @"⚡ [R/X] → TRANSMIT" : @"⚡ [R/X] → RECEIVE"];
+            [self sendCATCommandAsync:pttCmd description:nowTX ? @"PTT On" : @"PTT Off"];
+            break;
+        }
+        case TX500ControlClear:
+            // Clear RIT/XIT offset
+            self.ritXITAngle = 0.0;
+            [self renderAndUpdateDisplay];
+            [self showTemporaryFeedback:@"⚡ [CLR] RIT/XIT Cleared"];
+            [self sendCATCommandAsync:@"RC;" description:@"Clear RIT/XIT"];
+            break;
+        case TX500ControlVM:
+            // VFO ↔ Memory toggle
+            [self showTemporaryFeedback:@"⚡ [V/M] VFO↔Memory toggle"];
+            [self sendCATCommandAsync:@"VR0;" description:@"VFO/Memory toggle"];
+            break;
+
+        case TX500ControlLock:
+            [self showTemporaryFeedback:@"⚡ [LOCK] VFO Lock (hold for lock)"];
+            [self sendCATCommandAsync:@"LK0;" description:@"VFO Lock"];
+            break;
+        case TX500ControlPlus: {
+            // Step up by 1 kHz
+            int64_t newF = (int64_t)self.screenState.frequencyHz + 1000LL;
+            if (newF > 54000000) newF = 54000000;
+            self.screenState.frequencyHz = (uint64_t)newF;
+            self.tuneAngle += 0.15;
+            [self renderAndUpdateDisplay];
+            [self showTemporaryFeedback:[NSString stringWithFormat:@"⚡ [+] +1 kHz → %.4f MHz", newF / 1000000.0]];
+            [self sendCATCommandAsync:[NSString stringWithFormat:@"FA%011llu;", (unsigned long long)newF] description:@"Step +1kHz"];
+            break;
+        }
+        case TX500ControlMinus: {
+            // Step down by 1 kHz
+            int64_t newF = (int64_t)self.screenState.frequencyHz - 1000LL;
+            if (newF < 500000) newF = 500000;
+            self.screenState.frequencyHz = (uint64_t)newF;
+            self.tuneAngle -= 0.15;
+            [self renderAndUpdateDisplay];
+            [self showTemporaryFeedback:[NSString stringWithFormat:@"⚡ [-] -1 kHz → %.4f MHz", newF / 1000000.0]];
+            [self sendCATCommandAsync:[NSString stringWithFormat:@"FA%011llu;", (unsigned long long)newF] description:@"Step -1kHz"];
+            break;
+        }
         default:
             break;
     }
@@ -896,39 +1033,52 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
 
 - (void)handleFilterCycle {
     NSInteger curr = self.screenState.filterNumber > 0 ? self.screenState.filterNumber : 1;
-    NSInteger next = (curr % 3) + 1;
+    NSInteger next = (curr % 4) + 1;  // Cycle 1→2→3→4→1
     self.screenState.filterNumber = next;
     self.screenState.filterName = [NSString stringWithFormat:@"FIL-%ld", (long)next];
 
     NSString *mode = self.screenState.operatingMode ?: @"USB";
-    if ([mode isEqualToString:@"CW"]) {
-        self.screenState.filterBandwidthString = (next == 1) ? @"0.50k" : ((next == 2) ? @"0.30k" : @"0.10k");
+    if ([mode isEqualToString:@"CW"] || [mode isEqualToString:@"CWR"]) {
+        if (next == 1) self.screenState.filterBandwidthString = @"0.50k";
+        else if (next == 2) self.screenState.filterBandwidthString = @"0.30k";
+        else if (next == 3) self.screenState.filterBandwidthString = @"0.10k";
+        else self.screenState.filterBandwidthString = @"0.05k";
     } else if ([mode isEqualToString:@"AM"]) {
-        self.screenState.filterBandwidthString = (next == 1) ? @"6.00k" : ((next == 2) ? @"4.00k" : @"3.00k");
+        if (next == 1) self.screenState.filterBandwidthString = @"6.00k";
+        else if (next == 2) self.screenState.filterBandwidthString = @"4.00k";
+        else if (next == 3) self.screenState.filterBandwidthString = @"3.00k";
+        else self.screenState.filterBandwidthString = @"2.00k";
     } else {
-        self.screenState.filterBandwidthString = (next == 1) ? @"3.10k" : ((next == 2) ? @"2.40k" : @"1.80k");
+        if (next == 1) self.screenState.filterBandwidthString = @"3.10k";
+        else if (next == 2) self.screenState.filterBandwidthString = @"2.40k";
+        else if (next == 3) self.screenState.filterBandwidthString = @"1.80k";
+        else self.screenState.filterBandwidthString = @"1.00k";
     }
 
     [self renderAndUpdateDisplay];
 
-    NSString *cmd = [NSString stringWithFormat:@"FL%ld;", (long)next];
-    [self showTemporaryFeedback:[NSString stringWithFormat:@"⚡ [FILTER] %@ (%@)", self.screenState.filterName, self.screenState.filterBandwidthString]];
-    [self sendCATCommandAsync:cmd description:[NSString stringWithFormat:@"Set Filter %ld", (long)next]];
+    // TX-500 CAT is 0-indexed: FIL1=FL0;, FIL2=FL1;, FIL3=FL2;, FIL4=FL3;
+    NSInteger flIndex = next - 1;
+    NSString *cmd = [NSString stringWithFormat:@"FL%ld;", (long)flIndex];
+    [self showTemporaryFeedback:[NSString stringWithFormat:@"⚡ [FILTER] %@ → %@ (%@)", self.screenState.filterName, cmd, self.screenState.filterBandwidthString]];
+    [self sendCATCommandAsync:cmd description:[NSString stringWithFormat:@"Set Filter %ld (FL%ld;)", (long)next, (long)flIndex]];
 }
 
 - (void)handlePowerCycle {
     double curr = self.screenState.rfPowerWatts;
     double nextWatts = 1.0;
-    if (curr < 2.0) nextWatts = 2.5;
+    if (curr < 1.5) nextWatts = 2.5;
     else if (curr < 4.0) nextWatts = 5.0;
-    else if (curr < 8.0) nextWatts = 10.0;
+    else if (curr < 7.0) nextWatts = 10.0;
     else nextWatts = 1.0;
 
     self.screenState.rfPowerWatts = nextWatts;
     [self renderAndUpdateDisplay];
 
-    NSString *cmd = [NSString stringWithFormat:@"PC%03d;", (int)nextWatts];
-    [self showTemporaryFeedback:[NSString stringWithFormat:@"⚡ [POWER] RF Output: %.1f W (PC%03d;)", nextWatts, (int)nextWatts]];
+    // TX-500 PC command: tenths-of-watt, 3 digits. e.g. 5W = PC050; 10W = PC100;
+    int tenths = (int)round(nextWatts * 10.0);
+    NSString *cmd = [NSString stringWithFormat:@"PC%03d;", tenths];
+    [self showTemporaryFeedback:[NSString stringWithFormat:@"⚡ [POWER] RF Output: %.1f W (%@)", nextWatts, cmd]];
     [self sendCATCommandAsync:cmd description:[NSString stringWithFormat:@"Set Power %.1fW", nextWatts]];
 }
 
@@ -949,18 +1099,41 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
 }
 
 - (void)handleTuneKnobDelta:(CGFloat)delta {
-    int64_t step = 500;
-    if (fabs(delta) > 5.0) step = 1000;
+    CGFloat absDelta = fabs(delta);
+
+    // Acceleration curve — speed of drag determines tuning step
+    // Gives real knob feel: slow turn = fine, fast spin = coarse
+    int64_t step;
+    CGFloat anglePerStep;
+    if (absDelta < 0.8) {
+        step = 100;       // Sub-pixel micro-drag: 100 Hz (fine tune)
+        anglePerStep = 0.04;
+    } else if (absDelta < 4.0) {
+        step = 500;       // Normal drag: 500 Hz (default)
+        anglePerStep = 0.10;
+    } else if (absDelta < 10.0) {
+        step = 2000;      // Fast: 2 kHz
+        anglePerStep = 0.18;
+    } else if (absDelta < 20.0) {
+        step = 5000;      // Very fast: 5 kHz
+        anglePerStep = 0.25;
+    } else {
+        step = 25000;     // Spin: 25 kHz
+        anglePerStep = 0.35;
+    }
 
     int64_t change = (delta > 0) ? step : -step;
     int64_t newFreq = (int64_t)self.screenState.frequencyHz + change;
-    if (newFreq < 500000) newFreq = 500000;
+    if (newFreq < 500000)   newFreq = 500000;
     if (newFreq > 54000000) newFreq = 54000000;
 
     self.screenState.frequencyHz = (uint64_t)newFreq;
-    self.tuneAngle += (delta > 0) ? 0.20 : -0.20;
-    if (self.tuneAngle > 2.0 * M_PI) self.tuneAngle -= 2.0 * M_PI;
-    if (self.tuneAngle < 0.0) self.tuneAngle += 2.0 * M_PI;
+
+    // Rotate knob proportionally to step (direction-correct)
+    self.tuneAngle += (delta > 0) ? anglePerStep : -anglePerStep;
+    // Keep angle in 0…2π for consistent rendering
+    while (self.tuneAngle >  M_PI)  self.tuneAngle -= 2.0 * M_PI;
+    while (self.tuneAngle < -M_PI)  self.tuneAngle += 2.0 * M_PI;
 
     [self renderAndUpdateDisplay];
 
@@ -970,21 +1143,47 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
 }
 
 - (void)handleAFGainKnobDelta:(CGFloat)delta {
-    NSInteger change = (delta > 0) ? 5 : -5;
+    CGFloat absDelta = fabs(delta);
+
+    // Acceleration: sub-pixel = 1 unit (fine detent), normal ≥0.5 = 5 (default), fast = 15
+    // delta=1.0 must give change=5 to match test contract
+    NSInteger change;
+    if (absDelta < 0.5) {
+        change = 1;   // Micro-drag: fine control (0 unit per sub-pixel)
+    } else if (absDelta < 7.0) {
+        change = 5;   // Normal drag: 5 units (matches test: delta=1.0 → +5)
+    } else {
+        change = 15;  // Fast spin: 15 units
+    }
+    if (delta < 0) change = -change;
+
     NSInteger newLevel = self.screenState.afGainLevel + change;
-    if (newLevel < 0) newLevel = 0;
+    if (newLevel < 0)   newLevel = 0;
     if (newLevel > 100) newLevel = 100;
 
     self.screenState.afGainLevel = newLevel;
-    self.afGainAngle += (delta > 0) ? 0.25 : -0.25;
-    if (self.afGainAngle > 2.0 * M_PI) self.afGainAngle -= 2.0 * M_PI;
-    if (self.afGainAngle < 0.0) self.afGainAngle += 2.0 * M_PI;
+
+    // Map AF level 0–100 → knob angle -3π/4 … +3π/4 (-135° to +135°)
+    // This makes knob position always match the actual volume
+    self.afGainAngle = ((newLevel / 100.0) * (1.5 * M_PI)) - (0.75 * M_PI);
 
     [self renderAndUpdateDisplay];
 
     NSString *cmd = [NSString stringWithFormat:@"AG0%03ld;", (long)newLevel];
     [self showTemporaryFeedback:[NSString stringWithFormat:@"⚡ [AF GAIN] Volume: %ld%%", (long)newLevel]];
     [self sendCATCommandAsync:cmd description:@"Set AF Gain"];
+}
+
+- (void)handleRITXITKnobDelta:(CGFloat)delta {
+    // RIT/XIT knob: visually rotate and could offset receive frequency.
+    // For now we rotate the knob angle display and log the action.
+    // delta > 0 = clockwise, delta < 0 = counter-clockwise
+    CGFloat angleStep = 0.25; // radians per step
+    self.ritXITAngle += (delta > 0) ? angleStep : -angleStep;
+    while (self.ritXITAngle >  M_PI) self.ritXITAngle -= 2.0 * M_PI;
+    while (self.ritXITAngle < -M_PI) self.ritXITAngle += 2.0 * M_PI;
+    [self renderAndUpdateDisplay];
+    [self showTemporaryFeedback:[NSString stringWithFormat:@"⚡ [RIT/XIT] %.0f°", self.ritXITAngle * 180.0 / M_PI]];
 }
 
 - (void)handleTopKey1 {
@@ -1455,6 +1654,21 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
             return nil;
         };
 
+        // Query Model Identification (ID;)
+        NSString *idResp = queryRadio(@"ID;");
+        NSString *detectedModel = nil;
+        if (idResp) {
+            if ([idResp containsString:@"ID019"] || [idResp containsString:@"ID500"]) {
+                detectedModel = @"DISCOVERY";
+            } else if ([idResp containsString:@"MP"] || [idResp containsString:@"020"]) {
+                detectedModel = @"TX-500MP";
+            } else if ([idResp containsString:@"ALTAI"]) {
+                detectedModel = @"PRO ALTAI";
+            } else if ([idResp containsString:@"PRO"]) {
+                detectedModel = @"TX-500PRO";
+            }
+        }
+
         // Query Frequency (FA;)
         NSString *fa = queryRadio(@"FA;");
         uint64_t freqA = 0;
@@ -1478,14 +1692,14 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
             unichar mChar = [md characterAtIndex:2];
             switch (mChar) {
                 case '1': modeStr = @"LSB"; break;
-                case '2': modeStr = @"DIG"; break; // Lab599 maps DIG to USB code 2 in TS-2000 CAT; display DIG
-                case '3': modeStr = @"CW"; break;
-                case '4': modeStr = @"FM"; break;
-                case '5': modeStr = @"AM"; break;
-                case '6': modeStr = @"DIG"; break;
+                case '2': modeStr = @"USB"; break;  // Kenwood MD2 = USB
+                case '3': modeStr = @"CW";  break;
+                case '4': modeStr = @"FM";  break;
+                case '5': modeStr = @"AM";  break;
+                case '6': modeStr = @"DIG"; break;  // TX-500 DIG/FSK = MD6
                 case '7': modeStr = @"CWR"; break;
-                case '9': modeStr = @"DIG"; break;
-                default: modeStr = @"DIG"; break;
+                case '9': modeStr = @"FSK"; break;
+                default:  modeStr = @"USB"; break;
             }
         }
 
@@ -1520,13 +1734,28 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
             voltage = [vStr doubleValue];
         }
 
+        // Query AF Gain (AG0;) → AG0nnn; where nnn = 000–100
+        NSString *ag = queryRadio(@"AG0;");
+        NSInteger afGainValue = -1;  // -1 means "no valid response"
+        if (ag && [ag hasPrefix:@"AG"] && ag.length >= 6) {
+            NSString *clean = [ag stringByReplacingOccurrencesOfString:@";" withString:@""];
+            if (clean.length >= 5) {
+                NSString *numStr = [clean substringWithRange:NSMakeRange(3, clean.length - 3)];
+                NSInteger parsed = [numStr integerValue];
+                if (parsed >= 0 && parsed <= 100) {
+                    afGainValue = parsed;
+                }
+            }
+        }
+
         // Query Filter Preset (FL;)
+        // TX-500 returns FL21; — char at index 2 is the filter number (1-4), rest is bandwidth indicator
         NSString *fl = queryRadio(@"FL;");
         NSInteger filterNum = 1;
         NSInteger filterBw = 0;
         if (fl && [fl hasPrefix:@"FL"] && fl.length >= 3) {
-            NSString *clean = [fl stringByReplacingOccurrencesOfString:@";" withString:@""];
-            int n = [[clean substringFromIndex:2] intValue];
+            unichar fc = [fl characterAtIndex:2];
+            int n = (int)(fc - '0');
             if (n >= 1 && n <= 4) {
                 filterNum = n;
             }
@@ -1591,6 +1820,7 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
 
         // Update state on Main Queue
         dispatch_async(dispatch_get_main_queue(), ^{
+            if (detectedModel.length > 0) self.screenState.hardwareModelName = detectedModel;
             if (freqA > 0) self.screenState.frequencyHz = freqA;
             if (freqB > 0) self.screenState.vfoBFrequencyHz = freqB;
             if (modeStr.length > 0) self.screenState.operatingMode = modeStr;
@@ -1638,6 +1868,16 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
             self.screenState.noiseBlanker = nbOn;
             self.screenState.notchFilter = ntOn;
             self.screenState.clockString = timeStr;
+
+            // Apply AF Gain from radio (only update if radio gave valid response)
+            if (afGainValue >= 0) {
+                self.screenState.afGainLevel = afGainValue;
+                // Map 0–100 → knob arc: full CCW (-135°) to full CW (+135°), in radians
+                // 0 = -3π/4, 100 = +3π/4
+                CGFloat targetAngle = ((afGainValue / 100.0) * (1.5 * M_PI)) - (0.75 * M_PI);
+                self.afGainAngle = targetAngle;
+            }
+
             if (!self.demoModeActive) {
                 self.screenState.spectrumAmplitudes = liveSpec;
             }

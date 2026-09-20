@@ -88,15 +88,27 @@ static NSStackView *Stack(NSArray<NSView *> *views, BOOL vertical) {
     return s;
 }
 
-static NSTextField *CreateBadge(NSString *text, NSColor *bgColor, NSColor *textColor) {
-    NSTextField *label = [NSTextField labelWithString:text];
-    label.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightSemibold];
-    label.textColor = textColor ?: NSColor.labelColor;
-    label.wantsLayer = YES;
-    label.layer.backgroundColor = (bgColor ?: [NSColor colorWithCalibratedWhite:0.5 alpha:0.15]).CGColor;
-    label.layer.cornerRadius = 4.0;
+static NSView *CreateBadgePill(NSTextField *label, NSColor *bgColor) {
+    NSView *pill = [NSView new];
+    pill.wantsLayer = YES;
+    pill.layer.backgroundColor = (bgColor ?: [NSColor colorWithCalibratedWhite:0.5 alpha:0.15]).CGColor;
+    pill.layer.cornerRadius = 4.0;
+    pill.translatesAutoresizingMaskIntoConstraints = NO;
+
+    label.translatesAutoresizingMaskIntoConstraints = NO;
     label.alignment = NSTextAlignmentCenter;
-    return label;
+    label.drawsBackground = NO;
+    label.bezeled = NO;
+    label.editable = NO;
+    label.selectable = NO;
+    [pill addSubview:label];
+    [NSLayoutConstraint activateConstraints:@[
+        [label.leadingAnchor constraintEqualToAnchor:pill.leadingAnchor constant:2],
+        [label.trailingAnchor constraintEqualToAnchor:pill.trailingAnchor constant:-2],
+        [label.centerYAnchor constraintEqualToAnchor:pill.centerYAnchor],
+        [pill.heightAnchor constraintEqualToConstant:24]
+    ]];
+    return pill;
 }
 
 static NSBox *CreateCardWithView(NSView *innerView) {
@@ -136,6 +148,17 @@ static NSString *ToolsModeNameFromCode(NSInteger code) {
         case 7: return @"CWR";
         default: return @"USB";
     }
+}
+
+static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
+    if (!cmd.length) return NO;
+    NSString *c = [[cmd stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]]
+                   stringByReplacingOccurrencesOfString:@";" withString:@""];
+    if (c.length > 2) {
+        if ([c hasPrefix:@"SM"]) return NO;
+        return YES;
+    }
+    return NO;
 }
 
 - (NSButton *)button:(NSString *)title action:(SEL)action tag:(NSInteger)tag {
@@ -194,23 +217,32 @@ static NSString *ToolsModeNameFromCode(NSInteger code) {
         [freqBoxInner.bottomAnchor constraintEqualToAnchor:freqBanner.bottomAnchor]
     ]];
 
-    // Telemetry Badges (2 rows of 3 badges)
-    self.catModeBadge = CreateBadge(@"MODE: —", nil, nil);
-    self.catPowerBadge = CreateBadge(@"PWR: —", nil, nil);
-    self.catFilterBadge = CreateBadge(@"FIL: —", nil, nil);
-    self.catPreampBadge = CreateBadge(@"PRE: —", nil, nil);
-    self.catVoltageBadge = CreateBadge(@"VOLT: —", nil, nil);
-    self.catSMeterBadge = CreateBadge(@"S-MTR: —", nil, nil);
+    // Telemetry Badges (2 rows of 3 badges, vertically centered inside pill containers)
+    self.catModeBadge = [NSTextField labelWithString:@"MODE: —"];
+    self.catModeBadge.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightSemibold];
+    self.catPowerBadge = [NSTextField labelWithString:@"PWR: —"];
+    self.catPowerBadge.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightSemibold];
+    self.catFilterBadge = [NSTextField labelWithString:@"FIL: —"];
+    self.catFilterBadge.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightSemibold];
+    self.catPreampBadge = [NSTextField labelWithString:@"PRE: —"];
+    self.catPreampBadge.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightSemibold];
+    self.catVoltageBadge = [NSTextField labelWithString:@"VOLT: —"];
+    self.catVoltageBadge.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightSemibold];
+    self.catSMeterBadge = [NSTextField labelWithString:@"S-MTR: —"];
+    self.catSMeterBadge.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightSemibold];
 
-    for (NSTextField *b in @[self.catModeBadge, self.catPowerBadge, self.catFilterBadge, self.catPreampBadge, self.catVoltageBadge, self.catSMeterBadge]) {
-        [b.heightAnchor constraintEqualToConstant:22].active = YES;
-    }
+    NSView *pMode = CreateBadgePill(self.catModeBadge, nil);
+    NSView *pPower = CreateBadgePill(self.catPowerBadge, nil);
+    NSView *pFilter = CreateBadgePill(self.catFilterBadge, nil);
+    NSView *pPreamp = CreateBadgePill(self.catPreampBadge, nil);
+    NSView *pVoltage = CreateBadgePill(self.catVoltageBadge, nil);
+    NSView *pSMeter = CreateBadgePill(self.catSMeterBadge, nil);
 
-    NSStackView *badgeRow1 = Stack(@[self.catModeBadge, self.catPowerBadge, self.catFilterBadge], NO);
+    NSStackView *badgeRow1 = Stack(@[pMode, pPower, pFilter], NO);
     badgeRow1.distribution = NSStackViewDistributionFillEqually;
     badgeRow1.spacing = 6;
 
-    NSStackView *badgeRow2 = Stack(@[self.catPreampBadge, self.catVoltageBadge, self.catSMeterBadge], NO);
+    NSStackView *badgeRow2 = Stack(@[pPreamp, pVoltage, pSMeter], NO);
     badgeRow2.distribution = NSStackViewDistributionFillEqually;
     badgeRow2.spacing = 6;
 
@@ -313,7 +345,7 @@ static NSString *ToolsModeNameFromCode(NSInteger code) {
     self.catAttenuatorToggle.controlSize = NSControlSizeSmall;
     self.catAttenuatorToggle.font = [NSFont systemFontOfSize:11];
 
-    self.catFilterSegment = [NSSegmentedControl segmentedControlWithLabels:@[@"FIL 1", @"FIL 2", @"FIL 3"]
+    self.catFilterSegment = [NSSegmentedControl segmentedControlWithLabels:@[@"FIL 1", @"FIL 2", @"FIL 3", @"FIL 4"]
                                                               trackingMode:NSSegmentSwitchTrackingSelectOne
                                                                     target:self
                                                                     action:@selector(filterChangedAction:)];
@@ -852,7 +884,11 @@ static NSString *ToolsModeNameFromCode(NSInteger code) {
         self.catFreqInputField.stringValue = [NSString stringWithFormat:@"%llu", state.frequencyHz];
     }
     self.catModeBadge.stringValue = [NSString stringWithFormat:@"MODE: %@", state.operatingMode ?: @"—"];
-    self.catPowerBadge.stringValue = [NSString stringWithFormat:@"PWR: %.0f W", state.rfPowerWatts];
+    if (fmod(state.rfPowerWatts, 1.0) == 0.0) {
+        self.catPowerBadge.stringValue = [NSString stringWithFormat:@"PWR: %.0f W", state.rfPowerWatts];
+    } else {
+        self.catPowerBadge.stringValue = [NSString stringWithFormat:@"PWR: %.1f W", state.rfPowerWatts];
+    }
     self.catFilterBadge.stringValue = [NSString stringWithFormat:@"FIL: FL%ld", (long)state.filterNumber];
     self.catPreampBadge.stringValue = [NSString stringWithFormat:@"PRE: %@", state.preampOn ? @"ON" : @"OFF"];
     self.catVoltageBadge.stringValue = [NSString stringWithFormat:@"VOLT: %.1f V", state.voltage];
@@ -867,7 +903,7 @@ static NSString *ToolsModeNameFromCode(NSInteger code) {
         NSInteger idx = [self.catPowerPopup indexOfItemWithTitle:pTitle];
         if (idx >= 0) [self.catPowerPopup selectItemAtIndex:idx];
     }
-    if (state.filterNumber >= 1 && state.filterNumber <= 3) {
+    if (state.filterNumber >= 1 && state.filterNumber <= 4) {
         self.catFilterSegment.selectedSegment = state.filterNumber - 1;
     }
     self.catPreampToggle.state = state.preampOn ? NSControlStateValueOn : NSControlStateValueOff;
@@ -889,11 +925,22 @@ static NSString *ToolsModeNameFromCode(NSInteger code) {
         [self.catModePopup selectItemWithTitle:mName];
     } else if ([cmd hasPrefix:@"PC"] && reply && [reply hasPrefix:@"PC"] && reply.length >= 5) {
         int p = [[reply substringWithRange:NSMakeRange(2, 3)] intValue];
-        self.catPowerBadge.stringValue = [NSString stringWithFormat:@"PWR: %d W", p];
+        double watts = (p > 10) ? (p / 10.0) : (double)p;
+        if (fmod(watts, 1.0) == 0.0) {
+            self.catPowerBadge.stringValue = [NSString stringWithFormat:@"PWR: %.0f W", watts];
+        } else {
+            self.catPowerBadge.stringValue = [NSString stringWithFormat:@"PWR: %.1f W", watts];
+        }
+        NSString *pTitle = [NSString stringWithFormat:@"%ld W", (long)round(watts)];
+        NSInteger idx = [self.catPowerPopup indexOfItemWithTitle:pTitle];
+        if (idx >= 0) [self.catPowerPopup selectItemAtIndex:idx];
     } else if ([cmd hasPrefix:@"FL"] && reply && [reply hasPrefix:@"FL"] && reply.length >= 3) {
-        int fl = [[reply substringFromIndex:2] intValue];
-        self.catFilterBadge.stringValue = [NSString stringWithFormat:@"FIL: FL%d", fl];
-        if (fl >= 1 && fl <= 3) self.catFilterSegment.selectedSegment = fl - 1;
+        unichar c = [reply characterAtIndex:2];
+        int fl = (c >= '1' && c <= '4') ? (c - '0') : [[reply substringFromIndex:2] intValue];
+        if (fl >= 1 && fl <= 4) {
+            self.catFilterBadge.stringValue = [NSString stringWithFormat:@"FIL: FL%d", fl];
+            self.catFilterSegment.selectedSegment = fl - 1;
+        }
     } else if ([cmd hasPrefix:@"PA"] && reply && [reply hasPrefix:@"PA"] && reply.length >= 3) {
         BOOL on = ([reply characterAtIndex:2] == '1');
         self.catPreampBadge.stringValue = [NSString stringWithFormat:@"PRE: %@", on ? @"ON" : @"OFF"];
@@ -980,6 +1027,9 @@ static NSString *ToolsModeNameFromCode(NSInteger code) {
                 [self appendTerminalRX:reply latency:rtt error:NO];
                 if (self.statusChanged) self.statusChanged([NSString stringWithFormat:@"Reply: %@ (%.0f ms)", reply, rtt], 1);
                 [self updateStateFromCommand:cmd reply:reply];
+            } else if (err && err.code == Lab599SerialTimeout && ToolsIsCATSetCommand(cmd)) {
+                [self appendTerminalRX:@"OK (Command Sent)" latency:rtt error:NO];
+                if (self.statusChanged) self.statusChanged([NSString stringWithFormat:@"Command sent successfully: %@", cmd], 1);
             } else {
                 [self appendTerminalRX:err ? err.localizedDescription : @"No reply / Timeout" latency:rtt error:YES];
                 if (self.statusChanged) self.statusChanged([NSString stringWithFormat:@"Error sending %@: %@", cmd, err.localizedDescription ?: @"Timeout"], 0);
@@ -1026,11 +1076,11 @@ static NSString *ToolsModeNameFromCode(NSInteger code) {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSError *err = nil;
         double rtt = 0;
-        NSString *reply = TXExecuteCATCommand(port, cmd, 0.35, &rtt, &err);
+        NSString *reply = TXExecuteCATCommand(port, cmd, 0.1, &rtt, &err);
         dispatch_async(dispatch_get_main_queue(), ^{
             [self end];
-            if (!err) {
-                [self appendTerminalRX:reply ?: cmd latency:rtt error:NO];
+            if (!err || err.code == Lab599SerialTimeout) {
+                [self appendTerminalRX:reply ?: @"OK" latency:rtt error:NO];
                 self.catFreqDisplay.stringValue = ToolsFormatFreq(freq);
                 if (self.statusChanged) self.statusChanged([NSString stringWithFormat:@"Frequency tuned to %@", ToolsFormatFreq(freq)], 1);
             } else {
@@ -1057,11 +1107,11 @@ static NSString *ToolsModeNameFromCode(NSInteger code) {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSError *err = nil;
         double rtt = 0;
-        NSString *reply = TXExecuteCATCommand(port, cmd, 0.35, &rtt, &err);
+        NSString *reply = TXExecuteCATCommand(port, cmd, 0.1, &rtt, &err);
         dispatch_async(dispatch_get_main_queue(), ^{
             [self end];
-            if (!err) {
-                [self appendTerminalRX:reply ?: cmd latency:rtt error:NO];
+            if (!err || err.code == Lab599SerialTimeout) {
+                [self appendTerminalRX:reply ?: @"OK" latency:rtt error:NO];
                 self.catModeBadge.stringValue = [NSString stringWithFormat:@"MODE: %@", modeName];
                 if (self.statusChanged) self.statusChanged([NSString stringWithFormat:@"Mode set to %@", modeName], 1);
             } else {
@@ -1082,18 +1132,23 @@ static NSString *ToolsModeNameFromCode(NSInteger code) {
     if (watts <= 0) watts = 10.0;
 
     [self begin];
-    NSString *cmd = [NSString stringWithFormat:@"PC%03d;", (int)round(watts)];
+    int tenths = (int)round(watts * 10.0);
+    NSString *cmd = [NSString stringWithFormat:@"PC%03d;", tenths];
     [self appendTerminalTX:cmd];
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSError *err = nil;
         double rtt = 0;
-        NSString *reply = TXExecuteCATCommand(port, cmd, 0.35, &rtt, &err);
+        NSString *reply = TXExecuteCATCommand(port, cmd, 0.1, &rtt, &err);
         dispatch_async(dispatch_get_main_queue(), ^{
             [self end];
-            if (!err) {
-                [self appendTerminalRX:reply ?: cmd latency:rtt error:NO];
-                self.catPowerBadge.stringValue = [NSString stringWithFormat:@"PWR: %.0f W", watts];
+            if (!err || err.code == Lab599SerialTimeout) {
+                [self appendTerminalRX:reply ?: @"OK" latency:rtt error:NO];
+                if (fmod(watts, 1.0) == 0.0) {
+                    self.catPowerBadge.stringValue = [NSString stringWithFormat:@"PWR: %.0f W", watts];
+                } else {
+                    self.catPowerBadge.stringValue = [NSString stringWithFormat:@"PWR: %.1f W", watts];
+                }
                 if (self.statusChanged) self.statusChanged([NSString stringWithFormat:@"RF Power set to %.0f W", watts], 1);
             } else {
                 [self appendTerminalRX:err.localizedDescription ?: @"Error" latency:rtt error:YES];
@@ -1115,12 +1170,13 @@ static NSString *ToolsModeNameFromCode(NSInteger code) {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSError *err = nil;
         double rtt = 0;
-        NSString *reply = TXExecuteCATCommand(port, cmd, 0.35, &rtt, &err);
+        NSString *reply = TXExecuteCATCommand(port, cmd, 0.1, &rtt, &err);
         dispatch_async(dispatch_get_main_queue(), ^{
             [self end];
-            if (!err) {
-                [self appendTerminalRX:reply ?: cmd latency:rtt error:NO];
+            if (!err || err.code == Lab599SerialTimeout) {
+                [self appendTerminalRX:reply ?: @"OK" latency:rtt error:NO];
                 self.catPreampBadge.stringValue = [NSString stringWithFormat:@"PRE: %@", on ? @"ON" : @"OFF"];
+                if (self.statusChanged) self.statusChanged([NSString stringWithFormat:@"Preamp %@", on ? @"enabled" : @"disabled"], 1);
             } else {
                 [self appendTerminalRX:err.localizedDescription ?: @"Error" latency:rtt error:YES];
             }
@@ -1141,11 +1197,12 @@ static NSString *ToolsModeNameFromCode(NSInteger code) {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSError *err = nil;
         double rtt = 0;
-        NSString *reply = TXExecuteCATCommand(port, cmd, 0.35, &rtt, &err);
+        NSString *reply = TXExecuteCATCommand(port, cmd, 0.1, &rtt, &err);
         dispatch_async(dispatch_get_main_queue(), ^{
             [self end];
-            if (!err) {
-                [self appendTerminalRX:reply ?: cmd latency:rtt error:NO];
+            if (!err || err.code == Lab599SerialTimeout) {
+                [self appendTerminalRX:reply ?: @"OK" latency:rtt error:NO];
+                if (self.statusChanged) self.statusChanged([NSString stringWithFormat:@"Attenuator %@", on ? @"enabled" : @"disabled"], 1);
             } else {
                 [self appendTerminalRX:err.localizedDescription ?: @"Error" latency:rtt error:YES];
             }
@@ -1158,20 +1215,23 @@ static NSString *ToolsModeNameFromCode(NSInteger code) {
     NSString *port = self.selectedPort ? self.selectedPort() : nil;
     if (!port) return;
 
-    NSInteger filterNum = sender.selectedSegment + 1;
+    NSInteger filterIndex = sender.selectedSegment; // 0, 1, 2, 3
+    NSInteger filterNum = filterIndex + 1;         // 1, 2, 3, 4
     [self begin];
-    NSString *cmd = [NSString stringWithFormat:@"FL%ld;", (long)filterNum];
+    // TX-500 filter parameter is 0-indexed: FL0; = Filter 1, FL1; = Filter 2, etc.
+    NSString *cmd = [NSString stringWithFormat:@"FL%ld;", (long)filterIndex];
     [self appendTerminalTX:cmd];
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSError *err = nil;
         double rtt = 0;
-        NSString *reply = TXExecuteCATCommand(port, cmd, 0.35, &rtt, &err);
+        NSString *reply = TXExecuteCATCommand(port, cmd, 0.1, &rtt, &err);
         dispatch_async(dispatch_get_main_queue(), ^{
             [self end];
-            if (!err) {
-                [self appendTerminalRX:reply ?: cmd latency:rtt error:NO];
+            if (!err || err.code == Lab599SerialTimeout) {
+                [self appendTerminalRX:reply ?: @"OK" latency:rtt error:NO];
                 self.catFilterBadge.stringValue = [NSString stringWithFormat:@"FIL: FL%ld", (long)filterNum];
+                if (self.statusChanged) self.statusChanged([NSString stringWithFormat:@"Filter set to FL%ld", (long)filterNum], 1);
             } else {
                 [self appendTerminalRX:err.localizedDescription ?: @"Error" latency:rtt error:YES];
             }

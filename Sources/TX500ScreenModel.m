@@ -4,6 +4,7 @@
 
 - (instancetype)init {
     if ((self = [super init])) {
+        _hardwareModelName = @"DISCOVERY";
         // Match exact real Lab599 TX-500 photo parameters
         _frequencyHz = 24889300;       // 24.889.300 MHz (12m band FT8/DIG)
         _vfoBFrequencyHz = 10100000;   // 10.100.000 MHz (30m band CW)
@@ -72,6 +73,7 @@
 
 - (id)copyWithZone:(nullable NSZone *)zone {
     TX500ScreenState *copy = [[[self class] allocWithZone:zone] init];
+    copy.hardwareModelName = [self.hardwareModelName copy];
     copy.frequencyHz = self.frequencyHz;
     copy.vfoBFrequencyHz = self.vfoBFrequencyHz;
     copy.activeVFO = self.activeVFO;

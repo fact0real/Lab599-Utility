@@ -22,6 +22,7 @@
 
 - (void)fetchCatalogFromWeb;
 - (void)refreshLocalAvailability;
+- (void)focusSearchField;
 - (NSArray<Lab599DocItem *> *)builtInDocumentationCatalog;
 - (NSArray<Lab599DocItem *> *)parseItemsFromHTML:(NSString *)html;
 

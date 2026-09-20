@@ -39,6 +39,84 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     return nil;
 }
 
+@interface TX500SidebarButton : NSButton
+@property(nonatomic, assign) NSInteger operationTag;
+@property(nonatomic, assign) BOOL isSelected;
+@property(nonatomic, copy) NSString *rawTitle;
+@property(nonatomic, copy) NSString *iconName;
+- (instancetype)initWithTitle:(NSString *)title iconName:(NSString *)iconName tag:(NSInteger)tag target:(id)target action:(SEL)action;
+- (void)updateStyle;
+@end
+
+@implementation TX500SidebarButton
+
+- (instancetype)initWithTitle:(NSString *)title iconName:(NSString *)iconName tag:(NSInteger)tag target:(id)target action:(SEL)action {
+    self = [super initWithFrame:NSZeroRect];
+    if (self) {
+        _rawTitle = [title copy];
+        _iconName = [iconName copy];
+        _operationTag = tag;
+        self.target = target;
+        self.action = action;
+        self.bezelStyle = NSBezelStyleRegularSquare;
+        self.bordered = NO;
+        self.imagePosition = NSImageLeft;
+        self.alignment = NSTextAlignmentLeft;
+        self.wantsLayer = YES;
+        self.layer.cornerRadius = 6.0;
+        self.translatesAutoresizingMaskIntoConstraints = NO;
+        [self updateStyle];
+    }
+    return self;
+}
+
+- (void)setIsSelected:(BOOL)isSelected {
+    _isSelected = isSelected;
+    [self updateStyle];
+}
+
+- (void)updateStyle {
+    NSImage *img = [NSImage imageWithSystemSymbolName:_iconName accessibilityDescription:nil];
+    if (!img) {
+        if ([_iconName isEqualToString:@"gauge.with.needle"]) img = [NSImage imageWithSystemSymbolName:@"gauge" accessibilityDescription:nil];
+        else if ([_iconName isEqualToString:@"display"]) img = [NSImage imageWithSystemSymbolName:@"tv" accessibilityDescription:nil];
+        else if ([_iconName isEqualToString:@"bubble.left.and.bubble.right"]) img = [NSImage imageWithSystemSymbolName:@"text.bubble" accessibilityDescription:nil];
+    }
+    self.image = img;
+    
+    if (_isSelected) {
+        self.layer.backgroundColor = [[NSColor controlAccentColor] colorWithAlphaComponent:0.18].CGColor;
+        self.layer.borderColor = [[NSColor controlAccentColor] colorWithAlphaComponent:0.40].CGColor;
+        self.layer.borderWidth = 1.0;
+        self.contentTintColor = [NSColor controlAccentColor];
+        
+        NSMutableAttributedString *mas = [[NSMutableAttributedString alloc] initWithString:[NSString stringWithFormat:@"  %@", _rawTitle]];
+        [mas addAttributes:@{
+            NSFontAttributeName: [NSFont systemFontOfSize:13.0 weight:NSFontWeightSemibold],
+            NSForegroundColorAttributeName: [NSColor labelColor]
+        } range:NSMakeRange(0, mas.length)];
+        self.attributedTitle = mas;
+    } else {
+        self.layer.backgroundColor = [NSColor clearColor].CGColor;
+        self.layer.borderColor = [NSColor clearColor].CGColor;
+        self.layer.borderWidth = 0.0;
+        self.contentTintColor = [NSColor secondaryLabelColor];
+        
+        NSMutableAttributedString *mas = [[NSMutableAttributedString alloc] initWithString:[NSString stringWithFormat:@"  %@", _rawTitle]];
+        [mas addAttributes:@{
+            NSFontAttributeName: [NSFont systemFontOfSize:13.0 weight:NSFontWeightRegular],
+            NSForegroundColorAttributeName: [NSColor secondaryLabelColor]
+        } range:NSMakeRange(0, mas.length)];
+        self.attributedTitle = mas;
+    }
+}
+
+- (void)setEnabled:(BOOL)enabled {
+    [super setEnabled:enabled];
+    self.alphaValue = enabled ? 1.0 : 0.45;
+}
+@end
+
 @interface AppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate>
 @property(nonatomic, strong) NSWindow *window;
 @property(nonatomic, strong) NSPopUpButton *portMenu;
@@ -69,6 +147,25 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
 @property(nonatomic, strong) Lab599DocsController *docsController;
 @property(nonatomic, strong) Lab599FeedbackController *feedbackController;
 @property(nonatomic, strong) TX500ScreenCaptureController *screenController;
+
+// Modern Sidebar & Card UI Properties
+@property(nonatomic, strong) NSMutableArray<TX500SidebarButton *> *sidebarItems;
+@property(nonatomic, strong) NSVisualEffectView *sidebarView;
+@property(nonatomic, strong) NSView *mainContentView;
+@property(nonatomic, strong) NSBox *connectionBar;
+@property(nonatomic, strong) NSView *statusLEDView;
+@property(nonatomic, strong) NSTextField *connectionStatusLabel;
+@property(nonatomic, strong) NSTextField *hardwareBadgeLabel;
+@property(nonatomic, strong) NSBox *statusPillBox;
+@property(nonatomic, strong) NSBox *portCapsuleBox;
+@property(nonatomic, strong) NSBox *logCardBox;
+@property(nonatomic, strong) NSLayoutConstraint *logCardHeightConstraint;
+@property(nonatomic, strong) NSButton *consoleToggleButton;
+@property(nonatomic, assign) BOOL logCollapsed;
+@property(nonatomic, strong) NSTextField *sectionTitleLabel;
+@property(nonatomic, strong) NSButton *outdoorModeButton;
+@property(nonatomic, assign) BOOL outdoorModeActive;
+@property(nonatomic, strong) NSStackView *actionRow;
 
 // Online Firmware Sheet components
 @property(nonatomic, strong) NSWindow *catalogSheet;
@@ -125,12 +222,12 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     (void)notification;
-    self.window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 980, 980)
+    self.window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 1160, 860)
         styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable)
         backing:NSBackingStoreBuffered defer:NO];
     self.window.title = @"Lab599 Utility";
     self.window.delegate = self;
-    self.window.minSize = NSMakeSize(960, 950);
+    self.window.minSize = NSMakeSize(1040, 780);
     [self.window center];
 
     // Menus
@@ -152,6 +249,9 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     NSMenuItem *fileItem = [NSMenuItem new];
     [menu addItem:fileItem];
     NSMenu *fileMenu = [[NSMenu alloc] initWithTitle:@"File"];
+    NSMenuItem *refreshItem = [fileMenu addItemWithTitle:@"Refresh Serial Ports" action:@selector(refreshPorts:) keyEquivalent:@"r"];
+    refreshItem.target = self;
+    [fileMenu addItem:[NSMenuItem separatorItem]];
     [fileMenu addItemWithTitle:@"Choose Firmware File..." action:@selector(chooseFirmware:) keyEquivalent:@"o"];
     [fileMenu addItemWithTitle:@"Download from Lab599..." action:@selector(openCatalogSheet:) keyEquivalent:@"d"];
     [fileMenu addItemWithTitle:@"Save Diagnostic Log..." action:@selector(saveLog:) keyEquivalent:@"s"];
@@ -166,11 +266,22 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     [menu addItem:editItem];
     NSMenu *editMenu = [[NSMenu alloc] initWithTitle:@"Edit"];
     [editMenu addItemWithTitle:@"Cut" action:@selector(cut:) keyEquivalent:@"x"];
-    [editMenu addItemWithTitle:@"Paste" action:@selector(paste:) keyEquivalent:@"v"];
-    [editMenu addItemWithTitle:@"Undo" action:NSSelectorFromString(@"undo:") keyEquivalent:@"z"];
     [editMenu addItemWithTitle:@"Copy" action:@selector(copy:) keyEquivalent:@"c"];
+    [editMenu addItemWithTitle:@"Paste" action:@selector(paste:) keyEquivalent:@"v"];
     [editMenu addItemWithTitle:@"Select All" action:@selector(selectAll:) keyEquivalent:@"a"];
+    [editMenu addItem:[NSMenuItem separatorItem]];
+    NSMenuItem *findItem = [editMenu addItemWithTitle:@"Find in Documentation / Settings..." action:@selector(focusSearchField:) keyEquivalent:@"f"];
+    findItem.target = self;
     editItem.submenu = editMenu;
+
+    NSMenuItem *viewItem = [[NSMenuItem alloc] initWithTitle:@"View" action:NULL keyEquivalent:@""];
+    [menu addItem:viewItem];
+    NSMenu *viewMenu = [[NSMenu alloc] initWithTitle:@"View"];
+    NSMenuItem *consoleItem = [viewMenu addItemWithTitle:@"Toggle Diagnostic Console" action:@selector(toggleLogConsole:) keyEquivalent:@"l"];
+    consoleItem.target = self;
+    NSMenuItem *outdoorItem = [viewMenu addItemWithTitle:@"Toggle Field Mode" action:@selector(toggleOutdoorMode:) keyEquivalent:@"F"];
+    outdoorItem.target = self;
+    viewItem.submenu = viewMenu;
 
     NSMenuItem *helpItem = [[NSMenuItem alloc] initWithTitle:@"Help" action:NULL keyEquivalent:@""];
     [menu addItem:helpItem];
@@ -185,58 +296,343 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
 
     NSApp.mainMenu = menu;
 
-    // Header
-    NSTextField *heading = [self label:@"Lab599 Utility"];
-    heading.font = [NSFont systemFontOfSize:22 weight:NSFontWeightSemibold];
+    NSString *appVer = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"2.32";
+    NSString *appBuild = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleVersion"] ?: @"38";
 
-    NSTextField *instructions = [NSTextField wrappingLabelWithString:
-        @"Connect the CAT-USB cable and stable external power. Close other radio applications. On your transceiver (TX-500 Discovery / TX-500MP), hold the third top function key while pressing POWER. Start only when the screen displays \"The loader is waiting...\". Keep power and cable connected until completion."];
-    instructions.textColor = NSColor.secondaryLabelColor;
-    self.instructions = instructions;
+    // Setup legacy operation picker for CLI arguments and underlying state
     self.operationPicker = [NSSegmentedControl segmentedControlWithLabels:@[
         @"Firmware Update", @"Time Sync", @"Telemetry", @"Radio Screen", @"CAT Test", @"Settings", @"Memory", @"Driver Install", @"Documentation", @"Feedback & Suggestion"
     ] trackingMode:NSSegmentSwitchTrackingSelectOne target:self action:@selector(operationChanged:)];
     self.operationPicker.selectedSegment = 0;
+    self.operationPicker.hidden = YES;
 
-    NSArray<NSString *> *symbols = @[
-        @"cpu",
-        @"clock",
-        @"gauge.with.needle",
-        @"display",
-        @"antenna.radiowaves.left.and.right",
-        @"slider.horizontal.3",
-        @"memorychip",
-        @"wrench.and.screwdriver",
-        @"doc.text",
-        @"bubble.left.and.bubble.right"
-    ];
-    for (NSUInteger i = 0; i < symbols.count; i++) {
-        NSImage *img = [NSImage imageWithSystemSymbolName:symbols[i] accessibilityDescription:nil];
-        if (!img && [symbols[i] isEqualToString:@"gauge.with.needle"]) {
-            img = [NSImage imageWithSystemSymbolName:@"gauge" accessibilityDescription:nil];
-        }
-        if (!img && [symbols[i] isEqualToString:@"display"]) {
-            img = [NSImage imageWithSystemSymbolName:@"tv" accessibilityDescription:nil];
-        }
-        if (!img && [symbols[i] isEqualToString:@"bubble.left.and.bubble.right"]) {
-            img = [NSImage imageWithSystemSymbolName:@"text.bubble" accessibilityDescription:nil];
-        }
-        if (img) {
-            [self.operationPicker setImage:img forSegment:i];
+    // Dual-Pane Layout Structure
+    NSView *contentRoot = self.window.contentView;
+    contentRoot.wantsLayer = YES;
+
+    // 1. Sidebar View (Left Pane - macOS Native Style)
+    self.sidebarView = [[NSVisualEffectView alloc] initWithFrame:NSZeroRect];
+    self.sidebarView.translatesAutoresizingMaskIntoConstraints = NO;
+    self.sidebarView.material = NSVisualEffectMaterialSidebar;
+    self.sidebarView.blendingMode = NSVisualEffectBlendingModeBehindWindow;
+    self.sidebarView.state = NSVisualEffectStateActive;
+    [contentRoot addSubview:self.sidebarView];
+
+    // Vertical Divider
+    NSBox *vDivider = [[NSBox alloc] initWithFrame:NSZeroRect];
+    vDivider.translatesAutoresizingMaskIntoConstraints = NO;
+    vDivider.boxType = NSBoxSeparator;
+    [contentRoot addSubview:vDivider];
+
+    // 2. Main Content View (Right Pane)
+    self.mainContentView = [[NSView alloc] initWithFrame:NSZeroRect];
+    self.mainContentView.translatesAutoresizingMaskIntoConstraints = NO;
+    [contentRoot addSubview:self.mainContentView];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [self.sidebarView.leadingAnchor constraintEqualToAnchor:contentRoot.leadingAnchor],
+        [self.sidebarView.topAnchor constraintEqualToAnchor:contentRoot.topAnchor],
+        [self.sidebarView.bottomAnchor constraintEqualToAnchor:contentRoot.bottomAnchor],
+        [self.sidebarView.widthAnchor constraintEqualToConstant:215],
+
+        [vDivider.leadingAnchor constraintEqualToAnchor:self.sidebarView.trailingAnchor],
+        [vDivider.topAnchor constraintEqualToAnchor:contentRoot.topAnchor],
+        [vDivider.bottomAnchor constraintEqualToAnchor:contentRoot.bottomAnchor],
+        [vDivider.widthAnchor constraintEqualToConstant:1],
+
+        [self.mainContentView.leadingAnchor constraintEqualToAnchor:vDivider.trailingAnchor],
+        [self.mainContentView.trailingAnchor constraintEqualToAnchor:contentRoot.trailingAnchor],
+        [self.mainContentView.topAnchor constraintEqualToAnchor:contentRoot.topAnchor],
+        [self.mainContentView.bottomAnchor constraintEqualToAnchor:contentRoot.bottomAnchor],
+    ]];
+
+    // --- Sidebar Content Assembly ---
+    NSImageView *brandIcon = [NSImageView new];
+    brandIcon.translatesAutoresizingMaskIntoConstraints = NO;
+    brandIcon.image = [NSImage imageWithSystemSymbolName:@"antenna.radiowaves.left.and.right" accessibilityDescription:@"Lab599"];
+    brandIcon.contentTintColor = [NSColor controlAccentColor];
+
+    NSTextField *brandTitle = [self label:@"LAB599 UTILITY"];
+    brandTitle.font = [NSFont systemFontOfSize:13 weight:NSFontWeightBold];
+    brandTitle.textColor = [NSColor labelColor];
+
+    NSTextField *brandSub = [self label:@"TX-500 Discovery / MP"];
+    brandSub.font = [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
+    brandSub.textColor = [NSColor secondaryLabelColor];
+
+    NSStackView *brandTextStack = [NSStackView stackViewWithViews:@[brandTitle, brandSub]];
+    brandTextStack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    brandTextStack.alignment = NSLayoutAttributeLeading;
+    brandTextStack.spacing = 1;
+
+    NSStackView *brandHeaderStack = [NSStackView stackViewWithViews:@[brandIcon, brandTextStack]];
+    brandHeaderStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    brandHeaderStack.alignment = NSLayoutAttributeCenterY;
+    brandHeaderStack.spacing = 8;
+    [brandIcon.widthAnchor constraintEqualToConstant:22].active = YES;
+    [brandIcon.heightAnchor constraintEqualToConstant:22].active = YES;
+
+    NSTextField *(^makeSectionHeader)(NSString *) = ^NSTextField *(NSString *title) {
+        NSTextField *tf = [NSTextField labelWithString:title];
+        tf.font = [NSFont systemFontOfSize:10 weight:NSFontWeightBold];
+        tf.textColor = [NSColor secondaryLabelColor];
+        tf.translatesAutoresizingMaskIntoConstraints = NO;
+        return tf;
+    };
+
+    self.sidebarItems = [NSMutableArray array];
+
+    TX500SidebarButton *btnFw = [[TX500SidebarButton alloc] initWithTitle:@"Firmware Update" iconName:@"cpu" tag:0 target:self action:@selector(sidebarItemClicked:)];
+    TX500SidebarButton *btnTime = [[TX500SidebarButton alloc] initWithTitle:@"Time Sync" iconName:@"clock" tag:1 target:self action:@selector(sidebarItemClicked:)];
+    TX500SidebarButton *btnTelemetry = [[TX500SidebarButton alloc] initWithTitle:@"Telemetry" iconName:@"gauge.with.needle" tag:2 target:self action:@selector(sidebarItemClicked:)];
+    TX500SidebarButton *btnScreen = [[TX500SidebarButton alloc] initWithTitle:@"Radio Screen" iconName:@"display" tag:3 target:self action:@selector(sidebarItemClicked:)];
+    TX500SidebarButton *btnCat = [[TX500SidebarButton alloc] initWithTitle:@"CAT Test" iconName:@"antenna.radiowaves.left.and.right" tag:4 target:self action:@selector(sidebarItemClicked:)];
+    TX500SidebarButton *btnSettings = [[TX500SidebarButton alloc] initWithTitle:@"Settings" iconName:@"slider.horizontal.3" tag:5 target:self action:@selector(sidebarItemClicked:)];
+    TX500SidebarButton *btnMemory = [[TX500SidebarButton alloc] initWithTitle:@"Memory" iconName:@"memorychip" tag:6 target:self action:@selector(sidebarItemClicked:)];
+    TX500SidebarButton *btnDriver = [[TX500SidebarButton alloc] initWithTitle:@"Driver Install" iconName:@"wrench.and.screwdriver" tag:7 target:self action:@selector(sidebarItemClicked:)];
+    TX500SidebarButton *btnDocs = [[TX500SidebarButton alloc] initWithTitle:@"Documentation" iconName:@"doc.text" tag:8 target:self action:@selector(sidebarItemClicked:)];
+    TX500SidebarButton *btnFeedback = [[TX500SidebarButton alloc] initWithTitle:@"Feedback" iconName:@"bubble.left.and.bubble.right" tag:9 target:self action:@selector(sidebarItemClicked:)];
+
+    [self.sidebarItems addObjectsFromArray:@[
+        btnFw, btnTime, btnTelemetry, btnScreen, btnCat, btnSettings, btnMemory, btnDriver, btnDocs, btnFeedback
+    ]];
+
+    for (TX500SidebarButton *b in self.sidebarItems) {
+        [b.heightAnchor constraintEqualToConstant:28].active = YES;
+    }
+
+    NSTextField *versionLabel = [NSTextField labelWithString:[NSString stringWithFormat:@"v%@ (Build %@) • macOS", appVer, appBuild]];
+    versionLabel.font = [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
+    versionLabel.textColor = [NSColor secondaryLabelColor];
+    versionLabel.alignment = NSTextAlignmentCenter;
+    versionLabel.translatesAutoresizingMaskIntoConstraints = NO;
+
+    NSBox *hDivider = [[NSBox alloc] initWithFrame:NSZeroRect];
+    hDivider.translatesAutoresizingMaskIntoConstraints = NO;
+    hDivider.boxType = NSBoxSeparator;
+
+    NSView *sidebarSpacer = [NSView new];
+    sidebarSpacer.translatesAutoresizingMaskIntoConstraints = NO;
+    [sidebarSpacer setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationVertical];
+    [sidebarSpacer setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationVertical];
+
+    NSStackView *sidebarStack = [NSStackView stackViewWithViews:@[
+        brandHeaderStack,
+        makeSectionHeader(@"RADIO & LIVE"),
+        btnScreen, btnTelemetry, btnCat,
+        makeSectionHeader(@"CONFIGURATION"),
+        btnTime, btnSettings, btnMemory,
+        makeSectionHeader(@"FIRMWARE & DRIVER"),
+        btnFw, btnDriver,
+        makeSectionHeader(@"COMMUNITY"),
+        btnDocs, btnFeedback,
+        sidebarSpacer,
+        hDivider,
+        versionLabel
+    ]];
+    sidebarStack.translatesAutoresizingMaskIntoConstraints = NO;
+    sidebarStack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    sidebarStack.alignment = NSLayoutAttributeLeading;
+    sidebarStack.spacing = 5;
+    [self.sidebarView addSubview:sidebarStack];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [sidebarStack.topAnchor constraintEqualToAnchor:self.sidebarView.topAnchor constant:16],
+        [sidebarStack.leadingAnchor constraintEqualToAnchor:self.sidebarView.leadingAnchor constant:12],
+        [sidebarStack.trailingAnchor constraintEqualToAnchor:self.sidebarView.trailingAnchor constant:-12],
+        [sidebarStack.bottomAnchor constraintEqualToAnchor:self.sidebarView.bottomAnchor constant:-12],
+        [brandHeaderStack.widthAnchor constraintEqualToAnchor:sidebarStack.widthAnchor],
+        [hDivider.widthAnchor constraintEqualToAnchor:sidebarStack.widthAnchor],
+        [versionLabel.widthAnchor constraintEqualToAnchor:sidebarStack.widthAnchor],
+    ]];
+
+    for (TX500SidebarButton *b in self.sidebarItems) {
+        [b.widthAnchor constraintEqualToAnchor:sidebarStack.widthAnchor].active = YES;
+    }
+
+    // --- Persistent Connection Status Bar Card ---
+    self.connectionBar = [NSBox new];
+    self.connectionBar.titlePosition = NSNoTitle;
+    self.connectionBar.boxType = NSBoxCustom;
+    self.connectionBar.cornerRadius = 8.0;
+    self.connectionBar.borderWidth = 1.0;
+    self.connectionBar.borderColor = [NSColor separatorColor];
+    self.connectionBar.fillColor = [NSColor controlBackgroundColor];
+    self.connectionBar.translatesAutoresizingMaskIntoConstraints = NO;
+
+    // Status Pill Badge
+    self.statusPillBox = [NSBox new];
+    self.statusPillBox.translatesAutoresizingMaskIntoConstraints = NO;
+    self.statusPillBox.boxType = NSBoxCustom;
+    self.statusPillBox.cornerRadius = 11.0;
+    self.statusPillBox.borderWidth = 1.0;
+    self.statusPillBox.titlePosition = NSNoTitle;
+    self.statusPillBox.fillColor = [NSColor colorWithCalibratedWhite:0.5 alpha:0.08];
+    self.statusPillBox.borderColor = [NSColor colorWithCalibratedWhite:0.5 alpha:0.22];
+
+    self.statusLEDView = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 8, 8)];
+    self.statusLEDView.wantsLayer = YES;
+    self.statusLEDView.layer.cornerRadius = 4.0;
+    self.statusLEDView.layer.backgroundColor = [NSColor systemGrayColor].CGColor;
+    self.statusLEDView.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.statusLEDView.widthAnchor constraintEqualToConstant:8].active = YES;
+    [self.statusLEDView.heightAnchor constraintEqualToConstant:8].active = YES;
+
+    self.connectionStatusLabel = [self label:@"Disconnected"];
+    self.connectionStatusLabel.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
+    self.connectionStatusLabel.textColor = [NSColor secondaryLabelColor];
+
+    NSStackView *pillStack = [NSStackView stackViewWithViews:@[self.statusLEDView, self.connectionStatusLabel]];
+    pillStack.translatesAutoresizingMaskIntoConstraints = NO;
+    pillStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    pillStack.alignment = NSLayoutAttributeCenterY;
+    pillStack.spacing = 6;
+    [self.statusPillBox.contentView addSubview:pillStack];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [self.statusPillBox.heightAnchor constraintEqualToConstant:22],
+        [pillStack.leadingAnchor constraintEqualToAnchor:self.statusPillBox.contentView.leadingAnchor constant:9],
+        [pillStack.trailingAnchor constraintEqualToAnchor:self.statusPillBox.contentView.trailingAnchor constant:-9],
+        [pillStack.centerYAnchor constraintEqualToAnchor:self.statusPillBox.contentView.centerYAnchor],
+    ]];
+
+    // Unified Port Capsule Group
+    self.portCapsuleBox = [NSBox new];
+    self.portCapsuleBox.translatesAutoresizingMaskIntoConstraints = NO;
+    self.portCapsuleBox.boxType = NSBoxCustom;
+    self.portCapsuleBox.cornerRadius = 6.0;
+    self.portCapsuleBox.borderWidth = 1.0;
+    self.portCapsuleBox.borderColor = [NSColor separatorColor];
+    self.portCapsuleBox.fillColor = [NSColor colorWithCalibratedWhite:0.5 alpha:0.06];
+    self.portCapsuleBox.titlePosition = NSNoTitle;
+
+    NSImageView *portIconView = nil;
+    if (@available(macOS 11.0, *)) {
+        NSImage *pImg = [NSImage imageWithSystemSymbolName:@"cable.connector" accessibilityDescription:@"Port"];
+        if (pImg) {
+            portIconView = [NSImageView imageViewWithImage:pImg];
+            portIconView.translatesAutoresizingMaskIntoConstraints = NO;
+            portIconView.contentTintColor = [NSColor secondaryLabelColor];
+            [portIconView.widthAnchor constraintEqualToConstant:14].active = YES;
+            [portIconView.heightAnchor constraintEqualToConstant:14].active = YES;
         }
     }
 
-    // Serial Port Selection Row
     self.portMenu = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
     self.portMenu.translatesAutoresizingMaskIntoConstraints = NO;
-    self.refreshButton = [NSButton buttonWithTitle:@"Refresh" target:self action:@selector(refreshPorts:)];
-    NSStackView *portRow = [NSStackView stackViewWithViews:@[[self label:@"Serial port:"], self.portMenu, self.refreshButton]];
-    portRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    portRow.alignment = NSLayoutAttributeCenterY;
-    portRow.spacing = 10;
-    [self.portMenu.widthAnchor constraintEqualToConstant:390].active = YES;
-    self.portRow = portRow;
+    self.portMenu.controlSize = NSControlSizeSmall;
+    self.portMenu.font = [NSFont systemFontOfSize:11];
+    self.portMenu.bordered = NO;
+    [self.portMenu.widthAnchor constraintEqualToConstant:200].active = YES;
 
+    NSBox *portDivider = [NSBox new];
+    portDivider.translatesAutoresizingMaskIntoConstraints = NO;
+    portDivider.boxType = NSBoxSeparator;
+    [portDivider.heightAnchor constraintEqualToConstant:14].active = YES;
+
+    self.refreshButton = [NSButton buttonWithTitle:@"" target:self action:@selector(refreshPorts:)];
+    self.refreshButton.translatesAutoresizingMaskIntoConstraints = NO;
+    self.refreshButton.bordered = NO;
+    self.refreshButton.controlSize = NSControlSizeSmall;
+    self.refreshButton.toolTip = @"Refresh Serial Ports (⌘R)";
+    if (@available(macOS 11.0, *)) {
+        self.refreshButton.image = [NSImage imageWithSystemSymbolName:@"arrow.clockwise" accessibilityDescription:@"Refresh"];
+        self.refreshButton.contentTintColor = [NSColor secondaryLabelColor];
+    } else {
+        self.refreshButton.title = @"⟳";
+    }
+    [self.refreshButton.widthAnchor constraintEqualToConstant:20].active = YES;
+
+    NSMutableArray *capsuleViews = [NSMutableArray array];
+    if (portIconView) [capsuleViews addObject:portIconView];
+    [capsuleViews addObject:self.portMenu];
+    [capsuleViews addObject:portDivider];
+    [capsuleViews addObject:self.refreshButton];
+
+    NSStackView *capsuleStack = [NSStackView stackViewWithViews:capsuleViews];
+    capsuleStack.translatesAutoresizingMaskIntoConstraints = NO;
+    capsuleStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    capsuleStack.alignment = NSLayoutAttributeCenterY;
+    capsuleStack.spacing = 6;
+    [self.portCapsuleBox.contentView addSubview:capsuleStack];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [self.portCapsuleBox.heightAnchor constraintEqualToConstant:26],
+        [capsuleStack.leadingAnchor constraintEqualToAnchor:self.portCapsuleBox.contentView.leadingAnchor constant:7],
+        [capsuleStack.trailingAnchor constraintEqualToAnchor:self.portCapsuleBox.contentView.trailingAnchor constant:-5],
+        [capsuleStack.centerYAnchor constraintEqualToAnchor:self.portCapsuleBox.contentView.centerYAnchor],
+    ]];
+
+    NSView *connSpacer = [NSView new];
+    connSpacer.translatesAutoresizingMaskIntoConstraints = NO;
+    [connSpacer setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    self.hardwareBadgeLabel = [self label:@"TX-500 Discovery"];
+    self.hardwareBadgeLabel.font = [NSFont systemFontOfSize:10.5 weight:NSFontWeightSemibold];
+    self.hardwareBadgeLabel.textColor = [NSColor secondaryLabelColor];
+
+    // Field Mode button in top bar
+    self.outdoorModeButton = [NSButton buttonWithTitle:@"Field Mode" target:self action:@selector(toggleOutdoorMode:)];
+    self.outdoorModeButton.translatesAutoresizingMaskIntoConstraints = NO;
+    self.outdoorModeButton.bezelStyle = NSBezelStyleRounded;
+    self.outdoorModeButton.controlSize = NSControlSizeSmall;
+    self.outdoorModeButton.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
+    self.outdoorModeButton.toolTip = @"Toggle Daylight High-Contrast Field Mode (⇧⌘F)";
+    if (@available(macOS 11.0, *)) {
+        self.outdoorModeButton.image = [NSImage imageWithSystemSymbolName:@"sun.max" accessibilityDescription:@"Field Mode"];
+        self.outdoorModeButton.imagePosition = NSImageLeading;
+    }
+
+    // Diagnostic Console toggle button in top bar
+    self.consoleToggleButton = [NSButton buttonWithTitle:@"Console" target:self action:@selector(toggleLogConsole:)];
+    self.consoleToggleButton.translatesAutoresizingMaskIntoConstraints = NO;
+    self.consoleToggleButton.bezelStyle = NSBezelStyleRounded;
+    self.consoleToggleButton.controlSize = NSControlSizeSmall;
+    self.consoleToggleButton.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
+    self.consoleToggleButton.toolTip = @"Toggle Diagnostic Console (⌘L)";
+    if (@available(macOS 11.0, *)) {
+        self.consoleToggleButton.image = [NSImage imageWithSystemSymbolName:@"terminal" accessibilityDescription:@"Console"];
+        self.consoleToggleButton.imagePosition = NSImageLeading;
+    }
+
+    NSStackView *connStack = [NSStackView stackViewWithViews:@[
+        self.statusPillBox,
+        self.portCapsuleBox,
+        connSpacer,
+        self.hardwareBadgeLabel,
+        self.outdoorModeButton,
+        self.consoleToggleButton
+    ]];
+    connStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    connStack.alignment = NSLayoutAttributeCenterY;
+    connStack.spacing = 8;
+    connStack.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.connectionBar.contentView addSubview:connStack];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [self.connectionBar.heightAnchor constraintEqualToConstant:42],
+        [connStack.leadingAnchor constraintEqualToAnchor:self.connectionBar.contentView.leadingAnchor constant:10],
+        [connStack.trailingAnchor constraintEqualToAnchor:self.connectionBar.contentView.trailingAnchor constant:-10],
+        [connStack.centerYAnchor constraintEqualToAnchor:self.connectionBar.contentView.centerYAnchor],
+    ]];
+
+    // --- Section Header Row ---
+    self.sectionTitleLabel = [self label:@"Firmware Update (BL20 Bootloader)"];
+    self.sectionTitleLabel.font = [NSFont systemFontOfSize:17 weight:NSFontWeightBold];
+
+    NSTextField *instructions = [NSTextField wrappingLabelWithString:
+        @"Connect the CAT-USB cable and stable external power. Close other radio applications. On your transceiver (TX-500 Discovery / TX-500MP), hold the third top function key while pressing POWER. Start only when the screen displays \"The loader is waiting...\". Keep power and cable connected until completion."];
+    instructions.textColor = NSColor.secondaryLabelColor;
+    instructions.font = [NSFont systemFontOfSize:11.5];
+    self.instructions = instructions;
+
+    NSStackView *headerStack = [NSStackView stackViewWithViews:@[self.sectionTitleLabel, self.instructions]];
+    headerStack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    headerStack.alignment = NSLayoutAttributeLeading;
+    headerStack.spacing = 3;
+    headerStack.translatesAutoresizingMaskIntoConstraints = NO;
+
+    // --- Feature Content Rows ---
     // Firmware Selection Row
     self.firmwareName = [self label:@"No firmware selected"];
     self.firmwareName.lineBreakMode = NSLineBreakByTruncatingMiddle;
@@ -251,7 +647,7 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     self.radioPreviewBox = [self buildRadioPreviewBox];
     self.powerSafetyBox = [self buildPowerSafetyBox];
 
-    // Time synchronization is a separate operation in normal radio mode.
+    // Time synchronization
     self.timeZoneMenu = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
     [self.timeZoneMenu addItemsWithTitles:@[@"Mac local time", @"UTC"]];
     self.timeZoneMenu.target = self;
@@ -272,36 +668,21 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     self.progressBar.indeterminate = NO;
     self.statusLabel = [NSTextField wrappingLabelWithString:@"Select the transceiver's serial port and choose or download the firmware file."];
     self.statusLabel.textColor = NSColor.secondaryLabelColor;
-    [self.statusLabel.heightAnchor constraintGreaterThanOrEqualToConstant:38].active = YES;
+    [self.statusLabel.heightAnchor constraintGreaterThanOrEqualToConstant:28].active = YES;
 
-    // Action Buttons Row (About button moved to macOS Application Menu per requirements)
+    // Action Buttons
     self.updateButton = [NSButton buttonWithTitle:@"Update Firmware" target:self action:@selector(startUpdate:)];
     self.updateButton.bezelStyle = NSBezelStyleRounded;
     self.updateButton.keyEquivalent = @"\r";
     self.syncButton = [NSButton buttonWithTitle:@"Synchronize Clock" target:self action:@selector(startTimeSync:)];
     self.syncButton.bezelStyle = NSBezelStyleRounded;
     self.syncButton.hidden = YES;
-    NSButton *saveButton = [NSButton buttonWithTitle:@"Save Diagnostic Log..." target:self action:@selector(saveLog:)];
-    NSStackView *buttonRow = [NSStackView stackViewWithViews:@[self.updateButton, self.syncButton, saveButton]];
-    buttonRow.detachesHiddenViews = YES;
-    buttonRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    buttonRow.spacing = 12;
 
-    // Log Scroll View
-    NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
-    scroll.hasVerticalScroller = YES;
-    scroll.borderType = NSBezelBorder;
-    self.logView = [[NSTextView alloc] initWithFrame:NSMakeRect(0, 0, 720, 200)];
-    self.logView.editable = NO;
-    self.logView.selectable = YES;
-    self.logView.richText = NO;
-    self.logView.verticallyResizable = YES;
-    self.logView.horizontallyResizable = NO;
-    self.logView.autoresizingMask = NSViewWidthSizable;
-    self.logView.textContainer.widthTracksTextView = YES;
-    self.logView.textContainerInset = NSMakeSize(8, 8);
-    scroll.documentView = self.logView;
-    [scroll.heightAnchor constraintEqualToConstant:100].active = YES;
+    self.actionRow = [NSStackView stackViewWithViews:@[self.updateButton, self.syncButton]];
+    self.actionRow.detachesHiddenViews = YES;
+    self.actionRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    self.actionRow.spacing = 12;
+    self.actionRow.translatesAutoresizingMaskIntoConstraints = NO;
 
     __weak AppDelegate *weakSelf = self;
 
@@ -310,8 +691,6 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     self.telemetryController.selectedPortProvider = ^NSString * { return weakSelf.hasPorts ? weakSelf.portMenu.selectedItem.title : nil; };
     self.telemetryController.logHandler = ^(NSString *message) { [weakSelf appendLog:message]; };
     self.telemetryController.onTelemetryData = ^(TXTelemetryData *data) {
-        // Demo samples are valid for drawing the telemetry UI, but must never
-        // be presented as a physical power-supply verification.
         if (data.voltageValid && !weakSelf.telemetryController.engine.demoMode) {
             weakSelf.lastDetectedVoltage = data.voltage;
             dispatch_async(dispatch_get_main_queue(), ^{
@@ -327,10 +706,13 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     self.screenController.selectedPortProvider = ^NSString * { return weakSelf.hasPorts ? weakSelf.portMenu.selectedItem.title : nil; };
     self.screenController.logHandler = ^(NSString *message) { [weakSelf appendLog:message]; };
     self.screenController.statusHandler = ^(NSString *message, double progress) {
-        weakSelf.statusLabel.stringValue = message; weakSelf.progressBar.doubleValue = progress;
+        weakSelf.statusLabel.stringValue = message;
+        weakSelf.progressBar.doubleValue = progress;
+        [weakSelf updateConnectionStatusBar];
     };
     self.screenController.view.hidden = YES;
 
+    // Tools Controller (CAT Studio, Settings, Memory)
     self.tools = [Lab599ToolsController new];
     self.tools.window = self.window;
     self.tools.selectedPort = ^NSString * { return weakSelf.hasPorts ? weakSelf.portMenu.selectedItem.title : nil; };
@@ -371,48 +753,165 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     };
     self.feedbackController.view.hidden = YES;
 
-    // Main Layout Stack
-    NSStackView *stack = [NSStackView stackViewWithViews:@[
-        heading, self.operationPicker, instructions,
-        portRow, fileRow, self.radioPreviewBox, self.powerSafetyBox, timeRow, self.telemetryController.view, self.screenController.view, self.tools.view, self.driverController.view, self.docsController.view, self.feedbackController.view,
+    // Feature Card Container
+    NSBox *featureCardBox = [NSBox new];
+    featureCardBox.titlePosition = NSNoTitle;
+    featureCardBox.boxType = NSBoxCustom;
+    featureCardBox.cornerRadius = 8.0;
+    featureCardBox.borderWidth = 1.0;
+    featureCardBox.borderColor = [NSColor separatorColor];
+    featureCardBox.fillColor = [NSColor controlBackgroundColor];
+    featureCardBox.translatesAutoresizingMaskIntoConstraints = NO;
+
+    NSView *cardSpacer = [NSView new];
+    cardSpacer.translatesAutoresizingMaskIntoConstraints = NO;
+    [cardSpacer setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationVertical];
+    [cardSpacer setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationVertical];
+
+    NSStackView *featureStack = [NSStackView stackViewWithViews:@[
+        fileRow, self.radioPreviewBox, self.powerSafetyBox, timeRow,
+        self.telemetryController.view, self.screenController.view, self.tools.view,
+        self.driverController.view, self.docsController.view, self.feedbackController.view,
         self.progressBar, self.statusLabel,
-        buttonRow,
-        [self label:@"Diagnostic log:"], scroll
+        self.actionRow,
+        cardSpacer
     ]];
-    stack.translatesAutoresizingMaskIntoConstraints = NO;
-    stack.orientation = NSUserInterfaceLayoutOrientationVertical;
-    stack.alignment = NSLayoutAttributeLeading;
-    stack.spacing = 8;
-    stack.detachesHiddenViews = YES;
-    [self.window.contentView addSubview:stack];
+    featureStack.translatesAutoresizingMaskIntoConstraints = NO;
+    featureStack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    featureStack.alignment = NSLayoutAttributeLeading;
+    featureStack.spacing = 8;
+    featureStack.detachesHiddenViews = YES;
+    [featureCardBox.contentView addSubview:featureStack];
 
     [NSLayoutConstraint activateConstraints:@[
-        [stack.leadingAnchor constraintEqualToAnchor:self.window.contentView.leadingAnchor constant:24],
-        [stack.trailingAnchor constraintEqualToAnchor:self.window.contentView.trailingAnchor constant:-24],
-        [stack.topAnchor constraintEqualToAnchor:self.window.contentView.topAnchor constant:24],
-        [stack.bottomAnchor constraintLessThanOrEqualToAnchor:self.window.contentView.bottomAnchor constant:-24],
-        [instructions.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
-        [self.radioPreviewBox.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
-        [self.powerSafetyBox.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
-        [self.telemetryController.view.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
-        [self.screenController.view.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
-        [self.tools.view.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
-        [self.driverController.view.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
-        [self.docsController.view.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
-        [self.feedbackController.view.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
-        [self.progressBar.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
-        [self.statusLabel.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
-        [scroll.widthAnchor constraintEqualToAnchor:stack.widthAnchor]
+        [featureStack.topAnchor constraintEqualToAnchor:featureCardBox.contentView.topAnchor constant:10],
+        [featureStack.leadingAnchor constraintEqualToAnchor:featureCardBox.contentView.leadingAnchor constant:12],
+        [featureStack.trailingAnchor constraintEqualToAnchor:featureCardBox.contentView.trailingAnchor constant:-12],
+        [featureStack.bottomAnchor constraintEqualToAnchor:featureCardBox.contentView.bottomAnchor constant:-10],
+
+        [self.radioPreviewBox.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor],
+        [self.powerSafetyBox.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor],
+        [self.telemetryController.view.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor],
+        [self.screenController.view.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor],
+        [self.tools.view.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor],
+        [self.driverController.view.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor],
+        [self.docsController.view.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor],
+        [self.feedbackController.view.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor],
+        [self.progressBar.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor],
+        [self.statusLabel.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor],
     ]];
 
-    NSString *appVer = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"2.8";
-    NSString *appBuild = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleVersion"] ?: @"14";
+    // --- Diagnostic Console Card (Collapsible) ---
+    self.logCardBox = [NSBox new];
+    self.logCardBox.titlePosition = NSNoTitle;
+    self.logCardBox.boxType = NSBoxCustom;
+    self.logCardBox.cornerRadius = 8.0;
+    self.logCardBox.borderWidth = 1.0;
+    self.logCardBox.borderColor = [NSColor separatorColor];
+    self.logCardBox.fillColor = [NSColor controlBackgroundColor];
+    self.logCardBox.translatesAutoresizingMaskIntoConstraints = NO;
+
+    NSTextField *logHeaderLabel = [NSTextField labelWithString:@"DIAGNOSTIC CONSOLE LOG"];
+    logHeaderLabel.font = [NSFont systemFontOfSize:10 weight:NSFontWeightBold];
+    logHeaderLabel.textColor = [NSColor secondaryLabelColor];
+
+    NSView *logHeaderSpacer = [NSView new];
+    logHeaderSpacer.translatesAutoresizingMaskIntoConstraints = NO;
+    [logHeaderSpacer setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    NSButton *clearLogBtn = [NSButton buttonWithTitle:@"Clear" target:self action:@selector(clearLog:)];
+    clearLogBtn.controlSize = NSControlSizeSmall;
+    clearLogBtn.font = [NSFont systemFontOfSize:11];
+
+    NSButton *saveLogBtn = [NSButton buttonWithTitle:@"Save Log..." target:self action:@selector(saveLog:)];
+    saveLogBtn.controlSize = NSControlSizeSmall;
+    saveLogBtn.font = [NSFont systemFontOfSize:11];
+
+    NSButton *collapseLogBtn = [NSButton buttonWithTitle:@"" target:self action:@selector(toggleLogConsole:)];
+    collapseLogBtn.controlSize = NSControlSizeSmall;
+    collapseLogBtn.bordered = NO;
+    collapseLogBtn.toolTip = @"Collapse Console (⌘L)";
+    if (@available(macOS 11.0, *)) {
+        collapseLogBtn.image = [NSImage imageWithSystemSymbolName:@"chevron.down" accessibilityDescription:@"Collapse Console"];
+    } else {
+        collapseLogBtn.title = @"✕";
+    }
+
+    NSStackView *logHeaderRow = [NSStackView stackViewWithViews:@[
+        logHeaderLabel, logHeaderSpacer, clearLogBtn, saveLogBtn, collapseLogBtn
+    ]];
+    logHeaderRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    logHeaderRow.alignment = NSLayoutAttributeCenterY;
+    logHeaderRow.spacing = 8;
+    logHeaderRow.translatesAutoresizingMaskIntoConstraints = NO;
+
+    // Log Scroll View
+    NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
+    scroll.hasVerticalScroller = YES;
+    scroll.borderType = NSBezelBorder;
+    self.logView = [[NSTextView alloc] initWithFrame:NSMakeRect(0, 0, 720, 200)];
+    self.logView.editable = NO;
+    self.logView.selectable = YES;
+    self.logView.richText = NO;
+    self.logView.verticallyResizable = YES;
+    self.logView.horizontallyResizable = NO;
+    self.logView.autoresizingMask = NSViewWidthSizable;
+    self.logView.textContainer.widthTracksTextView = YES;
+    self.logView.textContainerInset = NSMakeSize(6, 6);
+    scroll.documentView = self.logView;
+    [scroll.heightAnchor constraintEqualToConstant:96].active = YES;
+
+    NSStackView *logInnerStack = [NSStackView stackViewWithViews:@[logHeaderRow, scroll]];
+    logInnerStack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    logInnerStack.alignment = NSLayoutAttributeLeading;
+    logInnerStack.spacing = 6;
+    logInnerStack.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.logCardBox.contentView addSubview:logInnerStack];
+
+    self.logCardHeightConstraint = [self.logCardBox.heightAnchor constraintEqualToConstant:140];
+    [NSLayoutConstraint activateConstraints:@[
+        self.logCardHeightConstraint,
+        [logInnerStack.topAnchor constraintEqualToAnchor:self.logCardBox.contentView.topAnchor constant:8],
+        [logInnerStack.leadingAnchor constraintEqualToAnchor:self.logCardBox.contentView.leadingAnchor constant:10],
+        [logInnerStack.trailingAnchor constraintEqualToAnchor:self.logCardBox.contentView.trailingAnchor constant:-10],
+        [logInnerStack.bottomAnchor constraintEqualToAnchor:self.logCardBox.contentView.bottomAnchor constant:-8],
+        [logHeaderRow.widthAnchor constraintEqualToAnchor:logInnerStack.widthAnchor],
+        [scroll.widthAnchor constraintEqualToAnchor:logInnerStack.widthAnchor],
+    ]];
+
+    // Assemble Main Content Stack
+    NSStackView *mainStack = [NSStackView stackViewWithViews:@[
+        self.connectionBar,
+        headerStack,
+        featureCardBox,
+        self.logCardBox
+    ]];
+    mainStack.translatesAutoresizingMaskIntoConstraints = NO;
+    mainStack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    mainStack.alignment = NSLayoutAttributeLeading;
+    mainStack.spacing = 10;
+    mainStack.detachesHiddenViews = YES;
+    [self.mainContentView addSubview:mainStack];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [mainStack.topAnchor constraintEqualToAnchor:self.mainContentView.topAnchor constant:14],
+        [mainStack.leadingAnchor constraintEqualToAnchor:self.mainContentView.leadingAnchor constant:14],
+        [mainStack.trailingAnchor constraintEqualToAnchor:self.mainContentView.trailingAnchor constant:-14],
+        [mainStack.bottomAnchor constraintEqualToAnchor:self.mainContentView.bottomAnchor constant:-14],
+
+        [self.connectionBar.widthAnchor constraintEqualToAnchor:mainStack.widthAnchor],
+        [headerStack.widthAnchor constraintEqualToAnchor:mainStack.widthAnchor],
+        [featureCardBox.widthAnchor constraintEqualToAnchor:mainStack.widthAnchor],
+        [self.logCardBox.widthAnchor constraintEqualToAnchor:mainStack.widthAnchor],
+    ]];
     [self appendLog:[NSString stringWithFormat:@"Lab599 Utility %@ (Build %@) initialized.", appVer, appBuild]];
     [self appendLog:@"BL20 protocol engine ready: 57600 baud, 8N1, two-ACK header+payload cycle."];
     [self appendLog:@"TimeSync ready: 9600 baud, TM set/query with clock read-back verification."];
     [self refreshPorts:nil];
     [self updateClockPreview:nil];
     self.clockTimer = [NSTimer scheduledTimerWithTimeInterval:1 target:self selector:@selector(updateClockPreview:) userInfo:nil repeats:YES];
+    [self updateConsoleToggleButton];
+    [self updateConnectionStatusBar];
     if ([[NSProcessInfo processInfo].arguments containsObject:@"--telemetry-demo"]) {
         self.operationPicker.selectedSegment = 2;
         [self operationChanged:self.operationPicker];
@@ -426,14 +925,28 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
         self.operationPicker.selectedSegment = 4;
         [self operationChanged:self.operationPicker];
     }
+    if ([[NSProcessInfo processInfo].arguments containsObject:@"--docs"]) {
+        self.operationPicker.selectedSegment = 8;
+        [self operationChanged:self.operationPicker];
+    }
     if ([[NSProcessInfo processInfo].arguments containsObject:@"--feedback"]) {
         self.operationPicker.selectedSegment = 9;
         [self operationChanged:self.operationPicker];
     }
+    if ([[NSProcessInfo processInfo].arguments containsObject:@"--field-mode"]) {
+        [self toggleOutdoorMode:nil];
+    }
+    if ([[NSProcessInfo processInfo].arguments containsObject:@"--console-collapsed"]) {
+        if (!self.logCollapsed) {
+            [self toggleLogConsole:nil];
+        }
+    }
     for (NSUInteger i = 0; i < [NSProcessInfo processInfo].arguments.count; i++) {
         if ([[NSProcessInfo processInfo].arguments[i] isEqualToString:@"--screenshot-window"] && i + 1 < [NSProcessInfo processInfo].arguments.count) {
             NSString *outPath = [NSProcessInfo processInfo].arguments[i + 1];
-            self.window.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+            if (!self.outdoorModeActive) {
+                self.window.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+            }
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                 [self.window layoutIfNeeded];
                 [self.window.contentView layoutSubtreeIfNeeded];
@@ -451,7 +964,11 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
                 NSGraphicsContext *ctx = [NSGraphicsContext graphicsContextWithBitmapImageRep:rep];
                 [NSGraphicsContext saveGraphicsState];
                 [NSGraphicsContext setCurrentContext:ctx];
-                [[NSColor colorWithCalibratedRed:0.13 green:0.13 blue:0.14 alpha:1.0] setFill];
+                if (self.outdoorModeActive) {
+                    [[NSColor colorWithCalibratedWhite:0.94 alpha:1.0] setFill];
+                } else {
+                    [[NSColor colorWithCalibratedRed:0.13 green:0.13 blue:0.14 alpha:1.0] setFill];
+                }
                 NSRectFill(rect);
                 [self.window.contentView displayRectIgnoringOpacity:rect inContext:ctx];
                 [NSGraphicsContext restoreGraphicsState];
@@ -517,6 +1034,7 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
             @"Select the serial port connected to your Lab599 transceiver." :
             @"Connect the CAT-USB adapter and click Refresh. A working serial driver (FTDI/Prolific) is required.";
     }
+    [self updateConnectionStatusBar];
 }
 
 #pragma mark - Operation Selection & Time Synchronization
@@ -546,6 +1064,99 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     [self.screenController saveScreenshotDialog];
 }
 
+- (void)sidebarItemClicked:(TX500SidebarButton *)sender {
+    if (self.busy) return;
+    self.operationPicker.selectedSegment = sender.operationTag;
+    [self operationChanged:self.operationPicker];
+}
+
+- (void)clearLog:(id)sender {
+    (void)sender;
+    [self.logView.textStorage setAttributedString:[[NSAttributedString alloc] initWithString:@""]];
+}
+
+- (void)toggleOutdoorMode:(id)sender {
+    (void)sender;
+    self.outdoorModeActive = !self.outdoorModeActive;
+    if (self.outdoorModeActive) {
+        self.outdoorModeButton.title = @"Field Mode: ON";
+        if (@available(macOS 11.0, *)) {
+            self.outdoorModeButton.image = [NSImage imageWithSystemSymbolName:@"sun.max.fill" accessibilityDescription:@"Field Mode"];
+        }
+        self.outdoorModeButton.contentTintColor = [NSColor systemOrangeColor];
+        self.window.appearance = [NSAppearance appearanceNamed:NSAppearanceNameAqua];
+        self.screenController.currentTheme = TX500ScreenThemeCoolWhite;
+        [self.screenController renderAndUpdateDisplay];
+        [self appendLog:@"☀️ Field Mode activated: Enforced high-contrast Daylight display for direct sunlight readability (POTA/SOTA)."];
+    } else {
+        self.outdoorModeButton.title = @"Field Mode";
+        if (@available(macOS 11.0, *)) {
+            self.outdoorModeButton.image = [NSImage imageWithSystemSymbolName:@"sun.max" accessibilityDescription:@"Field Mode"];
+        }
+        self.outdoorModeButton.contentTintColor = nil;
+        self.window.appearance = nil; // Follow system appearance
+        self.screenController.currentTheme = TX500ScreenThemeAmber;
+        [self.screenController renderAndUpdateDisplay];
+        [self appendLog:@"Field Mode deactivated: Restored standard display appearance."];
+    }
+}
+
+- (void)toggleLogConsole:(id)sender {
+    (void)sender;
+    self.logCollapsed = !self.logCollapsed;
+    self.logCardBox.hidden = self.logCollapsed;
+    self.logCardHeightConstraint.active = !self.logCollapsed;
+    [self updateConsoleToggleButton];
+    [self.window layoutIfNeeded];
+}
+
+- (void)updateConsoleToggleButton {
+    if (self.logCollapsed) {
+        self.consoleToggleButton.contentTintColor = [NSColor secondaryLabelColor];
+        if (@available(macOS 11.0, *)) {
+            self.consoleToggleButton.image = [NSImage imageWithSystemSymbolName:@"terminal" accessibilityDescription:@"Console"];
+        }
+    } else {
+        self.consoleToggleButton.contentTintColor = [NSColor controlAccentColor];
+        if (@available(macOS 11.0, *)) {
+            self.consoleToggleButton.image = [NSImage imageWithSystemSymbolName:@"terminal.fill" accessibilityDescription:@"Console"];
+        }
+    }
+}
+
+- (void)focusSearchField:(id)sender {
+    (void)sender;
+    if (self.operationPicker.selectedSegment != 8) {
+        self.operationPicker.selectedSegment = 8;
+        [self operationChanged:self.operationPicker];
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self.docsController focusSearchField];
+    });
+}
+
+- (void)updateConnectionStatusBar {
+    if (self.screenController.liveSyncActive || self.telemetryController.engine.isRunning) {
+        self.statusLEDView.layer.backgroundColor = [NSColor colorWithSRGBRed:0.16 green:0.82 blue:0.25 alpha:1.0].CGColor;
+        self.connectionStatusLabel.stringValue = @"Live Streaming";
+        self.connectionStatusLabel.textColor = [NSColor colorWithSRGBRed:0.12 green:0.68 blue:0.22 alpha:1.0];
+        self.statusPillBox.fillColor = [NSColor colorWithSRGBRed:0.16 green:0.82 blue:0.25 alpha:0.14];
+        self.statusPillBox.borderColor = [NSColor colorWithSRGBRed:0.16 green:0.82 blue:0.25 alpha:0.40];
+    } else if (self.hasPorts) {
+        self.statusLEDView.layer.backgroundColor = [NSColor colorWithSRGBRed:0.20 green:0.75 blue:0.35 alpha:1.0].CGColor;
+        self.connectionStatusLabel.stringValue = @"Radio Ready";
+        self.connectionStatusLabel.textColor = [NSColor labelColor];
+        self.statusPillBox.fillColor = [NSColor colorWithSRGBRed:0.20 green:0.75 blue:0.35 alpha:0.12];
+        self.statusPillBox.borderColor = [NSColor colorWithSRGBRed:0.20 green:0.75 blue:0.35 alpha:0.35];
+    } else {
+        self.statusLEDView.layer.backgroundColor = [NSColor systemGrayColor].CGColor;
+        self.connectionStatusLabel.stringValue = @"Disconnected";
+        self.connectionStatusLabel.textColor = [NSColor secondaryLabelColor];
+        self.statusPillBox.fillColor = [NSColor colorWithCalibratedWhite:0.5 alpha:0.08];
+        self.statusPillBox.borderColor = [NSColor colorWithCalibratedWhite:0.5 alpha:0.22];
+    }
+}
+
 - (void)operationChanged:(id)sender {
     (void)sender;
     if (self.busy) return;
@@ -558,6 +1169,28 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     BOOL isDriver = (operation == 7);
     BOOL isDocs = (operation == 8);
     BOOL isFeedback = (operation == 9);
+
+    for (TX500SidebarButton *btn in self.sidebarItems) {
+        btn.isSelected = (btn.operationTag == operation);
+    }
+
+    static NSDictionary<NSNumber *, NSString *> *titles = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        titles = @{
+            @0: @"Firmware Update (BL20 Bootloader)",
+            @1: @"Time Synchronization (CAT TM)",
+            @2: @"Real-Time Telemetry & RF Meters",
+            @3: @"Radio Screen & Live Display",
+            @4: @"Lab599 CAT Studio & Diagnostics",
+            @5: @"Transceiver Configuration & Backup",
+            @6: @"Memory Channel Manager (100 Channels)",
+            @7: @"FTDI D2XX Driver Installation",
+            @8: @"Documentation & Official Manuals",
+            @9: @"Feedback & Bug Reports"
+        };
+    });
+    self.sectionTitleLabel.stringValue = titles[@(operation)] ?: @"Lab599 Utility";
 
     if (!isTelemetry && self.telemetryController.engine.isRunning) {
         [self.telemetryController stopMonitoring];
@@ -588,7 +1221,6 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     self.feedbackController.view.hidden = !isFeedback;
     if (isFeedback) [self.feedbackController refreshDiagnostics];
 
-    self.portRow.hidden = (isDriver || isDocs || isFeedback);
     self.firmwareRow.hidden = !isFW;
     self.radioPreviewBox.hidden = !isFW;
     self.powerSafetyBox.hidden = !isFW;
@@ -596,10 +1228,12 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
 
     self.updateButton.hidden = !isFW;
     self.syncButton.hidden = !isSync;
+    self.actionRow.hidden = (!isFW && !isSync);
     self.updateButton.keyEquivalent = isFW ? @"\r" : @"";
     self.syncButton.keyEquivalent = isSync ? @"\r" : @"";
     self.progressBar.doubleValue = 0;
     self.progressBar.hidden = (isTelemetry || isScreen || isFeedback);
+    self.statusLabel.hidden = (isTelemetry || isScreen || isFeedback);
 
     if (isFW) {
         self.instructions.stringValue = @"Connect the CAT-USB cable and stable external power. Close other radio applications. On your transceiver (TX-500 Discovery / TX-500MP), hold the third top function key while pressing POWER. Start only when the screen displays \"The loader is waiting...\". Keep power and cable connected until completion.";
@@ -633,6 +1267,7 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
         self.statusLabel.stringValue = @"Ready to prepare and submit feedback to GitHub Issues.";
     }
     [self updateClockPreview:nil];
+    [self updateConnectionStatusBar];
 }
 
 - (void)setToolsBusy:(BOOL)busy {
@@ -642,6 +1277,10 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     self.portMenu.enabled = !busy && self.hasPorts;
     self.updateButton.enabled = !busy && self.hasPorts && self.firmwareURL != nil;
     self.syncButton.enabled = !busy && self.hasPorts;
+    self.outdoorModeButton.enabled = !busy;
+    for (TX500SidebarButton *btn in self.sidebarItems) {
+        btn.enabled = !busy;
+    }
     if (busy) {
         self.activity = [NSProcessInfo.processInfo beginActivityWithOptions:(NSActivityUserInitiated | NSActivityIdleSystemSleepDisabled) reason:@"Lab599 Utility radio operation"];
     } else {

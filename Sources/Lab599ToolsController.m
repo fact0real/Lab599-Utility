@@ -553,8 +553,8 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
         @"Panadapter & Display"
     ]];
     self.settingsCategoryFilter.target = self;
-    self.settingsCategoryFilter.action = @selector(settingsCategoryFilterChanged:);
-    [self.controls addObjectsFromArray:@[self.settingsCategoryFilter, self.settingsExportJson, self.settingsImportJson]];
+    self.settingsCategoryFilter.action = @selector(settingsCategoryChanged:);
+    [self.controls addObject:self.settingsCategoryFilter];
 
     NSView *settingsRow2 = Stack(@[
         Label(@"Category:"),
@@ -570,13 +570,18 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
     self.settingsTable.rowHeight = 22;
     self.settingsTable.usesAlternatingRowBackgroundColors = YES;
 
-    NSArray *sTitles = @[@"Category", @"Parameter / Setting", @"Addr", @"Value", @"Range / Unit", @"Details"];
-    NSArray *sIds = @[@"category", @"name", @"address", @"value", @"unit", @"details"];
-    int sWidths[] = {120, 190, 55, 140, 110, 200};
-    for (NSUInteger i = 0; i < sTitles.count; i++) {
-        NSTableColumn *c = [[NSTableColumn alloc] initWithIdentifier:sIds[i]];
-        c.title = sTitles[i];
-        c.width = sWidths[i];
+    NSArray *settingCols = @[
+        @{@"id": @"category", @"title": @"Category", @"width": @120},
+        @{@"id": @"name", @"title": @"Parameter / Setting", @"width": @180},
+        @{@"id": @"offset", @"title": @"Addr", @"width": @60},
+        @{@"id": @"value", @"title": @"Value", @"width": @60},
+        @{@"id": @"range", @"title": @"Range / Unit", @"width": @120},
+        @{@"id": @"desc", @"title": @"Details", @"width": @260}
+    ];
+    for (NSDictionary *col in settingCols) {
+        NSTableColumn *c = [[NSTableColumn alloc] initWithIdentifier:col[@"id"]];
+        c.title = col[@"title"];
+        c.width = [col[@"width"] doubleValue];
         c.editable = NO;
         [self.settingsTable addTableColumn:c];
     }
@@ -585,7 +590,7 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
     settingsScroll.hasVerticalScroller = YES;
     settingsScroll.borderType = NSBezelBorder;
     settingsScroll.documentView = self.settingsTable;
-    [settingsScroll.heightAnchor constraintEqualToConstant:340].active = YES;
+    [settingsScroll.heightAnchor constraintEqualToConstant:230].active = YES;
 
     self.settingEditLabel = Label(@"Select a setting:");
     self.settingEditLabel.font = [NSFont systemFontOfSize:12 weight:NSFontWeightMedium];
@@ -608,8 +613,7 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
         settingsRow2,
         settingsScroll,
         settingsEditorRow,
-        self.settingsInfo,
-        Label(@"Compatible with official Settings utility. Changes update the exact 1024-byte block in memory.")
+        self.settingsInfo
     ], YES);
 
     [settingsScroll.widthAnchor constraintEqualToAnchor:settings.widthAnchor].active = YES;
@@ -2121,3 +2125,4 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
 }
 
 @end
+

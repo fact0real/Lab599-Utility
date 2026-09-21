@@ -11,6 +11,8 @@
 #import "TX500ScreenCaptureController.h"
 #import "TX500CWStationController.h"
 #import "TX500AudioMonitorController.h"
+#import "TX500FT8StationController.h"
+#import "TX500FT8AudioEngine.h"
 
 static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
                                     NSTimeInterval timeout, NSError **error) {
@@ -178,6 +180,7 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
 @property(nonatomic, strong) TX500ScreenCaptureController *screenController;
 @property(nonatomic, strong) TX500CWStationController *cwStationController;
 @property(nonatomic, strong) TX500AudioMonitorController *audioMonitorController;
+@property(nonatomic, strong) TX500FT8StationController *ft8StationController;
 @property(nonatomic, strong) Lab599SerialPort *cwSerialPort;
 
 // Modern Sidebar & Card UI Properties
@@ -214,6 +217,18 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
 
 // About Window
 @property(nonatomic, strong) NSWindow *aboutWindow;
+
+// Preferences Window
+@property(nonatomic, strong) NSWindow *preferencesWindow;
+@property(nonatomic, strong) NSTextField *prefCallsignField;
+@property(nonatomic, strong) NSTextField *prefGridField;
+@property(nonatomic, strong) NSTextField *prefOperatorNameField;
+@property(nonatomic, strong) NSButton *prefUtcCheckbox;
+@property(nonatomic, strong) NSPopUpButton *prefDefaultBandPopup;
+@property(nonatomic, strong) NSButton *prefLogQsoCheckbox;
+@property(nonatomic, strong) NSButton *prefLogDecodesCheckbox;
+@property(nonatomic, strong) NSPopUpButton *prefThemePopup;
+@property(nonatomic, strong) NSTextField *prefSWRThresholdField;
 
 // Radio Hardware Preview
 @property(nonatomic, strong) NSBox *radioPreviewBox;
@@ -254,6 +269,15 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     (void)notification;
+
+    // Apply saved theme
+    NSInteger savedTheme = [[NSUserDefaults standardUserDefaults] integerForKey:@"TX500_AppTheme"];
+    if (savedTheme == 1) {
+        [NSApp setAppearance:[NSAppearance appearanceNamed:NSAppearanceNameAqua]];
+    } else if (savedTheme == 2) {
+        [NSApp setAppearance:[NSAppearance appearanceNamed:NSAppearanceNameDarkAqua]];
+    }
+
     self.window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 1160, 860)
         styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable)
         backing:NSBackingStoreBuffered defer:NO];
@@ -269,6 +293,9 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     NSMenu *appMenu = [NSMenu new];
     NSMenuItem *aboutItem = [appMenu addItemWithTitle:@"About Lab599 Utility" action:@selector(showAboutWindow:) keyEquivalent:@""];
     aboutItem.target = self;
+    [appMenu addItem:[NSMenuItem separatorItem]];
+    NSMenuItem *prefsItem = [appMenu addItemWithTitle:@"Preferences…" action:@selector(showPreferencesWindow:) keyEquivalent:@","];
+    prefsItem.target = self;
     [appMenu addItem:[NSMenuItem separatorItem]];
     [appMenu addItemWithTitle:@"Hide Lab599 Utility" action:@selector(hide:) keyEquivalent:@"h"];
     NSMenuItem *hideOthers = [appMenu addItemWithTitle:@"Hide Others" action:@selector(hideOtherApplications:) keyEquivalent:@"h"];
@@ -314,6 +341,8 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     NSMenuItem *outdoorItem = [viewMenu addItemWithTitle:@"Toggle Field Mode" action:@selector(toggleOutdoorMode:) keyEquivalent:@"F"];
     outdoorItem.target = self;
     [viewMenu addItem:[NSMenuItem separatorItem]];
+    NSMenuItem *ft8StationItem = [viewMenu addItemWithTitle:@"FT8 Digital Mode Studio" action:@selector(selectFT8StationTab:) keyEquivalent:@"8"];
+    ft8StationItem.target = self;
     NSMenuItem *cwStationItem = [viewMenu addItemWithTitle:@"CW Station & QSO Studio" action:@selector(selectCWStationTab:) keyEquivalent:@"K"];
     cwStationItem.target = self;
     viewItem.submenu = viewMenu;
@@ -336,7 +365,7 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
 
     // Setup legacy operation picker for CLI arguments and underlying state
     self.operationPicker = [NSSegmentedControl segmentedControlWithLabels:@[
-        @"Firmware Update", @"Time Sync", @"Telemetry", @"Radio Screen", @"CAT Test", @"Settings", @"Memory", @"Driver Install", @"Documentation", @"Feedback & Suggestion", @"CW Station", @"Live Audio (AD-508)"
+        @"Firmware Update", @"Time Sync", @"Telemetry", @"Radio Screen", @"CAT Test", @"Settings", @"Memory", @"Driver Install", @"Documentation", @"Feedback & Suggestion", @"CW Station", @"Live Audio (AD-508)", @"FT8 Digital Mode"
     ] trackingMode:NSSegmentSwitchTrackingSelectOne target:self action:@selector(operationChanged:)];
     self.operationPicker.selectedSegment = 0;
     self.operationPicker.hidden = YES;
@@ -429,9 +458,10 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     TX500SidebarButton *btnFeedback = [[TX500SidebarButton alloc] initWithTitle:@"Feedback" iconName:@"bubble.left.and.bubble.right" tag:9 target:self action:@selector(sidebarItemClicked:)];
     TX500SidebarButton *btnCW = [[TX500SidebarButton alloc] initWithTitle:@"CW Station" iconName:@"waveform" tag:10 target:self action:@selector(sidebarItemClicked:)];
     TX500SidebarButton *btnAudio = [[TX500SidebarButton alloc] initWithTitle:@"Live Audio (AD-508)" iconName:@"headphones" tag:11 target:self action:@selector(sidebarItemClicked:)];
+    TX500SidebarButton *btnFT8 = [[TX500SidebarButton alloc] initWithTitle:@"FT8 Digital Mode" iconName:@"dot.radiowaves.left.and.right" tag:12 target:self action:@selector(sidebarItemClicked:)];
 
     [self.sidebarItems addObjectsFromArray:@[
-        btnFw, btnTime, btnTelemetry, btnScreen, btnCat, btnSettings, btnMemory, btnDriver, btnDocs, btnFeedback, btnCW, btnAudio
+        btnFw, btnTime, btnTelemetry, btnScreen, btnCat, btnSettings, btnMemory, btnDriver, btnDocs, btnFeedback, btnCW, btnAudio, btnFT8
     ]];
 
     for (TX500SidebarButton *b in self.sidebarItems) {
@@ -456,7 +486,7 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     NSStackView *sidebarStack = [NSStackView stackViewWithViews:@[
         brandHeaderStack,
         makeSectionHeader(@"RADIO & LIVE"),
-        btnAudio, btnCW, btnScreen, btnTelemetry, btnCat,
+        btnFT8, btnCW, btnAudio, btnScreen, btnTelemetry, btnCat,
         makeSectionHeader(@"CONFIGURATION"),
         btnTime, btnSettings, btnMemory,
         makeSectionHeader(@"FIRMWARE & DRIVER"),
@@ -874,6 +904,34 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     };
     self.audioMonitorController.view.hidden = YES;
 
+    // FT8 Digital Mode Controller (AD-508 CoreAudio DSP, Pure C99 FT8 Modem & Autonomous Co-Pilot)
+    self.ft8StationController = [TX500FT8StationController new];
+    self.ft8StationController.selectedPortProvider = ^NSString * { return weakSelf.hasPorts ? weakSelf.portMenu.selectedItem.title : nil; };
+    self.ft8StationController.logHandler = ^(NSString *message) { [weakSelf appendLog:message]; };
+    self.ft8StationController.serialCommandSender = ^BOOL(NSString *catCommand) {
+        if (!weakSelf.hasPorts) return NO;
+        NSString *portPath = weakSelf.portMenu.selectedItem.title;
+        if (!portPath || ![portPath hasPrefix:@"/dev/cu."]) return NO;
+        if (!weakSelf.cwSerialPort) {
+            NSError *err = nil;
+            weakSelf.cwSerialPort = [Lab599SerialPort openPath:portPath speed:B9600 error:&err];
+            if (!weakSelf.cwSerialPort) return NO;
+        }
+        NSData *cmdData = [catCommand dataUsingEncoding:NSASCIIStringEncoding];
+        NSError *writeErr = nil;
+        BOOL ok = [weakSelf.cwSerialPort writeData:cmdData timeout:0.5 cancellation:nil error:&writeErr];
+        if (!ok) {
+            [weakSelf.cwSerialPort close];
+            weakSelf.cwSerialPort = nil;
+        }
+        return ok;
+    };
+    self.ft8StationController.stationStateChangedHandler = ^(BOOL isMonitoring) {
+        (void)isMonitoring;
+        [weakSelf updateConnectionStatusBar];
+    };
+    self.ft8StationController.view.hidden = YES;
+
     // Feature Card Container
     NSBox *featureCardBox = [NSBox new];
     featureCardBox.titlePosition = NSNoTitle;
@@ -891,7 +949,7 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
 
     NSStackView *featureStack = [NSStackView stackViewWithViews:@[
         fileRow, self.radioPreviewBox, self.powerSafetyBox, timeRow,
-        self.audioMonitorController.view, self.cwStationController.view, self.telemetryController.view, self.screenController.view, self.tools.view,
+        self.audioMonitorController.view, self.cwStationController.view, self.ft8StationController.view, self.telemetryController.view, self.screenController.view, self.tools.view,
         self.driverController.view, self.docsController.view, self.feedbackController.view,
         self.progressBar, self.statusLabel,
         self.actionRow,
@@ -914,6 +972,7 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
         [self.powerSafetyBox.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor],
         [self.audioMonitorController.view.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor],
         [self.cwStationController.view.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor],
+        [self.ft8StationController.view.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor],
         [self.telemetryController.view.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor],
         [self.screenController.view.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor],
         [self.tools.view.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor],
@@ -1048,6 +1107,10 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
         self.operationPicker.selectedSegment = 4;
         [self operationChanged:self.operationPicker];
     }
+    if ([[NSProcessInfo processInfo].arguments containsObject:@"--settings"]) {
+        self.operationPicker.selectedSegment = 5;
+        [self operationChanged:self.operationPicker];
+    }
     if ([[NSProcessInfo processInfo].arguments containsObject:@"--docs"]) {
         self.operationPicker.selectedSegment = 8;
         [self operationChanged:self.operationPicker];
@@ -1064,6 +1127,13 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
         self.operationPicker.selectedSegment = 11;
         [self operationChanged:self.operationPicker];
     }
+    if ([[NSProcessInfo processInfo].arguments containsObject:@"--ft8"] || [[NSProcessInfo processInfo].arguments containsObject:@"--ft8-station"]) {
+        self.operationPicker.selectedSegment = 12;
+        [self operationChanged:self.operationPicker];
+        if ([[NSProcessInfo processInfo].arguments containsObject:@"--simulation"]) {
+            [self.ft8StationController setSimulationEnabled:YES];
+        }
+    }
     if ([[NSProcessInfo processInfo].arguments containsObject:@"--field-mode"]) {
         [self toggleOutdoorMode:nil];
     }
@@ -1075,13 +1145,11 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     for (NSUInteger i = 0; i < [NSProcessInfo processInfo].arguments.count; i++) {
         if ([[NSProcessInfo processInfo].arguments[i] isEqualToString:@"--screenshot-window"] && i + 1 < [NSProcessInfo processInfo].arguments.count) {
             NSString *outPath = [NSProcessInfo processInfo].arguments[i + 1];
-            if (!self.outdoorModeActive) {
-                self.window.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
-            }
-            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                [self.window layoutIfNeeded];
-                [self.window.contentView layoutSubtreeIfNeeded];
-                NSRect rect = self.window.contentView.bounds;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                NSWindow *targetWin = (self.preferencesWindow && self.preferencesWindow.isVisible) ? self.preferencesWindow : self.window;
+                [targetWin layoutIfNeeded];
+                [targetWin.contentView layoutSubtreeIfNeeded];
+                NSRect rect = targetWin.contentView.bounds;
                 NSBitmapImageRep *rep = [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL
                                                                                 pixelsWide:(NSInteger)rect.size.width
                                                                                 pixelsHigh:(NSInteger)rect.size.height
@@ -1095,13 +1163,9 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
                 NSGraphicsContext *ctx = [NSGraphicsContext graphicsContextWithBitmapImageRep:rep];
                 [NSGraphicsContext saveGraphicsState];
                 [NSGraphicsContext setCurrentContext:ctx];
-                if (self.outdoorModeActive) {
-                    [[NSColor colorWithCalibratedWhite:0.94 alpha:1.0] setFill];
-                } else {
-                    [[NSColor colorWithCalibratedRed:0.13 green:0.13 blue:0.14 alpha:1.0] setFill];
-                }
+                [[NSColor windowBackgroundColor] setFill];
                 NSRectFill(rect);
-                [self.window.contentView displayRectIgnoringOpacity:rect inContext:ctx];
+                [targetWin.contentView displayRectIgnoringOpacity:rect inContext:ctx];
                 [NSGraphicsContext restoreGraphicsState];
                 NSData *png = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
                 [png writeToFile:outPath atomically:YES];
@@ -1128,6 +1192,13 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     [NSApp activateIgnoringOtherApps:YES];
     if ([[NSProcessInfo processInfo].arguments containsObject:@"--about"]) {
         [self showAboutWindow:nil];
+    }
+    if ([[NSProcessInfo processInfo].arguments containsObject:@"--preferences"] ||
+        [[NSProcessInfo processInfo].arguments containsObject:@"--prefs"]) {
+        [self showPreferencesWindow:nil];
+    }
+    if ([[NSProcessInfo processInfo].arguments containsObject:@"--ft8"]) {
+        [self selectFT8StationTab:nil];
     }
 }
 
@@ -1191,6 +1262,12 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
 - (void)selectCWStationTab:(id)sender {
     (void)sender;
     self.operationPicker.selectedSegment = 10;
+    [self operationChanged:self.operationPicker];
+}
+
+- (void)selectFT8StationTab:(id)sender {
+    (void)sender;
+    self.operationPicker.selectedSegment = 12;
     [self operationChanged:self.operationPicker];
 }
 
@@ -1273,12 +1350,20 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
 }
 
 - (void)updateConnectionStatusBar {
+    BOOL ft8Live       = self.ft8StationController.audioEngine.isMonitoring;
     BOOL audioLive     = self.audioMonitorController.engine.isMonitoring;
     BOOL screenLive    = self.screenController.liveSyncActive;
     BOOL telemetryLive = self.telemetryController.engine.isRunning;
     BOOL cwListening   = self.cwStationController.decoder.isListening;
 
-    if (audioLive) {
+    if (ft8Live) {
+        // FT8 Digital Mode active — vivid purple/magenta
+        self.statusLEDView.layer.backgroundColor = [NSColor colorWithSRGBRed:0.75 green:0.25 blue:0.95 alpha:1.0].CGColor;
+        self.connectionStatusLabel.stringValue = self.ft8StationController.audioEngine.isTransmitting ? @"FT8 Transmitting" : @"FT8 Monitoring";
+        self.connectionStatusLabel.textColor = [NSColor colorWithSRGBRed:0.70 green:0.20 blue:0.90 alpha:1.0];
+        self.statusPillBox.fillColor   = [NSColor colorWithSRGBRed:0.75 green:0.25 blue:0.95 alpha:0.14];
+        self.statusPillBox.borderColor = [NSColor colorWithSRGBRed:0.75 green:0.25 blue:0.95 alpha:0.40];
+    } else if (audioLive) {
         // Live Audio Monitoring via AD-508 active — vivid green
         self.statusLEDView.layer.backgroundColor = [NSColor colorWithSRGBRed:0.10 green:0.85 blue:0.45 alpha:1.0].CGColor;
         self.connectionStatusLabel.stringValue = @"Live Audio (AD-508)";
@@ -1337,6 +1422,7 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     BOOL isFeedback = (operation == 9);
     BOOL isCWStation = (operation == 10);
     BOOL isAudio = (operation == 11);
+    BOOL isFT8 = (operation == 12);
 
     for (TX500SidebarButton *btn in self.sidebarItems) {
         btn.isSelected = (btn.operationTag == operation);
@@ -1357,7 +1443,8 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
             @8: @"Documentation & Official Manuals",
             @9: @"Feedback & Bug Reports",
             @10: @"CW Station & Semi-Automated QSO Studio (AD-508 & CAT)",
-            @11: @"AD-508 Live Audio Monitor & DSP Studio"
+            @11: @"AD-508 Live Audio Monitor & DSP Studio",
+            @12: @"FT8 Digital Mode Studio & Autonomous Operating Co-Pilot"
         };
     });
     self.sectionTitleLabel.stringValue = titles[@(operation)] ?: @"Lab599 Utility";
@@ -1374,7 +1461,10 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     if (!isAudio) {
         [self.audioMonitorController pauseTabUI];
     }
-    if (!isCWStation && !isAudio) {
+    if (!isFT8) {
+        [self.ft8StationController stopStation];
+    }
+    if (!isCWStation && !isAudio && !isFT8) {
         if (self.cwSerialPort) {
             [self.cwSerialPort close];
             self.cwSerialPort = nil;
@@ -1424,6 +1514,39 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
                         }
                         dispatch_async(dispatch_get_main_queue(), ^{
                             [weakSelf.cwStationController updateFrequencyHz:freqHz mode:modeStr];
+                        });
+                    }
+                });
+            }
+        }
+    }
+
+    self.ft8StationController.view.hidden = !isFT8;
+    if (isFT8) {
+        if (self.hasPorts) {
+            NSString *portPath = self.portMenu.selectedItem.title;
+            if (portPath && [portPath hasPrefix:@"/dev/cu."]) {
+                __weak typeof(self) weakSelf = self;
+                dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                    NSError *err = nil;
+                    Lab599SerialPort *queryPort = [Lab599SerialPort openPath:portPath speed:B9600 error:&err];
+                    if (queryPort) {
+                        NSString *faReply = Lab599ReadCATFrame(queryPort, @"FA;", 0.5, nil);
+                        NSString *mdReply = Lab599ReadCATFrame(queryPort, @"MD;", 0.5, nil);
+                        [queryPort close];
+
+                        uint64_t freqHz = 14074000;
+                        if ([faReply hasPrefix:@"FA"] && faReply.length >= 13) {
+                            freqHz = (uint64_t)[[faReply substringWithRange:NSMakeRange(2, 11)] longLongValue];
+                        }
+                        NSString *modeStr = @"DIG";
+                        if ([mdReply hasPrefix:@"MD"] && mdReply.length >= 3) {
+                            unichar mCode = [mdReply characterAtIndex:2];
+                            if (mCode == '6') modeStr = @"DIG";
+                            else if (mCode == '8') modeStr = @"DIG-R";
+                        }
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            [weakSelf.ft8StationController updateFrequencyHz:freqHz mode:modeStr];
                         });
                     }
                 });
@@ -2243,6 +2366,465 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     [[NSWorkspace sharedWorkspace] openURL:url];
 }
 
+#pragma mark - Preferences Window
+
+- (void)showPreferencesWindow:(id)sender {
+    (void)sender;
+    if (!self.preferencesWindow) {
+        self.preferencesWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 580, 840)
+            styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable)
+            backing:NSBackingStoreBuffered defer:NO];
+        self.preferencesWindow.title = @"Preferences";
+        self.preferencesWindow.releasedWhenClosed = NO;
+        [self.preferencesWindow center];
+
+        NSInteger savedTheme = [[NSUserDefaults standardUserDefaults] integerForKey:@"TX500_AppTheme"];
+        if (savedTheme == 1 || self.outdoorModeActive) {
+            self.preferencesWindow.appearance = [NSAppearance appearanceNamed:NSAppearanceNameAqua];
+        } else if (savedTheme == 2) {
+            self.preferencesWindow.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+        } else {
+            self.preferencesWindow.appearance = nil; // System
+        }
+
+        // Header Stack
+        NSTextField *titleLabel = [self label:@"Station & Operating Preferences"];
+        titleLabel.font = [NSFont systemFontOfSize:18 weight:NSFontWeightBold];
+
+        NSTextField *subLabel = [self label:@"Configure operator identity, time format, and automatic logging defaults."];
+        subLabel.font = [NSFont systemFontOfSize:12 weight:NSFontWeightRegular];
+        subLabel.textColor = NSColor.secondaryLabelColor;
+
+        // --- Card 1: Operator & Station Identity ---
+        NSBox *stationBox = [NSBox new];
+        stationBox.boxType = NSBoxCustom;
+        stationBox.cornerRadius = 8.0;
+        stationBox.borderWidth = 1.0;
+        stationBox.borderColor = [NSColor separatorColor];
+        stationBox.fillColor = [NSColor controlBackgroundColor];
+        stationBox.translatesAutoresizingMaskIntoConstraints = NO;
+
+        NSTextField *stTitle = [self label:@"OPERATOR & STATION IDENTITY"];
+        stTitle.font = [NSFont systemFontOfSize:11 weight:NSFontWeightBold];
+        stTitle.textColor = [NSColor colorWithCalibratedRed:0.12 green:0.50 blue:0.90 alpha:1.0];
+
+        NSTextField *callLbl = [self label:@"Callsign:"];
+        callLbl.font = [NSFont systemFontOfSize:12 weight:NSFontWeightMedium];
+        self.prefCallsignField = [NSTextField textFieldWithString:@""];
+        self.prefCallsignField.placeholderString = @"e.g. EP2AES";
+        self.prefCallsignField.translatesAutoresizingMaskIntoConstraints = NO;
+
+        NSTextField *gridLbl = [self label:@"Maidenhead Grid:"];
+        gridLbl.font = [NSFont systemFontOfSize:12 weight:NSFontWeightMedium];
+        self.prefGridField = [NSTextField textFieldWithString:@""];
+        self.prefGridField.placeholderString = @"e.g. KM35";
+        self.prefGridField.translatesAutoresizingMaskIntoConstraints = NO;
+
+        NSTextField *nameLbl = [self label:@"Operator Name:"];
+        nameLbl.font = [NSFont systemFontOfSize:12 weight:NSFontWeightMedium];
+        self.prefOperatorNameField = [NSTextField textFieldWithString:@""];
+        self.prefOperatorNameField.placeholderString = @"e.g. Amir (Optional)";
+        self.prefOperatorNameField.translatesAutoresizingMaskIntoConstraints = NO;
+
+        NSTextField *stDesc = [NSTextField wrappingLabelWithString:@"These station credentials are broadcast in FT8 CQ frames, CW macros, and recorded as MY_CALLSIGN in all exported ADIF log entries."];
+        stDesc.font = [NSFont systemFontOfSize:11];
+        stDesc.textColor = NSColor.tertiaryLabelColor;
+        stDesc.translatesAutoresizingMaskIntoConstraints = NO;
+
+        NSView *stationForm = [NSView new];
+        stationForm.translatesAutoresizingMaskIntoConstraints = NO;
+        [stationForm addSubview:callLbl];
+        [stationForm addSubview:self.prefCallsignField];
+        [stationForm addSubview:gridLbl];
+        [stationForm addSubview:self.prefGridField];
+        [stationForm addSubview:nameLbl];
+        [stationForm addSubview:self.prefOperatorNameField];
+
+        [NSLayoutConstraint activateConstraints:@[
+            [callLbl.leadingAnchor constraintEqualToAnchor:stationForm.leadingAnchor],
+            [callLbl.centerYAnchor constraintEqualToAnchor:self.prefCallsignField.centerYAnchor],
+            [callLbl.widthAnchor constraintEqualToConstant:125],
+
+            [self.prefCallsignField.leadingAnchor constraintEqualToAnchor:callLbl.trailingAnchor constant:8],
+            [self.prefCallsignField.trailingAnchor constraintEqualToAnchor:stationForm.trailingAnchor],
+            [self.prefCallsignField.topAnchor constraintEqualToAnchor:stationForm.topAnchor],
+            [self.prefCallsignField.heightAnchor constraintEqualToConstant:24],
+
+            [gridLbl.leadingAnchor constraintEqualToAnchor:stationForm.leadingAnchor],
+            [gridLbl.centerYAnchor constraintEqualToAnchor:self.prefGridField.centerYAnchor],
+            [gridLbl.widthAnchor constraintEqualToConstant:125],
+
+            [self.prefGridField.leadingAnchor constraintEqualToAnchor:gridLbl.trailingAnchor constant:8],
+            [self.prefGridField.trailingAnchor constraintEqualToAnchor:stationForm.trailingAnchor],
+            [self.prefGridField.topAnchor constraintEqualToAnchor:self.prefCallsignField.bottomAnchor constant:8],
+            [self.prefGridField.heightAnchor constraintEqualToConstant:24],
+
+            [nameLbl.leadingAnchor constraintEqualToAnchor:stationForm.leadingAnchor],
+            [nameLbl.centerYAnchor constraintEqualToAnchor:self.prefOperatorNameField.centerYAnchor],
+            [nameLbl.widthAnchor constraintEqualToConstant:125],
+
+            [self.prefOperatorNameField.leadingAnchor constraintEqualToAnchor:nameLbl.trailingAnchor constant:8],
+            [self.prefOperatorNameField.trailingAnchor constraintEqualToAnchor:stationForm.trailingAnchor],
+            [self.prefOperatorNameField.topAnchor constraintEqualToAnchor:self.prefGridField.bottomAnchor constant:8],
+            [self.prefOperatorNameField.heightAnchor constraintEqualToConstant:24],
+            [self.prefOperatorNameField.bottomAnchor constraintEqualToAnchor:stationForm.bottomAnchor]
+        ]];
+
+        NSStackView *stationStack = [NSStackView stackViewWithViews:@[stTitle, stationForm, stDesc]];
+        stationStack.orientation = NSUserInterfaceLayoutOrientationVertical;
+        stationStack.alignment = NSLayoutAttributeLeading;
+        stationStack.spacing = 8;
+        stationStack.translatesAutoresizingMaskIntoConstraints = NO;
+        [stationBox.contentView addSubview:stationStack];
+
+        [NSLayoutConstraint activateConstraints:@[
+            [stationStack.leadingAnchor constraintEqualToAnchor:stationBox.contentView.leadingAnchor constant:14],
+            [stationStack.trailingAnchor constraintEqualToAnchor:stationBox.contentView.trailingAnchor constant:-14],
+            [stationStack.topAnchor constraintEqualToAnchor:stationBox.contentView.topAnchor constant:12],
+            [stationStack.bottomAnchor constraintEqualToAnchor:stationBox.contentView.bottomAnchor constant:-12],
+            [stationForm.widthAnchor constraintEqualToAnchor:stationStack.widthAnchor],
+            [stDesc.widthAnchor constraintEqualToAnchor:stationStack.widthAnchor]
+        ]];
+
+        // --- Card 2: Time Format & Band Defaults ---
+        NSBox *timeBox = [NSBox new];
+        timeBox.boxType = NSBoxCustom;
+        timeBox.cornerRadius = 8.0;
+        timeBox.borderWidth = 1.0;
+        timeBox.borderColor = [NSColor separatorColor];
+        timeBox.fillColor = [NSColor controlBackgroundColor];
+        timeBox.translatesAutoresizingMaskIntoConstraints = NO;
+
+        NSTextField *timeTitle = [self label:@"TIME FORMAT & BAND DEFAULTS"];
+        timeTitle.font = [NSFont systemFontOfSize:11 weight:NSFontWeightBold];
+        timeTitle.textColor = [NSColor colorWithCalibratedRed:0.12 green:0.50 blue:0.90 alpha:1.0];
+
+        self.prefUtcCheckbox = [NSButton checkboxWithTitle:@"Display Time in UTC (Coordinated Universal Time / Zulu)"
+                                                    target:nil
+                                                    action:nil];
+        self.prefUtcCheckbox.font = [NSFont systemFontOfSize:12 weight:NSFontWeightMedium];
+        self.prefUtcCheckbox.translatesAutoresizingMaskIntoConstraints = NO;
+
+        NSTextField *utcDesc = [NSTextField wrappingLabelWithString:@"When checked, FT8 decodes table, timestamps, and QSO entries reflect UTC. When unchecked, your local system time is displayed."];
+        utcDesc.font = [NSFont systemFontOfSize:11];
+        utcDesc.textColor = NSColor.tertiaryLabelColor;
+        utcDesc.translatesAutoresizingMaskIntoConstraints = NO;
+
+        NSTextField *bandLbl = [self label:@"Default FT8 Band:"];
+        bandLbl.font = [NSFont systemFontOfSize:12 weight:NSFontWeightMedium];
+        self.prefDefaultBandPopup = [NSPopUpButton new];
+        self.prefDefaultBandPopup.translatesAutoresizingMaskIntoConstraints = NO;
+        [self.prefDefaultBandPopup addItemsWithTitles:@[
+            @"20m (14.074 MHz)",
+            @"40m (7.074 MHz)",
+            @"15m (21.074 MHz)",
+            @"10m (28.074 MHz)",
+            @"30m (10.136 MHz)",
+            @"80m (3.573 MHz)",
+            @"6m (50.313 MHz)"
+        ]];
+
+        NSStackView *bandRow = [NSStackView stackViewWithViews:@[bandLbl, self.prefDefaultBandPopup]];
+        bandRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+        bandRow.alignment = NSLayoutAttributeCenterY;
+        bandRow.spacing = 8;
+        bandRow.translatesAutoresizingMaskIntoConstraints = NO;
+
+        NSStackView *timeStack = [NSStackView stackViewWithViews:@[timeTitle, self.prefUtcCheckbox, utcDesc, bandRow]];
+        timeStack.orientation = NSUserInterfaceLayoutOrientationVertical;
+        timeStack.alignment = NSLayoutAttributeLeading;
+        timeStack.spacing = 8;
+        timeStack.translatesAutoresizingMaskIntoConstraints = NO;
+        [timeBox.contentView addSubview:timeStack];
+
+        [NSLayoutConstraint activateConstraints:@[
+            [timeStack.leadingAnchor constraintEqualToAnchor:timeBox.contentView.leadingAnchor constant:14],
+            [timeStack.trailingAnchor constraintEqualToAnchor:timeBox.contentView.trailingAnchor constant:-14],
+            [timeStack.topAnchor constraintEqualToAnchor:timeBox.contentView.topAnchor constant:12],
+            [timeStack.bottomAnchor constraintEqualToAnchor:timeBox.contentView.bottomAnchor constant:-12],
+            [utcDesc.widthAnchor constraintEqualToAnchor:timeStack.widthAnchor]
+        ]];
+
+        // --- Card 3: ADIF Logging & Storage ---
+        NSBox *logBox = [NSBox new];
+        logBox.boxType = NSBoxCustom;
+        logBox.cornerRadius = 8.0;
+        logBox.borderWidth = 1.0;
+        logBox.borderColor = [NSColor separatorColor];
+        logBox.fillColor = [NSColor controlBackgroundColor];
+        logBox.translatesAutoresizingMaskIntoConstraints = NO;
+
+        NSTextField *logTitle = [self label:@"ADIF LOGGING & DATA STORAGE"];
+        logTitle.font = [NSFont systemFontOfSize:11 weight:NSFontWeightBold];
+        logTitle.textColor = [NSColor colorWithCalibratedRed:0.12 green:0.50 blue:0.90 alpha:1.0];
+
+        self.prefLogQsoCheckbox = [NSButton checkboxWithTitle:@"Auto-log completed QSOs to TX500_FT8_Logbook.adi (UTC)"
+                                                       target:nil
+                                                       action:nil];
+        self.prefLogQsoCheckbox.font = [NSFont systemFontOfSize:12];
+        self.prefLogQsoCheckbox.translatesAutoresizingMaskIntoConstraints = NO;
+
+        self.prefLogDecodesCheckbox = [NSButton checkboxWithTitle:@"Auto-log all incoming FT8 decodes to FT8_ALL_DECODES.adi (UTC)"
+                                                           target:nil
+                                                           action:nil];
+        self.prefLogDecodesCheckbox.font = [NSFont systemFontOfSize:12];
+        self.prefLogDecodesCheckbox.translatesAutoresizingMaskIntoConstraints = NO;
+
+        NSButton *openLogsBtn = [NSButton buttonWithTitle:@"Open Logs Folder in Finder…"
+                                                   target:self
+                                                   action:@selector(openPreferencesLogsFolder:)];
+        openLogsBtn.bezelStyle = NSBezelStyleInline;
+        openLogsBtn.focusRingType = NSFocusRingTypeNone;
+        openLogsBtn.translatesAutoresizingMaskIntoConstraints = NO;
+
+        NSStackView *logStack = [NSStackView stackViewWithViews:@[logTitle, self.prefLogQsoCheckbox, self.prefLogDecodesCheckbox, openLogsBtn]];
+        logStack.orientation = NSUserInterfaceLayoutOrientationVertical;
+        logStack.alignment = NSLayoutAttributeLeading;
+        logStack.spacing = 8;
+        logStack.translatesAutoresizingMaskIntoConstraints = NO;
+        [logBox.contentView addSubview:logStack];
+
+        [NSLayoutConstraint activateConstraints:@[
+            [logStack.leadingAnchor constraintEqualToAnchor:logBox.contentView.leadingAnchor constant:14],
+            [logStack.trailingAnchor constraintEqualToAnchor:logBox.contentView.trailingAnchor constant:-14],
+            [logStack.topAnchor constraintEqualToAnchor:logBox.contentView.topAnchor constant:12],
+            [logStack.bottomAnchor constraintEqualToAnchor:logBox.contentView.bottomAnchor constant:-12]
+        ]];
+
+        // --- Card 4: Appearance (Theme) ---
+        NSBox *appearanceBox = [NSBox new];
+        appearanceBox.boxType = NSBoxCustom;
+        appearanceBox.cornerRadius = 8.0;
+        appearanceBox.borderWidth = 1.0;
+        appearanceBox.borderColor = [NSColor separatorColor];
+        appearanceBox.fillColor = [NSColor controlBackgroundColor];
+        appearanceBox.translatesAutoresizingMaskIntoConstraints = NO;
+
+        NSTextField *appearTitle = [self label:@"APPEARANCE"];
+        appearTitle.font = [NSFont systemFontOfSize:11 weight:NSFontWeightBold];
+        appearTitle.textColor = [NSColor colorWithCalibratedRed:0.12 green:0.50 blue:0.90 alpha:1.0];
+
+        NSTextField *themeLbl = [self label:@"Theme:"];
+        themeLbl.font = [NSFont systemFontOfSize:12 weight:NSFontWeightMedium];
+        self.prefThemePopup = [NSPopUpButton new];
+        self.prefThemePopup.translatesAutoresizingMaskIntoConstraints = NO;
+        [self.prefThemePopup addItemsWithTitles:@[@"System (Auto)", @"Light", @"Dark"]];
+
+        NSStackView *themeRow = [NSStackView stackViewWithViews:@[themeLbl, self.prefThemePopup]];
+        themeRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+        themeRow.alignment = NSLayoutAttributeCenterY;
+        themeRow.spacing = 8;
+        themeRow.translatesAutoresizingMaskIntoConstraints = NO;
+
+        NSTextField *themeDesc = [NSTextField wrappingLabelWithString:@"Light mode improves readability outdoors. Dark mode is easier on the eyes at night. System follows your macOS Appearance setting."];
+        themeDesc.font = [NSFont systemFontOfSize:11];
+        themeDesc.textColor = NSColor.tertiaryLabelColor;
+        themeDesc.translatesAutoresizingMaskIntoConstraints = NO;
+
+        NSStackView *appearStack = [NSStackView stackViewWithViews:@[appearTitle, themeRow, themeDesc]];
+        appearStack.orientation = NSUserInterfaceLayoutOrientationVertical;
+        appearStack.alignment = NSLayoutAttributeLeading;
+        appearStack.spacing = 8;
+        appearStack.translatesAutoresizingMaskIntoConstraints = NO;
+        [appearanceBox.contentView addSubview:appearStack];
+
+        [NSLayoutConstraint activateConstraints:@[
+            [appearStack.leadingAnchor constraintEqualToAnchor:appearanceBox.contentView.leadingAnchor constant:14],
+            [appearStack.trailingAnchor constraintEqualToAnchor:appearanceBox.contentView.trailingAnchor constant:-14],
+            [appearStack.topAnchor constraintEqualToAnchor:appearanceBox.contentView.topAnchor constant:12],
+            [appearStack.bottomAnchor constraintEqualToAnchor:appearanceBox.contentView.bottomAnchor constant:-12],
+            [themeDesc.widthAnchor constraintEqualToAnchor:appearStack.widthAnchor]
+        ]];
+
+        // --- Card 5: TX Safety & SWR Protection ---
+        NSBox *safetyBox = [NSBox new];
+        safetyBox.boxType = NSBoxCustom;
+        safetyBox.cornerRadius = 8.0;
+        safetyBox.borderWidth = 1.0;
+        safetyBox.borderColor = [NSColor separatorColor];
+        safetyBox.fillColor = [NSColor controlBackgroundColor];
+        safetyBox.translatesAutoresizingMaskIntoConstraints = NO;
+
+        NSTextField *safetyTitle = [self label:@"TX SAFETY & SWR PROTECTION"];
+        safetyTitle.font = [NSFont systemFontOfSize:11 weight:NSFontWeightBold];
+        safetyTitle.textColor = [NSColor colorWithCalibratedRed:0.12 green:0.50 blue:0.90 alpha:1.0];
+
+        NSTextField *swrLbl = [self label:@"Max SWR before TX abort:"];
+        swrLbl.font = [NSFont systemFontOfSize:12 weight:NSFontWeightMedium];
+        self.prefSWRThresholdField = [NSTextField textFieldWithString:@"3.0"];
+        self.prefSWRThresholdField.placeholderString = @"e.g. 3.0";
+        self.prefSWRThresholdField.translatesAutoresizingMaskIntoConstraints = NO;
+        [self.prefSWRThresholdField.widthAnchor constraintEqualToConstant:60].active = YES;
+
+        NSTextField *swrUnit = [self label:@":1"];
+        swrUnit.font = [NSFont systemFontOfSize:12 weight:NSFontWeightRegular];
+
+        NSStackView *swrRow = [NSStackView stackViewWithViews:@[swrLbl, self.prefSWRThresholdField, swrUnit]];
+        swrRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+        swrRow.alignment = NSLayoutAttributeCenterY;
+        swrRow.spacing = 6;
+        swrRow.translatesAutoresizingMaskIntoConstraints = NO;
+
+        NSTextField *swrDesc = [NSTextField wrappingLabelWithString:@"During FT8 transmission, SWR is read from the radio via CAT. If SWR exceeds this threshold, transmission is aborted immediately to protect your amplifier and antenna. Set to 0 to disable protection."];
+        swrDesc.font = [NSFont systemFontOfSize:11];
+        swrDesc.textColor = NSColor.tertiaryLabelColor;
+        swrDesc.translatesAutoresizingMaskIntoConstraints = NO;
+
+        NSStackView *safetyStack = [NSStackView stackViewWithViews:@[safetyTitle, swrRow, swrDesc]];
+        safetyStack.orientation = NSUserInterfaceLayoutOrientationVertical;
+        safetyStack.alignment = NSLayoutAttributeLeading;
+        safetyStack.spacing = 8;
+        safetyStack.translatesAutoresizingMaskIntoConstraints = NO;
+        [safetyBox.contentView addSubview:safetyStack];
+
+        [NSLayoutConstraint activateConstraints:@[
+            [safetyStack.leadingAnchor constraintEqualToAnchor:safetyBox.contentView.leadingAnchor constant:14],
+            [safetyStack.trailingAnchor constraintEqualToAnchor:safetyBox.contentView.trailingAnchor constant:-14],
+            [safetyStack.topAnchor constraintEqualToAnchor:safetyBox.contentView.topAnchor constant:12],
+            [safetyStack.bottomAnchor constraintEqualToAnchor:safetyBox.contentView.bottomAnchor constant:-12],
+            [swrDesc.widthAnchor constraintEqualToAnchor:safetyStack.widthAnchor]
+        ]];
+
+        // --- Bottom Action Buttons ---
+        NSButton *cancelBtn = [NSButton buttonWithTitle:@"Cancel" target:self action:@selector(cancelPreferences:)];
+        cancelBtn.bezelStyle = NSBezelStyleRounded;
+        cancelBtn.translatesAutoresizingMaskIntoConstraints = NO;
+
+        NSButton *saveBtn = [NSButton buttonWithTitle:@"Save & Apply" target:self action:@selector(savePreferences:)];
+        saveBtn.bezelStyle = NSBezelStyleRounded;
+        saveBtn.keyEquivalent = @"\r";
+        saveBtn.translatesAutoresizingMaskIntoConstraints = NO;
+        self.preferencesWindow.initialFirstResponder = saveBtn;
+
+        NSStackView *btnRow = [NSStackView stackViewWithViews:@[cancelBtn, saveBtn]];
+        btnRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+        btnRow.alignment = NSLayoutAttributeCenterY;
+        btnRow.spacing = 12;
+        btnRow.translatesAutoresizingMaskIntoConstraints = NO;
+
+        NSStackView *mainStack = [NSStackView stackViewWithViews:@[titleLabel, subLabel, stationBox, timeBox, logBox, appearanceBox, safetyBox, btnRow]];
+        mainStack.orientation = NSUserInterfaceLayoutOrientationVertical;
+        mainStack.alignment = NSLayoutAttributeLeading;
+        mainStack.spacing = 12;
+        mainStack.translatesAutoresizingMaskIntoConstraints = NO;
+        [self.preferencesWindow.contentView addSubview:mainStack];
+
+        [NSLayoutConstraint activateConstraints:@[
+            [mainStack.leadingAnchor constraintEqualToAnchor:self.preferencesWindow.contentView.leadingAnchor constant:24],
+            [mainStack.trailingAnchor constraintEqualToAnchor:self.preferencesWindow.contentView.trailingAnchor constant:-24],
+            [mainStack.topAnchor constraintEqualToAnchor:self.preferencesWindow.contentView.topAnchor constant:20],
+            [mainStack.bottomAnchor constraintLessThanOrEqualToAnchor:self.preferencesWindow.contentView.bottomAnchor constant:-16],
+            [stationBox.widthAnchor constraintEqualToAnchor:mainStack.widthAnchor],
+            [timeBox.widthAnchor constraintEqualToAnchor:mainStack.widthAnchor],
+            [logBox.widthAnchor constraintEqualToAnchor:mainStack.widthAnchor],
+            [appearanceBox.widthAnchor constraintEqualToAnchor:mainStack.widthAnchor],
+            [safetyBox.widthAnchor constraintEqualToAnchor:mainStack.widthAnchor],
+            [btnRow.trailingAnchor constraintEqualToAnchor:mainStack.trailingAnchor]
+        ]];
+
+    }
+
+    // Populate current values from NSUserDefaults
+    NSString *call = [[NSUserDefaults standardUserDefaults] stringForKey:@"TX500_OperatorCallsign"] ?: @"EP2AES";
+    NSString *grid = [[NSUserDefaults standardUserDefaults] stringForKey:@"TX500_OperatorGrid"] ?: @"KM35";
+    NSString *opName = [[NSUserDefaults standardUserDefaults] stringForKey:@"TX500_OperatorName"] ?: @"";
+    BOOL showUTC = [[NSUserDefaults standardUserDefaults] boolForKey:@"TX500_DisplayTimeInUTC"];
+    NSString *band = [[NSUserDefaults standardUserDefaults] stringForKey:@"TX500_DefaultBand"] ?: @"20m (14.074 MHz)";
+
+    self.prefCallsignField.stringValue = call;
+    self.prefGridField.stringValue = grid;
+    self.prefOperatorNameField.stringValue = opName;
+    self.prefUtcCheckbox.state = showUTC ? NSControlStateValueOn : NSControlStateValueOff;
+
+    [self.prefDefaultBandPopup selectItemWithTitle:band];
+    if (self.prefDefaultBandPopup.indexOfSelectedItem < 0) {
+        [self.prefDefaultBandPopup selectItemAtIndex:0];
+    }
+
+    id autoLogQsoVal = [[NSUserDefaults standardUserDefaults] objectForKey:@"TX500_AutoLogQSO"];
+    self.prefLogQsoCheckbox.state = (autoLogQsoVal == nil || [autoLogQsoVal boolValue]) ? NSControlStateValueOn : NSControlStateValueOff;
+
+    id autoLogDecodesVal = [[NSUserDefaults standardUserDefaults] objectForKey:@"TX500_AutoLogDecodes"];
+    self.prefLogDecodesCheckbox.state = (autoLogDecodesVal == nil || [autoLogDecodesVal boolValue]) ? NSControlStateValueOn : NSControlStateValueOff;
+
+    // Theme
+    NSInteger themeIdx = [[NSUserDefaults standardUserDefaults] integerForKey:@"TX500_AppTheme"];
+    if (themeIdx < 0 || themeIdx > 2) themeIdx = 0;
+    [self.prefThemePopup selectItemAtIndex:themeIdx];
+
+    // SWR Threshold
+    double swrThreshold = [[NSUserDefaults standardUserDefaults] doubleForKey:@"TX500_SWRThreshold"];
+    if (swrThreshold <= 0.0) swrThreshold = 3.0;
+    self.prefSWRThresholdField.stringValue = [NSString stringWithFormat:@"%.1f", swrThreshold];
+
+    [self.preferencesWindow center];
+    [self.preferencesWindow makeKeyAndOrderFront:nil];
+    [NSApp activateIgnoringOtherApps:YES];
+}
+
+- (void)savePreferences:(id)sender {
+    (void)sender;
+    NSString *call = [[self.prefCallsignField.stringValue uppercaseString] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (call.length == 0) call = @"EP2AES";
+
+    NSString *grid = [[self.prefGridField.stringValue uppercaseString] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    if (grid.length == 0) grid = @"KM35";
+
+    NSString *opName = [self.prefOperatorNameField.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+
+    BOOL isUTC = (self.prefUtcCheckbox.state == NSControlStateValueOn);
+    NSString *band = self.prefDefaultBandPopup.titleOfSelectedItem ?: @"20m (14.074 MHz)";
+    BOOL autoLogQSO = (self.prefLogQsoCheckbox.state == NSControlStateValueOn);
+    BOOL autoLogDecodes = (self.prefLogDecodesCheckbox.state == NSControlStateValueOn);
+    NSInteger themeIdx = self.prefThemePopup.indexOfSelectedItem; // 0=System, 1=Light, 2=Dark
+    double swrThreshold = [self.prefSWRThresholdField.stringValue doubleValue];
+    if (swrThreshold < 0.0) swrThreshold = 0.0;
+
+    [[NSUserDefaults standardUserDefaults] setObject:call forKey:@"TX500_OperatorCallsign"];
+    [[NSUserDefaults standardUserDefaults] setObject:grid forKey:@"TX500_OperatorGrid"];
+    [[NSUserDefaults standardUserDefaults] setObject:opName forKey:@"TX500_OperatorName"];
+    [[NSUserDefaults standardUserDefaults] setBool:isUTC forKey:@"TX500_DisplayTimeInUTC"];
+    [[NSUserDefaults standardUserDefaults] setObject:band forKey:@"TX500_DefaultBand"];
+    [[NSUserDefaults standardUserDefaults] setBool:autoLogQSO forKey:@"TX500_AutoLogQSO"];
+    [[NSUserDefaults standardUserDefaults] setBool:autoLogDecodes forKey:@"TX500_AutoLogDecodes"];
+    [[NSUserDefaults standardUserDefaults] setInteger:themeIdx forKey:@"TX500_AppTheme"];
+    [[NSUserDefaults standardUserDefaults] setDouble:swrThreshold forKey:@"TX500_SWRThreshold"];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+
+    // Apply theme immediately
+    NSAppearance *appearance = nil;
+    if (themeIdx == 1) {
+        appearance = [NSAppearance appearanceNamed:NSAppearanceNameAqua];
+    } else if (themeIdx == 2) {
+        appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+    }
+    [NSApp setAppearance:appearance]; // nil = follow system
+
+    [[NSNotificationCenter defaultCenter] postNotificationName:@"TX500StationSettingsChangedNotification" object:nil];
+    [self appendLog:[NSString stringWithFormat:@"[PREFS] Station preferences saved: %@ (%@), UTC: %@, Band: %@, Theme: %@, SWR: %.1f",
+                     call, grid, isUTC ? @"YES" : @"NO", band,
+                     themeIdx == 1 ? @"Light" : themeIdx == 2 ? @"Dark" : @"System",
+                     swrThreshold]];
+
+    if (self.preferencesWindow) {
+        [self.preferencesWindow orderOut:nil];
+    }
+}
+
+- (void)cancelPreferences:(id)sender {
+    (void)sender;
+    if (self.preferencesWindow) {
+        [self.preferencesWindow orderOut:nil];
+    }
+}
+
+- (void)openPreferencesLogsFolder:(id)sender {
+    (void)sender;
+    NSString *path = [TX500FT8AudioEngine allDecodesADIFPath];
+    NSString *dir = [path stringByDeletingLastPathComponent];
+    [[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:dir]];
+}
+
 #pragma mark - Diagnostic Logs & Alerts
 
 - (void)saveLog:(id)sender {
@@ -2397,6 +2979,7 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     (void)sender;
     [self.telemetryController stopMonitoring];
     [self.cwStationController stopStation];
+    [self.ft8StationController stopStation];
     [self.audioMonitorController stopController];
     if (self.cwSerialPort) {
         [self.cwSerialPort close];

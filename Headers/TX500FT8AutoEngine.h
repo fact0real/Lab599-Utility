@@ -43,6 +43,7 @@ typedef NS_ENUM(NSInteger, TX500FT8HunterCriteria) {
 @property (nonatomic, copy) NSString *countryFlag;
 @property (nonatomic, assign) double distanceKm;
 @property (nonatomic, strong) NSDate *timestamp;
+@property (nonatomic, copy) NSString *mode; // @"FT8" or @"FT4"
 @end
 
 @interface TX500FT8AutoEngine : NSObject

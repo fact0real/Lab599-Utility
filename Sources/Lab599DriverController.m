@@ -22,9 +22,11 @@
 static NSTextField *CreateLabel(NSString *text, BOOL bold, CGFloat size, NSColor *color) {
     NSTextField *field = [NSTextField wrappingLabelWithString:text];
     field.translatesAutoresizingMaskIntoConstraints = NO;
+    field.preferredMaxLayoutWidth = 300.0;
     field.font = bold ? [NSFont systemFontOfSize:size weight:NSFontWeightBold] :
                         [NSFont systemFontOfSize:size weight:NSFontWeightRegular];
     if (color) field.textColor = color;
+    [field setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
     return field;
 }
 
@@ -110,6 +112,8 @@ static NSBox *CreateCardBox(void) {
     imageContainer.borderColor = [NSColor colorWithCalibratedWhite:0.5 alpha:0.25];
     imageContainer.fillColor = [NSColor colorWithCalibratedWhite:0.0 alpha:0.08];
 
+    [self.radioImageView setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [self.radioImageView setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationVertical];
     [imageContainer.contentView addSubview:self.radioImageView];
     [NSLayoutConstraint activateConstraints:@[
         [self.radioImageView.leadingAnchor constraintEqualToAnchor:imageContainer.contentView.leadingAnchor constant:4],
@@ -240,7 +244,6 @@ static NSBox *CreateCardBox(void) {
     col1Stack.orientation = NSUserInterfaceLayoutOrientationVertical;
     col1Stack.alignment = NSLayoutAttributeLeading;
     col1Stack.spacing = 3;
-    [col1Stack.widthAnchor constraintEqualToConstant:380].active = YES;
 
     // Right Column: Technical & Digital Mode Notes
     NSTextField *col2Title = CreateLabel(@"macOS & Digital Mode Reference:", YES, 11, NSColor.labelColor);
@@ -252,13 +255,13 @@ static NSBox *CreateCardBox(void) {
     col2Stack.orientation = NSUserInterfaceLayoutOrientationVertical;
     col2Stack.alignment = NSLayoutAttributeLeading;
     col2Stack.spacing = 3;
-    [col2Stack.widthAnchor constraintEqualToConstant:430].active = YES;
 
     NSStackView *guideColumns = [NSStackView stackViewWithViews:@[col1Stack, col2Stack]];
     guideColumns.translatesAutoresizingMaskIntoConstraints = NO;
     guideColumns.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     guideColumns.alignment = NSLayoutAttributeTop;
     guideColumns.spacing = 16;
+    guideColumns.distribution = NSStackViewDistributionFillEqually;
 
     NSStackView *guideVStack = [NSStackView stackViewWithViews:@[guideHeader, guideColumns]];
     guideVStack.translatesAutoresizingMaskIntoConstraints = NO;

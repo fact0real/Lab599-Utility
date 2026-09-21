@@ -6,6 +6,8 @@
 //
 
 #import "TX500FT8AutoEngine.h"
+#import "TX500LogbookManager.h"
+#import "TX500CloudSyncEngine.h"
 
 @implementation TX500FT8LoggedQSO
 @end
@@ -458,6 +460,7 @@
     qso.countryFlag = self.activeDXFlag;
     qso.distanceKm = self.activeDXDistanceKm;
     qso.timestamp = [NSDate date];
+    qso.mode = (self.audioEngine.protocol == TX500_FT8_PROTOCOL_FT4) ? @"FT4" : @"FT8";
 
     [_internalSessionLog insertObject:qso atIndex:0];
     [_internalWorkedCalls addObject:qso.callsign];
@@ -535,7 +538,8 @@
                                                    rstSent:qso.rstSent
                                                    rstRcvd:qso.rstRcvd
                                                       grid:qso.grid
-                                                      date:qso.timestamp];
+                                                      date:qso.timestamp
+                                                      mode:qso.mode];
 
         NSData *data = [rec dataUsingEncoding:NSUTF8StringEncoding];
         NSFileHandle *handle = [NSFileHandle fileHandleForWritingAtPath:filePath];
@@ -544,6 +548,23 @@
             [handle writeData:data];
             [handle closeFile];
         }
+
+        // Also persist to central SQLite logbook and trigger zero-click cloud uploads
+        [[TX500LogbookManager sharedManager] addContactFromFT8:qso
+                                                        myCall:self.audioEngine.myCallsign
+                                                        myGrid:self.audioEngine.myGrid];
+        TX500LogRecord *cloudRec = [[TX500LogRecord alloc] init];
+        cloudRec.callsign = [qso.callsign uppercaseString];
+        cloudRec.band = [qso.band lowercaseString];
+        cloudRec.frequencyHz = qso.freqHz;
+        cloudRec.mode = qso.mode ?: @"FT8";
+        cloudRec.rstSent = qso.rstSent ?: @"-10";
+        cloudRec.rstRcvd = qso.rstRcvd ?: @"-10";
+        cloudRec.grid = qso.grid;
+        cloudRec.country = qso.countryName;
+        cloudRec.myCall = self.audioEngine.myCallsign ?: @"EP2AES";
+        cloudRec.myGrid = self.audioEngine.myGrid;
+        [[TX500CloudSyncEngine sharedEngine] uploadContactImmediately:cloudRec completion:nil];
     });
 }
 
@@ -561,7 +582,8 @@
                                                    rstSent:q.rstSent
                                                    rstRcvd:q.rstRcvd
                                                       grid:q.grid
-                                                      date:q.timestamp];
+                                                      date:q.timestamp
+                                                      mode:q.mode];
         [adif appendString:rec];
     }
     return adif;

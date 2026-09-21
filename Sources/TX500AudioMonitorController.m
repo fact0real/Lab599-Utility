@@ -379,20 +379,45 @@
     spacer.translatesAutoresizingMaskIntoConstraints = NO;
     [spacer setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
 
-    NSStackView *hStack = [NSStackView stackViewWithViews:@[
+    NSButton *quickLogButton = [NSButton buttonWithTitle:@"LOG QSO ↵" target:self action:@selector(quickLogClicked:)];
+    quickLogButton.bezelStyle = NSBezelStyleRounded;
+    quickLogButton.font = [NSFont systemFontOfSize:11 weight:NSFontWeightBold];
+    quickLogButton.translatesAutoresizingMaskIntoConstraints = NO;
+    if (@available(macOS 11.0, *)) {
+        quickLogButton.image = [NSImage imageWithSystemSymbolName:@"square.and.pencil" accessibilityDescription:@"Log QSO"];
+    }
+
+    NSStackView *topRow1 = [NSStackView stackViewWithViews:@[
         self.statusPillBox,
         spacer,
         self.simulationButton,
         self.revealRecordingsButton,
+        quickLogButton
+    ]];
+    topRow1.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    topRow1.alignment = NSLayoutAttributeCenterY;
+    topRow1.spacing = 8.0;
+
+    NSView *spacer2 = [NSView new];
+    spacer2.translatesAutoresizingMaskIntoConstraints = NO;
+    [spacer2 setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    NSStackView *topRow2 = [NSStackView stackViewWithViews:@[
         self.recordDurationBox,
         self.recordButton,
         self.dimButton,
         self.muteButton,
+        spacer2,
         self.monitorToggleButton
     ]];
-    hStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    hStack.alignment = NSLayoutAttributeCenterY;
-    hStack.spacing = 8.0;
+    topRow2.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    topRow2.alignment = NSLayoutAttributeCenterY;
+    topRow2.spacing = 8.0;
+
+    NSStackView *hStack = [NSStackView stackViewWithViews:@[topRow1, topRow2]];
+    hStack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    hStack.alignment = NSLayoutAttributeLeading;
+    hStack.spacing = 6.0;
     hStack.translatesAutoresizingMaskIntoConstraints = NO;
     [container addSubview:hStack];
 
@@ -401,6 +426,8 @@
         [hStack.leadingAnchor constraintEqualToAnchor:container.leadingAnchor constant:8],
         [hStack.trailingAnchor constraintEqualToAnchor:container.trailingAnchor constant:-8],
         [hStack.bottomAnchor constraintEqualToAnchor:container.bottomAnchor constant:-6],
+        [topRow1.widthAnchor constraintEqualToAnchor:hStack.widthAnchor],
+        [topRow2.widthAnchor constraintEqualToAnchor:hStack.widthAnchor],
     ]];
 
     return container;
@@ -465,15 +492,26 @@
     bottomSpacer.translatesAutoresizingMaskIntoConstraints = NO;
     [bottomSpacer setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
 
-    NSStackView *bottomBar = [NSStackView stackViewWithViews:@[
+    NSStackView *bRow1 = [NSStackView stackViewWithViews:@[
         modeLbl, self.visualizerModeControl,
-        speedLbl, self.waterfallSpeedControl,
-        spanLbl, self.frequencySpanControl,
         bottomSpacer,
         themeLabel, self.visualThemeControl
     ]];
-    bottomBar.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    bottomBar.alignment = NSLayoutAttributeCenterY;
+    bRow1.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    bRow1.alignment = NSLayoutAttributeCenterY;
+    bRow1.spacing = 6.0;
+
+    NSStackView *bRow2 = [NSStackView stackViewWithViews:@[
+        speedLbl, self.waterfallSpeedControl,
+        spanLbl, self.frequencySpanControl
+    ]];
+    bRow2.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    bRow2.alignment = NSLayoutAttributeCenterY;
+    bRow2.spacing = 6.0;
+
+    NSStackView *bottomBar = [NSStackView stackViewWithViews:@[bRow1, bRow2]];
+    bottomBar.orientation = NSUserInterfaceLayoutOrientationVertical;
+    bottomBar.alignment = NSLayoutAttributeLeading;
     bottomBar.spacing = 6.0;
     bottomBar.translatesAutoresizingMaskIntoConstraints = NO;
 
@@ -969,10 +1007,12 @@
     title.font = [NSFont systemFontOfSize:10.5 weight:NSFontWeightBold];
     title.textColor = [NSColor secondaryLabelColor];
 
-    NSTextField *guide = [NSTextField labelWithString:
+    NSTextField *guide = [NSTextField wrappingLabelWithString:
         @"• Hardware Connection: Connect the 7-pin GX12 connector of your official Lab599 AD-508 cable to the TX-500 REM/DATA port. Connect the USB-C end directly to your Mac. macOS natively recognizes the built-in USB Audio Class codec without third-party drivers.\n"
         @"• Transceiver Settings: For cleanest audio, adjust the radio's AF Gain knob or set DIG Audio Level (Menu 27/28) to nominal. Click 'LISTEN LIVE' to monitor radio audio with ultra-low latency directly on your laptop speakers or headphones."
     ];
+    guide.translatesAutoresizingMaskIntoConstraints = NO;
+    [guide setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
     guide.font = [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
     guide.textColor = [NSColor secondaryLabelColor];
 
@@ -988,6 +1028,7 @@
         [vStack.leadingAnchor constraintEqualToAnchor:container.leadingAnchor constant:10],
         [vStack.trailingAnchor constraintEqualToAnchor:container.trailingAnchor constant:-10],
         [vStack.bottomAnchor constraintEqualToAnchor:container.bottomAnchor constant:-8],
+        [guide.widthAnchor constraintEqualToAnchor:vStack.widthAnchor]
     ]];
 
     return container;
@@ -1405,6 +1446,13 @@
 }
 
 #pragma mark - Actions
+
+- (void)quickLogClicked:(id)sender {
+    (void)sender;
+    if (self.onQuickLogRequested) {
+        self.onQuickLogRequested(self.currentFrequencyHz, self.currentMode);
+    }
+}
 
 - (void)toggleMonitoring {
     if (self.engine.isMonitoring) {

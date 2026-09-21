@@ -365,28 +365,45 @@
     spacer.translatesAutoresizingMaskIntoConstraints = NO;
     [spacer setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
 
-    NSStackView *stack = [NSStackView stackViewWithViews:@[
+    NSStackView *r1 = [NSStackView stackViewWithViews:@[
         self.startStopDecoderButton,
         self.audioDevicePopup,
         self.simulationCheckbox,
-        div1,
+        spacer
+    ]];
+    r1.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    r1.alignment = NSLayoutAttributeCenterY;
+    r1.spacing = 8;
+
+    NSView *spacerR2 = [NSView new];
+    spacerR2.translatesAutoresizingMaskIntoConstraints = NO;
+    [spacerR2 setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    NSStackView *r2 = [NSStackView stackViewWithViews:@[
         pitchTitle, self.pitchSlider, self.pitchValueLabel, self.afcCheckbox,
         div2,
         wpmTitle, self.wpmLabel, self.wpmStepper, self.cutNumbersCheckbox,
-        spacer
+        spacerR2
     ]];
+    r2.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    r2.alignment = NSLayoutAttributeCenterY;
+    r2.spacing = 8;
+
+    NSStackView *stack = [NSStackView stackViewWithViews:@[r1, r2]];
     stack.translatesAutoresizingMaskIntoConstraints = NO;
-    stack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    stack.alignment = NSLayoutAttributeCenterY;
-    stack.spacing = 8;
+    stack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    stack.alignment = NSLayoutAttributeLeading;
+    stack.spacing = 6;
     [container addSubview:stack];
 
     [NSLayoutConstraint activateConstraints:@[
         [stack.leadingAnchor constraintEqualToAnchor:container.leadingAnchor constant:10],
         [stack.trailingAnchor constraintEqualToAnchor:container.trailingAnchor constant:-10],
-        [stack.topAnchor constraintEqualToAnchor:container.topAnchor constant:5],
-        [stack.bottomAnchor constraintEqualToAnchor:container.bottomAnchor constant:-5],
-        [container.heightAnchor constraintEqualToConstant:42]
+        [stack.topAnchor constraintEqualToAnchor:container.topAnchor constant:6],
+        [stack.bottomAnchor constraintEqualToAnchor:container.bottomAnchor constant:-6],
+        [r1.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
+        [r2.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
+        [container.heightAnchor constraintEqualToConstant:68]
     ]];
 
     return container;
@@ -562,21 +579,26 @@
     self.cqRosterTableView.dataSource = self;
     self.cqRosterTableView.delegate = self;
     self.cqRosterTableView.rowHeight = 22;
+    self.cqRosterTableView.columnAutoresizingStyle = NSTableViewUniformColumnAutoresizingStyle;
 
     NSTableColumn *colCall = [[NSTableColumn alloc] initWithIdentifier:@"call"];
-    colCall.title = @"Callsign"; colCall.width = 75;
+    colCall.title = @"Callsign"; colCall.width = 75; colCall.minWidth = 60;
+    colCall.resizingMask = NSTableColumnAutoresizingMask | NSTableColumnUserResizingMask;
     [self.cqRosterTableView addTableColumn:colCall];
 
     NSTableColumn *colWpm = [[NSTableColumn alloc] initWithIdentifier:@"wpm"];
-    colWpm.title = @"WPM"; colWpm.width = 44;
+    colWpm.title = @"WPM"; colWpm.width = 44; colWpm.minWidth = 36;
+    colWpm.resizingMask = NSTableColumnAutoresizingMask | NSTableColumnUserResizingMask;
     [self.cqRosterTableView addTableColumn:colWpm];
 
     NSTableColumn *colSnr = [[NSTableColumn alloc] initWithIdentifier:@"snr"];
-    colSnr.title = @"SNR"; colSnr.width = 44;
+    colSnr.title = @"SNR"; colSnr.width = 44; colSnr.minWidth = 36;
+    colSnr.resizingMask = NSTableColumnAutoresizingMask | NSTableColumnUserResizingMask;
     [self.cqRosterTableView addTableColumn:colSnr];
 
     NSTableColumn *colAction = [[NSTableColumn alloc] initWithIdentifier:@"action"];
-    colAction.title = @"Action"; colAction.width = 95;
+    colAction.title = @"Action"; colAction.width = 95; colAction.minWidth = 80;
+    colAction.resizingMask = NSTableColumnAutoresizingMask | NSTableColumnUserResizingMask;
     [self.cqRosterTableView addTableColumn:colAction];
 
     rosterScroll.documentView = self.cqRosterTableView;
@@ -763,22 +785,20 @@
     self.logTableView.dataSource = self;
     self.logTableView.delegate = self;
     self.logTableView.rowHeight = 18;
+    self.logTableView.columnAutoresizingStyle = NSTableViewUniformColumnAutoresizingStyle;
 
-    NSTableColumn *c1 = [[NSTableColumn alloc] initWithIdentifier:@"logCall"]; c1.title = @"Callsign"; c1.width = 90;
-    NSTableColumn *c2 = [[NSTableColumn alloc] initWithIdentifier:@"logBand"]; c2.title = @"Band"; c2.width = 55;
-    NSTableColumn *c3 = [[NSTableColumn alloc] initWithIdentifier:@"logFreq"]; c3.title = @"Freq (MHz)"; c3.width = 80;
-    NSTableColumn *c4 = [[NSTableColumn alloc] initWithIdentifier:@"logMode"]; c4.title = @"Mode"; c4.width = 50;
-    NSTableColumn *c5 = [[NSTableColumn alloc] initWithIdentifier:@"logSent"]; c5.title = @"Sent"; c5.width = 50;
-    NSTableColumn *c6 = [[NSTableColumn alloc] initWithIdentifier:@"logRcvd"]; c6.title = @"Rcvd"; c6.width = 50;
-    NSTableColumn *c7 = [[NSTableColumn alloc] initWithIdentifier:@"logTime"]; c7.title = @"UTC Time"; c7.width = 130;
+    NSTableColumn *c1 = [[NSTableColumn alloc] initWithIdentifier:@"logCall"]; c1.title = @"Callsign"; c1.width = 90; c1.minWidth = 75;
+    NSTableColumn *c2 = [[NSTableColumn alloc] initWithIdentifier:@"logBand"]; c2.title = @"Band"; c2.width = 55; c2.minWidth = 45;
+    NSTableColumn *c3 = [[NSTableColumn alloc] initWithIdentifier:@"logFreq"]; c3.title = @"Freq (MHz)"; c3.width = 80; c3.minWidth = 70;
+    NSTableColumn *c4 = [[NSTableColumn alloc] initWithIdentifier:@"logMode"]; c4.title = @"Mode"; c4.width = 50; c4.minWidth = 40;
+    NSTableColumn *c5 = [[NSTableColumn alloc] initWithIdentifier:@"logSent"]; c5.title = @"Sent"; c5.width = 50; c5.minWidth = 40;
+    NSTableColumn *c6 = [[NSTableColumn alloc] initWithIdentifier:@"logRcvd"]; c6.title = @"Rcvd"; c6.width = 50; c6.minWidth = 40;
+    NSTableColumn *c7 = [[NSTableColumn alloc] initWithIdentifier:@"logTime"]; c7.title = @"UTC Time"; c7.width = 130; c7.minWidth = 100;
 
-    [self.logTableView addTableColumn:c1];
-    [self.logTableView addTableColumn:c2];
-    [self.logTableView addTableColumn:c3];
-    [self.logTableView addTableColumn:c4];
-    [self.logTableView addTableColumn:c5];
-    [self.logTableView addTableColumn:c6];
-    [self.logTableView addTableColumn:c7];
+    for (NSTableColumn *c in @[c1, c2, c3, c4, c5, c6, c7]) {
+        c.resizingMask = NSTableColumnAutoresizingMask | NSTableColumnUserResizingMask;
+        [self.logTableView addTableColumn:c];
+    }
 
     scroll.documentView = self.logTableView;
     [container addSubview:scroll];

@@ -13,6 +13,9 @@
 #import "TX500AudioMonitorController.h"
 #import "TX500FT8StationController.h"
 #import "TX500FT8AudioEngine.h"
+#import "TX500LogbookController.h"
+#import "TX500LogbookManager.h"
+#import "TX500CloudSettingsController.h"
 
 static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
                                     NSTimeInterval timeout, NSError **error) {
@@ -148,6 +151,52 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
 }
 @end
 
+@interface Lab599FittableScrollView : NSScrollView
+@end
+
+@implementation Lab599FittableScrollView
+- (NSSize)intrinsicContentSize {
+    return NSMakeSize(NSViewNoIntrinsicMetric, NSViewNoIntrinsicMetric);
+}
+- (NSSize)fittingSize {
+    return NSMakeSize(100.0, 100.0);
+}
+@end
+
+@interface Lab599DocumentView : NSView
+@end
+
+@implementation Lab599DocumentView
+- (BOOL)isFlipped {
+    return YES;
+}
+@end
+
+static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
+    if (!v) return;
+    [outStr appendFormat:@"%*s[%@ %p] fitting: %.1f x %.1f, intrinsic: %.1f x %.1f, frame: %.1f,%.1f %.1fx%.1f, hidden: %d\n",
+        depth * 2, "", [v className], (void *)v,
+        v.fittingSize.width, v.fittingSize.height,
+        v.intrinsicContentSize.width, v.intrinsicContentSize.height,
+        v.frame.origin.x, v.frame.origin.y, v.frame.size.width, v.frame.size.height,
+        (int)v.isHidden];
+    if ([v isKindOfClass:[NSTextField class]]) {
+        NSString *str = [(NSTextField *)v stringValue];
+        if (str.length > 0) {
+            NSString *snippet = str.length > 60 ? [str substringToIndex:60] : str;
+            [outStr appendFormat:@"%*s   -> text: \"%@\"\n", depth * 2, "", snippet];
+        }
+    } else if ([v isKindOfClass:[NSButton class]]) {
+        NSString *str = [(NSButton *)v title];
+        if (str.length > 0) {
+            [outStr appendFormat:@"%*s   -> btn title: \"%@\"\n", depth * 2, "", str];
+        }
+    }
+    for (NSView *sub in v.subviews) {
+        dumpViewTree(sub, depth + 1, outStr);
+    }
+}
+
 @interface AppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate>
 @property(nonatomic, strong) NSWindow *window;
 @property(nonatomic, strong) NSPopUpButton *portMenu;
@@ -181,12 +230,15 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
 @property(nonatomic, strong) TX500CWStationController *cwStationController;
 @property(nonatomic, strong) TX500AudioMonitorController *audioMonitorController;
 @property(nonatomic, strong) TX500FT8StationController *ft8StationController;
+@property(nonatomic, strong) TX500LogbookController *logbookController;
 @property(nonatomic, strong) Lab599SerialPort *cwSerialPort;
 
 // Modern Sidebar & Card UI Properties
 @property(nonatomic, strong) NSMutableArray<TX500SidebarButton *> *sidebarItems;
 @property(nonatomic, strong) NSVisualEffectView *sidebarView;
+@property(nonatomic, strong) NSScrollView *sidebarScrollView;
 @property(nonatomic, strong) NSView *mainContentView;
+@property(nonatomic, strong) NSScrollView *mainScrollView;
 @property(nonatomic, strong) NSBox *connectionBar;
 @property(nonatomic, strong) NSView *statusLEDView;
 @property(nonatomic, strong) NSTextField *connectionStatusLabel;
@@ -201,6 +253,22 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
 @property(nonatomic, strong) NSButton *outdoorModeButton;
 @property(nonatomic, assign) BOOL outdoorModeActive;
 @property(nonatomic, strong) NSStackView *actionRow;
+
+// Preferences Window Tabs & Containers
+@property(nonatomic, strong) NSSegmentedControl *prefTabSegment;
+@property(nonatomic, strong) NSView *prefStationContainer;
+@property(nonatomic, strong) NSView *prefCloudContainer;
+
+// Station Preferences Controls
+@property(nonatomic, strong) NSTextField *prefCallsignField;
+@property(nonatomic, strong) NSTextField *prefGridField;
+@property(nonatomic, strong) NSTextField *prefQTHField;
+@property(nonatomic, strong) NSTextField *prefOperatorField;
+@property(nonatomic, strong) NSSlider *prefSWRSlider;
+@property(nonatomic, strong) NSTextField *prefSWRValueLabel;
+@property(nonatomic, strong) NSButton *prefUTCToggle;
+@property(nonatomic, strong) NSButton *prefAutoLogToggle;
+@property(nonatomic, strong) NSTextField *prefStatusLabel;
 
 // Online Firmware Sheet components
 @property(nonatomic, strong) NSWindow *catalogSheet;
@@ -220,8 +288,6 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
 
 // Preferences Window
 @property(nonatomic, strong) NSWindow *preferencesWindow;
-@property(nonatomic, strong) NSTextField *prefCallsignField;
-@property(nonatomic, strong) NSTextField *prefGridField;
 @property(nonatomic, strong) NSTextField *prefOperatorNameField;
 @property(nonatomic, strong) NSButton *prefUtcCheckbox;
 @property(nonatomic, strong) NSPopUpButton *prefDefaultBandPopup;
@@ -243,6 +309,9 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
 @property(nonatomic, strong) NSTextField *powerSafetyDescLabel;
 @property(nonatomic, strong) NSButton *powerCheckButton;
 @property(nonatomic, assign) double lastDetectedVoltage;
+
+- (void)ensureWindowFitsVisibleScreen;
+- (void)resetWindowBoundsToScreen:(id)sender;
 @end
 
 @implementation AppDelegate
@@ -250,6 +319,14 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
 - (NSTextField *)label:(NSString *)text {
     NSTextField *field = [NSTextField labelWithString:text];
     field.translatesAutoresizingMaskIntoConstraints = NO;
+    return field;
+}
+
+- (NSTextField *)wrappingLabel:(NSString *)text {
+    NSTextField *field = [NSTextField wrappingLabelWithString:text];
+    field.translatesAutoresizingMaskIntoConstraints = NO;
+    field.preferredMaxLayoutWidth = 450;
+    [field setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
     return field;
 }
 
@@ -278,13 +355,31 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
         [NSApp setAppearance:[NSAppearance appearanceNamed:NSAppearanceNameDarkAqua]];
     }
 
-    self.window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 1160, 860)
+    NSRect screenRect = [[NSScreen mainScreen] visibleFrame];
+    CGFloat defaultW = 960.0;
+    CGFloat defaultH = 620.0;
+    if (screenRect.size.width > 0 && screenRect.size.height > 0) {
+        defaultW = MIN(960.0, screenRect.size.width - 60.0);
+        defaultH = MIN(620.0, screenRect.size.height - 80.0);
+    }
+    if (defaultW < 780.0) defaultW = 780.0;
+    if (defaultH < 460.0) defaultH = 460.0;
+
+    self.window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, defaultW, defaultH)
         styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable)
         backing:NSBackingStoreBuffered defer:NO];
     self.window.title = @"Lab599 Utility";
     self.window.delegate = self;
-    self.window.minSize = NSMakeSize(1040, 780);
-    [self.window center];
+    self.window.minSize = NSMakeSize(780, 460);
+    [self.window setFrameAutosaveName:@"Lab599UtilityMainWindow"];
+
+    // Ensure the restored or initial frame strictly fits within current display visible bounds
+    [self ensureWindowFitsVisibleScreen];
+
+    // On compact screens (e.g. laptop displays with height <= 780 pt), default console to collapsed
+    if (screenRect.size.height > 0 && screenRect.size.height <= 780.0) {
+        self.logCollapsed = YES;
+    }
 
     // Menus
     NSMenu *menu = [NSMenu new];
@@ -341,11 +436,25 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     NSMenuItem *outdoorItem = [viewMenu addItemWithTitle:@"Toggle Field Mode" action:@selector(toggleOutdoorMode:) keyEquivalent:@"F"];
     outdoorItem.target = self;
     [viewMenu addItem:[NSMenuItem separatorItem]];
-    NSMenuItem *ft8StationItem = [viewMenu addItemWithTitle:@"FT8 Digital Mode Studio" action:@selector(selectFT8StationTab:) keyEquivalent:@"8"];
+    NSMenuItem *ft8StationItem = [viewMenu addItemWithTitle:@"FT8 / FT4 Digital Mode Studio" action:@selector(selectFT8StationTab:) keyEquivalent:@"8"];
     ft8StationItem.target = self;
     NSMenuItem *cwStationItem = [viewMenu addItemWithTitle:@"CW Station & QSO Studio" action:@selector(selectCWStationTab:) keyEquivalent:@"K"];
     cwStationItem.target = self;
     viewItem.submenu = viewMenu;
+
+    NSMenuItem *windowItem = [[NSMenuItem alloc] initWithTitle:@"Window" action:NULL keyEquivalent:@""];
+    [menu addItem:windowItem];
+    NSMenu *windowMenu = [[NSMenu alloc] initWithTitle:@"Window"];
+    [windowMenu addItemWithTitle:@"Minimize" action:@selector(performMiniaturize:) keyEquivalent:@"m"];
+    [windowMenu addItemWithTitle:@"Zoom" action:@selector(performZoom:) keyEquivalent:@""];
+    [windowMenu addItem:[NSMenuItem separatorItem]];
+    NSMenuItem *resetWindowItem = [windowMenu addItemWithTitle:@"Reset Window Size & Position" action:@selector(resetWindowBoundsToScreen:) keyEquivalent:@"0"];
+    resetWindowItem.keyEquivalentModifierMask = NSEventModifierFlagCommand | NSEventModifierFlagOption;
+    resetWindowItem.target = self;
+    [windowMenu addItem:[NSMenuItem separatorItem]];
+    [windowMenu addItemWithTitle:@"Bring All to Front" action:@selector(arrangeInFront:) keyEquivalent:@""];
+    windowItem.submenu = windowMenu;
+    [NSApp setWindowsMenu:windowMenu];
 
     NSMenuItem *helpItem = [[NSMenuItem alloc] initWithTitle:@"Help" action:NULL keyEquivalent:@""];
     [menu addItem:helpItem];
@@ -365,7 +474,7 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
 
     // Setup legacy operation picker for CLI arguments and underlying state
     self.operationPicker = [NSSegmentedControl segmentedControlWithLabels:@[
-        @"Firmware Update", @"Time Sync", @"Telemetry", @"Radio Screen", @"CAT Test", @"Settings", @"Memory", @"Driver Install", @"Documentation", @"Feedback & Suggestion", @"CW Station", @"Live Audio (AD-508)", @"FT8 Digital Mode"
+        @"Firmware Update", @"Time Sync", @"Telemetry", @"Radio Screen", @"CAT Test", @"Settings", @"Memory", @"Driver Install", @"Documentation", @"Feedback & Suggestion", @"CW Station", @"Live Audio (AD-508)", @"FT8 / FT4 Digital", @"Logbook & Cloud"
     ] trackingMode:NSSegmentSwitchTrackingSelectOne target:self action:@selector(operationChanged:)];
     self.operationPicker.selectedSegment = 0;
     self.operationPicker.hidden = YES;
@@ -391,6 +500,8 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     // 2. Main Content View (Right Pane)
     self.mainContentView = [[NSView alloc] initWithFrame:NSZeroRect];
     self.mainContentView.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.mainContentView setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [self.mainContentView setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationVertical];
     [contentRoot addSubview:self.mainContentView];
 
     [NSLayoutConstraint activateConstraints:@[
@@ -458,10 +569,11 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     TX500SidebarButton *btnFeedback = [[TX500SidebarButton alloc] initWithTitle:@"Feedback" iconName:@"bubble.left.and.bubble.right" tag:9 target:self action:@selector(sidebarItemClicked:)];
     TX500SidebarButton *btnCW = [[TX500SidebarButton alloc] initWithTitle:@"CW Station" iconName:@"waveform" tag:10 target:self action:@selector(sidebarItemClicked:)];
     TX500SidebarButton *btnAudio = [[TX500SidebarButton alloc] initWithTitle:@"Live Audio (AD-508)" iconName:@"headphones" tag:11 target:self action:@selector(sidebarItemClicked:)];
-    TX500SidebarButton *btnFT8 = [[TX500SidebarButton alloc] initWithTitle:@"FT8 Digital Mode" iconName:@"dot.radiowaves.left.and.right" tag:12 target:self action:@selector(sidebarItemClicked:)];
+    TX500SidebarButton *btnFT8 = [[TX500SidebarButton alloc] initWithTitle:@"FT8 / FT4 Digital" iconName:@"dot.radiowaves.left.and.right" tag:12 target:self action:@selector(sidebarItemClicked:)];
+    TX500SidebarButton *btnLogbook = [[TX500SidebarButton alloc] initWithTitle:@"Logbook & Cloud" iconName:@"books.vertical" tag:13 target:self action:@selector(sidebarItemClicked:)];
 
     [self.sidebarItems addObjectsFromArray:@[
-        btnFw, btnTime, btnTelemetry, btnScreen, btnCat, btnSettings, btnMemory, btnDriver, btnDocs, btnFeedback, btnCW, btnAudio, btnFT8
+        btnFw, btnTime, btnTelemetry, btnScreen, btnCat, btnSettings, btnMemory, btnDriver, btnDocs, btnFeedback, btnCW, btnAudio, btnFT8, btnLogbook
     ]];
 
     for (TX500SidebarButton *b in self.sidebarItems) {
@@ -486,7 +598,7 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     NSStackView *sidebarStack = [NSStackView stackViewWithViews:@[
         brandHeaderStack,
         makeSectionHeader(@"RADIO & LIVE"),
-        btnFT8, btnCW, btnAudio, btnScreen, btnTelemetry, btnCat,
+        btnFT8, btnCW, btnAudio, btnLogbook, btnScreen, btnTelemetry, btnCat,
         makeSectionHeader(@"CONFIGURATION"),
         btnTime, btnSettings, btnMemory,
         makeSectionHeader(@"FIRMWARE & DRIVER"),
@@ -501,13 +613,39 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     sidebarStack.orientation = NSUserInterfaceLayoutOrientationVertical;
     sidebarStack.alignment = NSLayoutAttributeLeading;
     sidebarStack.spacing = 5;
-    [self.sidebarView addSubview:sidebarStack];
+
+    self.sidebarScrollView = [Lab599FittableScrollView new];
+    self.sidebarScrollView.translatesAutoresizingMaskIntoConstraints = NO;
+    self.sidebarScrollView.hasVerticalScroller = YES;
+    self.sidebarScrollView.hasHorizontalScroller = NO;
+    self.sidebarScrollView.autohidesScrollers = YES;
+    self.sidebarScrollView.borderType = NSNoBorder;
+    self.sidebarScrollView.drawsBackground = NO;
+    [self.sidebarScrollView setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationVertical];
+    [self.sidebarView addSubview:self.sidebarScrollView];
+
+    NSView *sidebarDoc = [Lab599DocumentView new];
+    sidebarDoc.translatesAutoresizingMaskIntoConstraints = NO;
+    self.sidebarScrollView.documentView = sidebarDoc;
+    [sidebarDoc addSubview:sidebarStack];
 
     [NSLayoutConstraint activateConstraints:@[
-        [sidebarStack.topAnchor constraintEqualToAnchor:self.sidebarView.topAnchor constant:16],
-        [sidebarStack.leadingAnchor constraintEqualToAnchor:self.sidebarView.leadingAnchor constant:12],
-        [sidebarStack.trailingAnchor constraintEqualToAnchor:self.sidebarView.trailingAnchor constant:-12],
-        [sidebarStack.bottomAnchor constraintEqualToAnchor:self.sidebarView.bottomAnchor constant:-12],
+        [self.sidebarScrollView.topAnchor constraintEqualToAnchor:self.sidebarView.topAnchor constant:12],
+        [self.sidebarScrollView.leadingAnchor constraintEqualToAnchor:self.sidebarView.leadingAnchor constant:6],
+        [self.sidebarScrollView.trailingAnchor constraintEqualToAnchor:self.sidebarView.trailingAnchor constant:-6],
+        [self.sidebarScrollView.bottomAnchor constraintEqualToAnchor:self.sidebarView.bottomAnchor constant:-8],
+
+        [sidebarDoc.leadingAnchor constraintEqualToAnchor:self.sidebarScrollView.contentView.leadingAnchor],
+        [sidebarDoc.trailingAnchor constraintEqualToAnchor:self.sidebarScrollView.contentView.trailingAnchor],
+        [sidebarDoc.topAnchor constraintEqualToAnchor:self.sidebarScrollView.contentView.topAnchor],
+        [sidebarDoc.widthAnchor constraintEqualToAnchor:self.sidebarScrollView.contentView.widthAnchor],
+
+        [sidebarStack.topAnchor constraintEqualToAnchor:sidebarDoc.topAnchor constant:4],
+        [sidebarStack.leadingAnchor constraintEqualToAnchor:sidebarDoc.leadingAnchor constant:6],
+        [sidebarStack.trailingAnchor constraintEqualToAnchor:sidebarDoc.trailingAnchor constant:-6],
+        [sidebarStack.bottomAnchor constraintEqualToAnchor:sidebarDoc.bottomAnchor constant:-4],
+        [sidebarStack.widthAnchor constraintEqualToAnchor:sidebarDoc.widthAnchor constant:-12],
+
         [brandHeaderStack.widthAnchor constraintEqualToAnchor:sidebarStack.widthAnchor],
         [hDivider.widthAnchor constraintEqualToAnchor:sidebarStack.widthAnchor],
         [versionLabel.widthAnchor constraintEqualToAnchor:sidebarStack.widthAnchor],
@@ -591,7 +729,11 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     self.portMenu.font = [NSFont systemFontOfSize:11];
     self.portMenu.bordered = NO;
     self.portMenu.focusRingType = NSFocusRingTypeNone;
-    [self.portMenu.widthAnchor constraintEqualToConstant:200].active = YES;
+    NSLayoutConstraint *pmW = [self.portMenu.widthAnchor constraintEqualToConstant:190];
+    pmW.priority = NSLayoutPriorityDefaultLow;
+    pmW.active = YES;
+    [self.portMenu.widthAnchor constraintGreaterThanOrEqualToConstant:90].active = YES;
+    [self.portMenu setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
 
     NSBox *portDivider = [NSBox new];
     portDivider.translatesAutoresizingMaskIntoConstraints = NO;
@@ -635,10 +777,13 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     NSView *connSpacer = [NSView new];
     connSpacer.translatesAutoresizingMaskIntoConstraints = NO;
     [connSpacer setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [connSpacer setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
 
     self.hardwareBadgeLabel = [self label:@"TX-500 Discovery"];
     self.hardwareBadgeLabel.font = [NSFont systemFontOfSize:10.5 weight:NSFontWeightSemibold];
     self.hardwareBadgeLabel.textColor = [NSColor secondaryLabelColor];
+    self.hardwareBadgeLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+    [self.hardwareBadgeLabel setContentCompressionResistancePriority:100 forOrientation:NSLayoutConstraintOrientationHorizontal];
 
     // Field Mode button in top bar
     self.outdoorModeButton = [NSButton buttonWithTitle:@"Field Mode" target:self action:@selector(toggleOutdoorMode:)];
@@ -647,6 +792,7 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     self.outdoorModeButton.controlSize = NSControlSizeSmall;
     self.outdoorModeButton.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
     self.outdoorModeButton.toolTip = @"Toggle Daylight High-Contrast Field Mode (⇧⌘F)";
+    [self.outdoorModeButton setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
     if (@available(macOS 11.0, *)) {
         self.outdoorModeButton.image = [NSImage imageWithSystemSymbolName:@"sun.max" accessibilityDescription:@"Field Mode"];
         self.outdoorModeButton.imagePosition = NSImageLeading;
@@ -659,6 +805,7 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     self.consoleToggleButton.controlSize = NSControlSizeSmall;
     self.consoleToggleButton.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
     self.consoleToggleButton.toolTip = @"Toggle Diagnostic Console (⌘L)";
+    [self.consoleToggleButton setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
     if (@available(macOS 11.0, *)) {
         self.consoleToggleButton.image = [NSImage imageWithSystemSymbolName:@"terminal" accessibilityDescription:@"Console"];
         self.consoleToggleButton.imagePosition = NSImageLeading;
@@ -668,7 +815,6 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
         self.statusPillBox,
         self.portCapsuleBox,
         connSpacer,
-        self.hardwareBadgeLabel,
         self.outdoorModeButton,
         self.consoleToggleButton
     ]];
@@ -681,15 +827,18 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     [NSLayoutConstraint activateConstraints:@[
         [self.connectionBar.heightAnchor constraintEqualToConstant:42],
         [connStack.leadingAnchor constraintEqualToAnchor:self.connectionBar.contentView.leadingAnchor constant:10],
-        [connStack.trailingAnchor constraintEqualToAnchor:self.connectionBar.contentView.trailingAnchor constant:-10],
+        [connStack.trailingAnchor constraintLessThanOrEqualToAnchor:self.connectionBar.contentView.trailingAnchor constant:-10],
         [connStack.centerYAnchor constraintEqualToAnchor:self.connectionBar.contentView.centerYAnchor],
     ]];
+    NSLayoutConstraint *csFill = [connStack.trailingAnchor constraintEqualToAnchor:self.connectionBar.contentView.trailingAnchor constant:-10];
+    csFill.priority = NSLayoutPriorityDefaultLow;
+    csFill.active = YES;
 
     // --- Section Header Row ---
     self.sectionTitleLabel = [self label:@"Firmware Update (BL20 Bootloader)"];
     self.sectionTitleLabel.font = [NSFont systemFontOfSize:17 weight:NSFontWeightBold];
 
-    NSTextField *instructions = [NSTextField wrappingLabelWithString:
+    NSTextField *instructions = [self wrappingLabel:
         @"Connect the CAT-USB cable and stable external power. Close other radio applications. On your transceiver (TX-500 Discovery / TX-500MP), hold the third top function key while pressing POWER. Start only when the screen displays \"The loader is waiting...\". Keep power and cable connected until completion."];
     instructions.textColor = NSColor.secondaryLabelColor;
     instructions.font = [NSFont systemFontOfSize:11.5];
@@ -705,10 +854,20 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     // Firmware Selection Row
     self.firmwareName = [self label:@"No firmware selected"];
     self.firmwareName.lineBreakMode = NSLineBreakByTruncatingMiddle;
-    [self.firmwareName.widthAnchor constraintEqualToConstant:310].active = YES;
+    NSLayoutConstraint *fnW = [self.firmwareName.widthAnchor constraintEqualToConstant:240];
+    fnW.priority = NSLayoutPriorityDefaultHigh;
+    fnW.active = YES;
+    [self.firmwareName.widthAnchor constraintGreaterThanOrEqualToConstant:110].active = YES;
+    [self.firmwareName setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+
     self.chooseButton = [NSButton buttonWithTitle:@"Choose .fw..." target:self action:@selector(chooseFirmware:)];
     self.onlineButton = [NSButton buttonWithTitle:@"Download from Lab599..." target:self action:@selector(openCatalogSheet:)];
-    NSStackView *fileRow = [NSStackView stackViewWithViews:@[[self label:@"Firmware:"], self.firmwareName, self.chooseButton, self.onlineButton]];
+
+    NSView *fileRowSpacer = [NSView new];
+    fileRowSpacer.translatesAutoresizingMaskIntoConstraints = NO;
+    [fileRowSpacer setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    NSStackView *fileRow = [NSStackView stackViewWithViews:@[[self label:@"Firmware:"], self.firmwareName, fileRowSpacer, self.chooseButton, self.onlineButton]];
     fileRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     fileRow.alignment = NSLayoutAttributeCenterY;
     fileRow.spacing = 8;
@@ -735,7 +894,7 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     self.progressBar.minValue = 0;
     self.progressBar.maxValue = 1;
     self.progressBar.indeterminate = NO;
-    self.statusLabel = [NSTextField wrappingLabelWithString:@"Select the transceiver's serial port and choose or download the firmware file."];
+    self.statusLabel = [self wrappingLabel:@"Select the transceiver's serial port and choose or download the firmware file."];
     self.statusLabel.textColor = NSColor.secondaryLabelColor;
     [self.statusLabel.heightAnchor constraintGreaterThanOrEqualToConstant:28].active = YES;
 
@@ -932,6 +1091,47 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     };
     self.ft8StationController.view.hidden = YES;
 
+    // Comprehensive Logbook & Cloud Ecosystem Controller
+    self.logbookController = [TX500LogbookController new];
+    self.logbookController.selectedPortProvider = ^NSString * { return weakSelf.hasPorts ? weakSelf.portMenu.selectedItem.title : nil; };
+    self.logbookController.logHandler = ^(NSString *message) { [weakSelf appendLog:message]; };
+    self.logbookController.serialCommandSender = ^BOOL(NSString *catCommand) {
+        if (!weakSelf.hasPorts) return NO;
+        NSString *portPath = weakSelf.portMenu.selectedItem.title;
+        if (!portPath || ![portPath hasPrefix:@"/dev/cu."]) return NO;
+        if (!weakSelf.cwSerialPort) {
+            NSError *err = nil;
+            weakSelf.cwSerialPort = [Lab599SerialPort openPath:portPath speed:B9600 error:&err];
+            if (!weakSelf.cwSerialPort) return NO;
+        }
+        NSData *cmdData = [catCommand dataUsingEncoding:NSASCIIStringEncoding];
+        NSError *writeErr = nil;
+        BOOL ok = [weakSelf.cwSerialPort writeData:cmdData timeout:0.5 cancellation:nil error:&writeErr];
+        if (!ok) {
+            [weakSelf.cwSerialPort close];
+            weakSelf.cwSerialPort = nil;
+        }
+        return ok;
+    };
+    self.logbookController.view.hidden = YES;
+
+    // Connect Audio Monitor quick log button to switch to Logbook and prefill VFO
+    self.audioMonitorController.onQuickLogRequested = ^(uint64_t freqHz, NSString *mode) {
+        weakSelf.operationPicker.selectedSegment = 13;
+        [weakSelf operationChanged:weakSelf.operationPicker];
+        [weakSelf.logbookController updateFrequencyHz:freqHz mode:mode];
+        [weakSelf.logbookController focusCallsignField];
+    };
+
+    // Wire Logbook openSettingsHandler to open Preferences Window -> Cloud Accounts tab
+    self.logbookController.openSettingsHandler = ^(NSString *service) {
+        [weakSelf showPreferencesWindow:nil];
+        [weakSelf selectPreferencesTab:1];
+        if (service.length > 0) {
+            [[TX500CloudSettingsController sharedController] selectTabWithService:service];
+        }
+    };
+
     // Feature Card Container
     NSBox *featureCardBox = [NSBox new];
     featureCardBox.titlePosition = NSNoTitle;
@@ -949,7 +1149,8 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
 
     NSStackView *featureStack = [NSStackView stackViewWithViews:@[
         fileRow, self.radioPreviewBox, self.powerSafetyBox, timeRow,
-        self.audioMonitorController.view, self.cwStationController.view, self.ft8StationController.view, self.telemetryController.view, self.screenController.view, self.tools.view,
+        self.audioMonitorController.view, self.cwStationController.view, self.ft8StationController.view, self.logbookController.view, self.telemetryController.view, self.screenController.view,
+        self.tools.view,
         self.driverController.view, self.docsController.view, self.feedbackController.view,
         self.progressBar, self.statusLabel,
         self.actionRow,
@@ -966,22 +1167,30 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
         [featureStack.topAnchor constraintEqualToAnchor:featureCardBox.contentView.topAnchor constant:10],
         [featureStack.leadingAnchor constraintEqualToAnchor:featureCardBox.contentView.leadingAnchor constant:12],
         [featureStack.trailingAnchor constraintEqualToAnchor:featureCardBox.contentView.trailingAnchor constant:-12],
-        [featureStack.bottomAnchor constraintEqualToAnchor:featureCardBox.contentView.bottomAnchor constant:-10],
-
-        [self.radioPreviewBox.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor],
-        [self.powerSafetyBox.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor],
-        [self.audioMonitorController.view.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor],
-        [self.cwStationController.view.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor],
-        [self.ft8StationController.view.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor],
-        [self.telemetryController.view.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor],
-        [self.screenController.view.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor],
-        [self.tools.view.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor],
-        [self.driverController.view.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor],
-        [self.docsController.view.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor],
-        [self.feedbackController.view.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor],
-        [self.progressBar.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor],
-        [self.statusLabel.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor],
+        [featureStack.bottomAnchor constraintEqualToAnchor:featureCardBox.contentView.bottomAnchor constant:-10]
     ]];
+
+    NSArray<NSView *> *featureChildViews = @[
+        self.radioPreviewBox,
+        self.powerSafetyBox,
+        self.audioMonitorController.view,
+        self.cwStationController.view,
+        self.ft8StationController.view,
+        self.logbookController.view,
+        self.telemetryController.view,
+        self.screenController.view,
+        self.tools.view,
+        self.driverController.view,
+        self.docsController.view,
+        self.feedbackController.view,
+        self.progressBar,
+        self.statusLabel
+    ];
+    for (NSView *child in featureChildViews) {
+        NSLayoutConstraint *wc = [child.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor];
+        wc.priority = 999;
+        wc.active = YES;
+    }
 
     // --- Diagnostic Console Card (Collapsible) ---
     self.logCardBox = [NSBox new];
@@ -1060,32 +1269,83 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
         [logHeaderRow.widthAnchor constraintEqualToAnchor:logInnerStack.widthAnchor],
         [scroll.widthAnchor constraintEqualToAnchor:logInnerStack.widthAnchor],
     ]];
+    self.logCardBox.hidden = self.logCollapsed;
+    self.logCardHeightConstraint.active = !self.logCollapsed;
 
-    // Assemble Main Content Stack
-    NSStackView *mainStack = [NSStackView stackViewWithViews:@[
-        self.connectionBar,
+    // Top Persistent Connection Bar (Always anchored at the top of right pane)
+    [self.mainContentView addSubview:self.connectionBar];
+
+    // Scrollable Workstation & Console Viewport
+    self.mainScrollView = [Lab599FittableScrollView new];
+    self.mainScrollView.translatesAutoresizingMaskIntoConstraints = NO;
+    self.mainScrollView.hasVerticalScroller = YES;
+    self.mainScrollView.hasHorizontalScroller = NO;
+    self.mainScrollView.autohidesScrollers = YES;
+    self.mainScrollView.borderType = NSNoBorder;
+    self.mainScrollView.drawsBackground = NO;
+    [self.mainScrollView setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [self.mainScrollView setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationVertical];
+    [self.mainContentView addSubview:self.mainScrollView];
+
+    NSView *mainDocView = [Lab599DocumentView new];
+    mainDocView.translatesAutoresizingMaskIntoConstraints = NO;
+    self.mainScrollView.documentView = mainDocView;
+
+    NSStackView *scrollStack = [NSStackView stackViewWithViews:@[
         headerStack,
         featureCardBox,
         self.logCardBox
     ]];
-    mainStack.translatesAutoresizingMaskIntoConstraints = NO;
-    mainStack.orientation = NSUserInterfaceLayoutOrientationVertical;
-    mainStack.alignment = NSLayoutAttributeLeading;
-    mainStack.spacing = 10;
-    mainStack.detachesHiddenViews = YES;
-    [self.mainContentView addSubview:mainStack];
+    scrollStack.translatesAutoresizingMaskIntoConstraints = NO;
+    scrollStack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    scrollStack.alignment = NSLayoutAttributeLeading;
+    scrollStack.spacing = 10;
+    scrollStack.detachesHiddenViews = YES;
+    [mainDocView addSubview:scrollStack];
+
+    NSLayoutConstraint *docWidthConstraint = [mainDocView.widthAnchor constraintEqualToAnchor:self.mainScrollView.contentView.widthAnchor];
+    docWidthConstraint.priority = 999;
+
+    NSLayoutConstraint *minDocW = [mainDocView.widthAnchor constraintGreaterThanOrEqualToConstant:500.0];
+    minDocW.priority = NSLayoutPriorityDefaultLow;
 
     [NSLayoutConstraint activateConstraints:@[
-        [mainStack.topAnchor constraintEqualToAnchor:self.mainContentView.topAnchor constant:14],
-        [mainStack.leadingAnchor constraintEqualToAnchor:self.mainContentView.leadingAnchor constant:14],
-        [mainStack.trailingAnchor constraintEqualToAnchor:self.mainContentView.trailingAnchor constant:-14],
-        [mainStack.bottomAnchor constraintEqualToAnchor:self.mainContentView.bottomAnchor constant:-14],
+        [self.connectionBar.topAnchor constraintEqualToAnchor:self.mainContentView.topAnchor constant:12],
+        [self.connectionBar.leadingAnchor constraintEqualToAnchor:self.mainContentView.leadingAnchor constant:14],
+        [self.connectionBar.trailingAnchor constraintEqualToAnchor:self.mainContentView.trailingAnchor constant:-14],
+        [self.connectionBar.heightAnchor constraintEqualToConstant:42],
 
-        [self.connectionBar.widthAnchor constraintEqualToAnchor:mainStack.widthAnchor],
-        [headerStack.widthAnchor constraintEqualToAnchor:mainStack.widthAnchor],
-        [featureCardBox.widthAnchor constraintEqualToAnchor:mainStack.widthAnchor],
-        [self.logCardBox.widthAnchor constraintEqualToAnchor:mainStack.widthAnchor],
+        [self.mainScrollView.topAnchor constraintEqualToAnchor:self.connectionBar.bottomAnchor constant:8],
+        [self.mainScrollView.leadingAnchor constraintEqualToAnchor:self.mainContentView.leadingAnchor constant:14],
+        [self.mainScrollView.trailingAnchor constraintEqualToAnchor:self.mainContentView.trailingAnchor constant:-14],
+        [self.mainScrollView.bottomAnchor constraintEqualToAnchor:self.mainContentView.bottomAnchor constant:-10],
+
+        [mainDocView.leadingAnchor constraintEqualToAnchor:self.mainScrollView.contentView.leadingAnchor],
+        [mainDocView.topAnchor constraintEqualToAnchor:self.mainScrollView.contentView.topAnchor],
+        docWidthConstraint,
+        minDocW,
+
+        [scrollStack.topAnchor constraintEqualToAnchor:mainDocView.topAnchor constant:2],
+        [scrollStack.leadingAnchor constraintEqualToAnchor:mainDocView.leadingAnchor],
+        [scrollStack.trailingAnchor constraintEqualToAnchor:mainDocView.trailingAnchor],
+        [scrollStack.bottomAnchor constraintEqualToAnchor:mainDocView.bottomAnchor constant:-8],
     ]];
+
+    NSLayoutConstraint *cScrollW = [scrollStack.widthAnchor constraintGreaterThanOrEqualToAnchor:mainDocView.widthAnchor];
+    cScrollW.priority = NSLayoutPriorityDefaultLow;
+    cScrollW.active = YES;
+
+    NSLayoutConstraint *cHeaderW = [headerStack.widthAnchor constraintEqualToAnchor:scrollStack.widthAnchor];
+    cHeaderW.priority = 999;
+    cHeaderW.active = YES;
+
+    NSLayoutConstraint *cFeatureW = [featureCardBox.widthAnchor constraintEqualToAnchor:scrollStack.widthAnchor];
+    cFeatureW.priority = 999;
+    cFeatureW.active = YES;
+
+    NSLayoutConstraint *cLogW = [self.logCardBox.widthAnchor constraintEqualToAnchor:scrollStack.widthAnchor];
+    cLogW.priority = 999;
+    cLogW.active = YES;
     [self appendLog:[NSString stringWithFormat:@"Lab599 Utility %@ (Build %@) initialized.", appVer, appBuild]];
     [self appendLog:@"BL20 protocol engine ready: 57600 baud, 8N1, two-ACK header+payload cycle."];
     [self appendLog:@"TimeSync ready: 9600 baud, TM set/query with clock read-back verification."];
@@ -1111,6 +1371,17 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
         self.operationPicker.selectedSegment = 5;
         [self operationChanged:self.operationPicker];
     }
+    if ([[NSProcessInfo processInfo].arguments containsObject:@"--cloud-settings"]) {
+        [self showPreferencesWindow:nil];
+        [self selectPreferencesTab:1];
+    }
+    if ([[NSProcessInfo processInfo].arguments containsObject:@"--station-preferences"]) {
+        [self showPreferencesWindow:nil];
+        [self selectPreferencesTab:0];
+    }
+    if ([[NSProcessInfo processInfo].arguments containsObject:@"--preferences"]) {
+        [self showPreferencesWindow:nil];
+    }
     if ([[NSProcessInfo processInfo].arguments containsObject:@"--docs"]) {
         self.operationPicker.selectedSegment = 8;
         [self operationChanged:self.operationPicker];
@@ -1133,6 +1404,10 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
         if ([[NSProcessInfo processInfo].arguments containsObject:@"--simulation"]) {
             [self.ft8StationController setSimulationEnabled:YES];
         }
+    }
+    if ([[NSProcessInfo processInfo].arguments containsObject:@"--logbook"]) {
+        self.operationPicker.selectedSegment = 13;
+        [self operationChanged:self.operationPicker];
     }
     if ([[NSProcessInfo processInfo].arguments containsObject:@"--field-mode"]) {
         [self toggleOutdoorMode:nil];
@@ -1199,6 +1474,30 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     }
     if ([[NSProcessInfo processInfo].arguments containsObject:@"--ft8"]) {
         [self selectFT8StationTab:nil];
+    }
+    for (NSUInteger i = 0; i < [NSProcessInfo processInfo].arguments.count; i++) {
+        if ([[NSProcessInfo processInfo].arguments[i] isEqualToString:@"--resize-test"] && i + 2 < [NSProcessInfo processInfo].arguments.count) {
+            CGFloat w = [[NSProcessInfo processInfo].arguments[i + 1] doubleValue];
+            CGFloat h = [[NSProcessInfo processInfo].arguments[i + 2] doubleValue];
+            [self.window setFrame:NSMakeRect(100, 100, w, h) display:YES animate:NO];
+            fprintf(stdout, "RESIZED FRAME: %s\n", NSStringFromRect(self.window.frame).UTF8String);
+            fprintf(stdout, "CONTENT VIEW FITTING: %s\n", NSStringFromSize(self.window.contentView.fittingSize).UTF8String);
+            fflush(stdout);
+            if (![[NSProcessInfo processInfo].arguments containsObject:@"--screenshot-window"]) {
+                [NSApp terminate:nil];
+            }
+        }
+    }
+    if ([[NSProcessInfo processInfo].arguments containsObject:@"--dump-layout"]) {
+        NSMutableString *outStr = [NSMutableString new];
+        [outStr appendFormat:@"WINDOW FRAME: %@\n", NSStringFromRect(self.window.frame)];
+        [outStr appendFormat:@"WINDOW MIN SIZE: %@\n", NSStringFromSize(self.window.minSize)];
+        [outStr appendFormat:@"WINDOW CONTENT MIN SIZE: %@\n", NSStringFromSize(self.window.contentMinSize)];
+        [outStr appendFormat:@"CONTENT VIEW FITTING SIZE: %@\n", NSStringFromSize(self.window.contentView.fittingSize)];
+        [outStr appendFormat:@"MAIN SCROLL VIEW FITTING SIZE: %@\n", NSStringFromSize(self.mainScrollView.fittingSize)];
+        dumpViewTree(self.window.contentView, 0, outStr);
+        [outStr writeToFile:@"/tmp/layout_diag.txt" atomically:YES encoding:NSUTF8StringEncoding error:nil];
+        [NSApp terminate:nil];
     }
 }
 
@@ -1423,6 +1722,7 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     BOOL isCWStation = (operation == 10);
     BOOL isAudio = (operation == 11);
     BOOL isFT8 = (operation == 12);
+    BOOL isLogbook = (operation == 13);
 
     for (TX500SidebarButton *btn in self.sidebarItems) {
         btn.isSelected = (btn.operationTag == operation);
@@ -1444,7 +1744,8 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
             @9: @"Feedback & Bug Reports",
             @10: @"CW Station & Semi-Automated QSO Studio (AD-508 & CAT)",
             @11: @"AD-508 Live Audio Monitor & DSP Studio",
-            @12: @"FT8 Digital Mode Studio & Autonomous Operating Co-Pilot"
+            @12: @"FT8 / FT4 Digital Mode Studio & Autonomous Operating Co-Pilot",
+            @13: @"Logbook & Cloud Ecosystem (SQLite, Callsign Intelligence & LoTW/QRZ)"
         };
     });
     self.sectionTitleLabel.stringValue = titles[@(operation)] ?: @"Lab599 Utility";
@@ -1554,6 +1855,47 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
         }
     }
 
+    self.logbookController.view.hidden = !isLogbook;
+    if (isLogbook) {
+        [self.logbookController reloadTableData];
+        [self.logbookController updateCloudStatusPills];
+        if (self.hasPorts) {
+            NSString *portPath = self.portMenu.selectedItem.title;
+            if (portPath && [portPath hasPrefix:@"/dev/cu."]) {
+                __weak typeof(self) weakSelf = self;
+                dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+                    NSError *err = nil;
+                    Lab599SerialPort *queryPort = [Lab599SerialPort openPath:portPath speed:B9600 error:&err];
+                    if (queryPort) {
+                        NSString *faReply = Lab599ReadCATFrame(queryPort, @"FA;", 0.5, nil);
+                        NSString *mdReply = Lab599ReadCATFrame(queryPort, @"MD;", 0.5, nil);
+                        [queryPort close];
+
+                        uint64_t freqHz = 14200000;
+                        if ([faReply hasPrefix:@"FA"] && faReply.length >= 13) {
+                            freqHz = (uint64_t)[[faReply substringWithRange:NSMakeRange(2, 11)] longLongValue];
+                        }
+                        NSString *modeStr = @"USB";
+                        if ([mdReply hasPrefix:@"MD"] && mdReply.length >= 3) {
+                            unichar mCode = [mdReply characterAtIndex:2];
+                            if (mCode == '1') modeStr = @"LSB";
+                            else if (mCode == '2') modeStr = @"USB";
+                            else if (mCode == '3') modeStr = @"CW";
+                            else if (mCode == '4') modeStr = @"FM";
+                            else if (mCode == '5') modeStr = @"AM";
+                            else if (mCode == '6') modeStr = @"DIG";
+                            else if (mCode == '7') modeStr = @"CW-R";
+                            else if (mCode == '8') modeStr = @"DIG-R";
+                        }
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            [weakSelf.logbookController updateFrequencyHz:freqHz mode:modeStr];
+                        });
+                    }
+                });
+            }
+        }
+    }
+
     self.tools.view.hidden = !isTools;
     if (isTools) [self.tools selectTool:operation - 4];
 
@@ -1597,7 +1939,7 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
         self.statusLabel.stringValue = @"Ready. Connect transceiver CAT port (9600 baud, 8N1) to monitor, control or send commands.";
     } else if (operation == 5) {
         self.instructions.stringValue = @"Transceiver Configuration Settings Editor & Backup. Inspect and modify named parameters, export/import JSON, compare backups, and restore 1024-byte binary blocks to the radio.";
-        self.statusLabel.stringValue = @"Ready. File editing, comparison, and backup saving also work without a connected radio.";
+        self.statusLabel.stringValue = @"Ready. Connect transceiver CAT port (9600 baud, 8N1) to read or write radio configuration.";
     } else if (operation == 6) {
         self.instructions.stringValue = @"100-Channel Memory Manager. Read/write memory banks, edit individual channels, apply operating profiles, or import/export channel lists as CSV.";
         self.statusLabel.stringValue = @"Ready. Memory channel editing, CSV import/export, and bank saving work without a connected radio.";
@@ -1616,6 +1958,12 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     } else if (isAudio) {
         self.instructions.stringValue = @"Live Radio Audio Monitor & DSP Studio for Lab599 TX-500 Discovery / TX-500MP. Listen directly to live radio audio on your Mac via the AD-508 USB-C audio cable with low-latency CoreAudio passthrough, real-time FFT spectrum & oscilloscope visualizers, precision VU meters, customizable audio bandpass/notch filters, squelch, and studio WAV recording.";
         self.statusLabel.stringValue = @"Ready. Connect AD-508 USB-C audio cable to REM/DATA port and click 'LISTEN LIVE' to hear your radio.";
+    } else if (isFT8) {
+        self.instructions.stringValue = @"FT8 & FT4 Digital Modes Studio with Autonomous Operating Co-Pilot. Features real-time audio waterfall, multi-channel FSK decoding/encoding via AD-508, automated CAT transceiver sequencing, and live contact logging.";
+        self.statusLabel.stringValue = @"Ready. Select AD-508 audio input/output and CAT serial port, or test using internal simulated signals.";
+    } else if (isLogbook) {
+        self.instructions.stringValue = @"Universal Ham Radio Logbook & Cloud Synchronization Studio. Integrated SQLite database, real-time QRZ/HamQTH callsign intelligence, and automated LoTW / eQSL / ClubLog synchronization.";
+        self.statusLabel.stringValue = @"Ready: Enter callsign to lookup operator details, or log contacts with 'Log QSO ↵' (Enter).";
     }
     [self updateClockPreview:nil];
     [self updateConnectionStatusBar];
@@ -1742,7 +2090,7 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     self.radioModelLabel = [NSTextField labelWithString:@"Target Radio: Lab599 Discovery TX-500"];
     self.radioModelLabel.font = [NSFont systemFontOfSize:14 weight:NSFontWeightBold];
 
-    self.radioSpecsLabel = [NSTextField wrappingLabelWithString:@"Target Specs: 256×128 Monochrome LCD • 32-bit Floating-Point DSP • All-Aluminum CNC Waterproof Chassis"];
+    self.radioSpecsLabel = [self wrappingLabel:@"Target Specs: 256×128 Monochrome LCD • 32-bit Floating-Point DSP • All-Aluminum CNC Waterproof Chassis"];
     self.radioSpecsLabel.textColor = NSColor.secondaryLabelColor;
     self.radioSpecsLabel.font = [NSFont systemFontOfSize:11];
 
@@ -1790,7 +2138,7 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     self.powerSafetyTitleLabel.font = [NSFont systemFontOfSize:12 weight:NSFontWeightBold];
     self.powerSafetyTitleLabel.textColor = [NSColor labelColor];
 
-    self.powerSafetyDescLabel = [NSTextField wrappingLabelWithString:@"Note for BP-500/550 Battery Pack: In bootloader mode (\"The loader is waiting...\"), the transceiver does not detect the Battery Pack and powers off automatically after 10 seconds. Connect external power (13.8V DC) or keep the Battery Pack PWR button held continuously throughout the update."];
+    self.powerSafetyDescLabel = [self wrappingLabel:@"Note for BP-500/550 Battery Pack: In bootloader mode (\"The loader is waiting...\"), the transceiver does not detect the Battery Pack and powers off automatically after 10 seconds. Connect external power (13.8V DC) or keep the Battery Pack PWR button held continuously throughout the update."];
     self.powerSafetyDescLabel.font = [NSFont systemFontOfSize:11];
     self.powerSafetyDescLabel.textColor = [NSColor secondaryLabelColor];
 
@@ -1799,25 +2147,30 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     self.powerCheckButton.controlSize = NSControlSizeSmall;
     self.powerCheckButton.font = [NSFont systemFontOfSize:11];
 
-    NSStackView *vStack = [NSStackView stackViewWithViews:@[self.powerSafetyTitleLabel, self.powerSafetyDescLabel]];
+    NSView *spacer = [NSView new];
+    spacer.translatesAutoresizingMaskIntoConstraints = NO;
+    [spacer setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    NSStackView *topRow = [NSStackView stackViewWithViews:@[self.powerSafetyTitleLabel, spacer, self.powerCheckButton]];
+    topRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    topRow.alignment = NSLayoutAttributeCenterY;
+    topRow.spacing = 8;
+    topRow.translatesAutoresizingMaskIntoConstraints = NO;
+
+    NSStackView *vStack = [NSStackView stackViewWithViews:@[topRow, self.powerSafetyDescLabel]];
     vStack.orientation = NSUserInterfaceLayoutOrientationVertical;
     vStack.alignment = NSLayoutAttributeLeading;
-    vStack.spacing = 3;
+    vStack.spacing = 6;
     vStack.translatesAutoresizingMaskIntoConstraints = NO;
-
-    NSStackView *hStack = [NSStackView stackViewWithViews:@[vStack, self.powerCheckButton]];
-    hStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    hStack.alignment = NSLayoutAttributeCenterY;
-    hStack.spacing = 12;
-    hStack.translatesAutoresizingMaskIntoConstraints = NO;
-    [box.contentView addSubview:hStack];
+    [box.contentView addSubview:vStack];
 
     [NSLayoutConstraint activateConstraints:@[
-        [hStack.leadingAnchor constraintEqualToAnchor:box.contentView.leadingAnchor constant:12],
-        [hStack.trailingAnchor constraintEqualToAnchor:box.contentView.trailingAnchor constant:-12],
-        [hStack.topAnchor constraintEqualToAnchor:box.contentView.topAnchor constant:8],
-        [hStack.bottomAnchor constraintEqualToAnchor:box.contentView.bottomAnchor constant:-8],
-        [vStack.trailingAnchor constraintEqualToAnchor:self.powerCheckButton.leadingAnchor constant:-12]
+        [vStack.leadingAnchor constraintEqualToAnchor:box.contentView.leadingAnchor constant:12],
+        [vStack.trailingAnchor constraintEqualToAnchor:box.contentView.trailingAnchor constant:-12],
+        [vStack.topAnchor constraintEqualToAnchor:box.contentView.topAnchor constant:8],
+        [vStack.bottomAnchor constraintEqualToAnchor:box.contentView.bottomAnchor constant:-8],
+        [topRow.widthAnchor constraintEqualToAnchor:vStack.widthAnchor],
+        [self.powerSafetyDescLabel.widthAnchor constraintEqualToAnchor:vStack.widthAnchor],
     ]];
 
     return box;
@@ -2371,7 +2724,7 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
 - (void)showPreferencesWindow:(id)sender {
     (void)sender;
     if (!self.preferencesWindow) {
-        self.preferencesWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 580, 840)
+        self.preferencesWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 680, 840)
             styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable)
             backing:NSBackingStoreBuffered defer:NO];
         self.preferencesWindow.title = @"Preferences";
@@ -2386,6 +2739,44 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
         } else {
             self.preferencesWindow.appearance = nil; // System
         }
+
+        // Top Preferences Segmented Switcher
+        self.prefTabSegment = [NSSegmentedControl segmentedControlWithLabels:@[@"⚙️  Station & Operating", @"☁️  Cloud & Logbook Accounts"]
+                                                                trackingMode:NSSegmentSwitchTrackingSelectOne
+                                                                      target:self
+                                                                      action:@selector(prefTabChanged:)];
+        self.prefTabSegment.selectedSegment = 0;
+        self.prefTabSegment.segmentStyle = NSSegmentStyleTexturedRounded;
+        self.prefTabSegment.controlSize = NSControlSizeRegular;
+        self.prefTabSegment.translatesAutoresizingMaskIntoConstraints = NO;
+
+        // Container holding both tabs
+        NSView *tabHostView = [NSView new];
+        tabHostView.translatesAutoresizingMaskIntoConstraints = NO;
+
+        // Tab 0: Station Container
+        self.prefStationContainer = [NSView new];
+        self.prefStationContainer.translatesAutoresizingMaskIntoConstraints = NO;
+
+        // Tab 1: Cloud Container
+        self.prefCloudContainer = [NSView new];
+        self.prefCloudContainer.translatesAutoresizingMaskIntoConstraints = NO;
+        self.prefCloudContainer.hidden = YES;
+
+        [tabHostView addSubview:self.prefStationContainer];
+        [tabHostView addSubview:self.prefCloudContainer];
+
+        [NSLayoutConstraint activateConstraints:@[
+            [self.prefStationContainer.topAnchor constraintEqualToAnchor:tabHostView.topAnchor],
+            [self.prefStationContainer.leadingAnchor constraintEqualToAnchor:tabHostView.leadingAnchor],
+            [self.prefStationContainer.trailingAnchor constraintEqualToAnchor:tabHostView.trailingAnchor],
+            [self.prefStationContainer.bottomAnchor constraintEqualToAnchor:tabHostView.bottomAnchor],
+
+            [self.prefCloudContainer.topAnchor constraintEqualToAnchor:tabHostView.topAnchor],
+            [self.prefCloudContainer.leadingAnchor constraintEqualToAnchor:tabHostView.leadingAnchor],
+            [self.prefCloudContainer.trailingAnchor constraintEqualToAnchor:tabHostView.trailingAnchor],
+            [self.prefCloudContainer.bottomAnchor constraintEqualToAnchor:tabHostView.bottomAnchor],
+        ]];
 
         // Header Stack
         NSTextField *titleLabel = [self label:@"Station & Operating Preferences"];
@@ -2685,6 +3076,51 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
             [swrDesc.widthAnchor constraintEqualToAnchor:safetyStack.widthAnchor]
         ]];
 
+        NSStackView *stationOuterStack = [NSStackView stackViewWithViews:@[titleLabel, subLabel, stationBox, timeBox, logBox, appearanceBox, safetyBox]];
+        stationOuterStack.orientation = NSUserInterfaceLayoutOrientationVertical;
+        stationOuterStack.alignment = NSLayoutAttributeLeading;
+        stationOuterStack.spacing = 10;
+        stationOuterStack.translatesAutoresizingMaskIntoConstraints = NO;
+        [self.prefStationContainer addSubview:stationOuterStack];
+
+        [NSLayoutConstraint activateConstraints:@[
+            [stationOuterStack.topAnchor constraintEqualToAnchor:self.prefStationContainer.topAnchor],
+            [stationOuterStack.leadingAnchor constraintEqualToAnchor:self.prefStationContainer.leadingAnchor],
+            [stationOuterStack.trailingAnchor constraintEqualToAnchor:self.prefStationContainer.trailingAnchor],
+            [stationOuterStack.bottomAnchor constraintLessThanOrEqualToAnchor:self.prefStationContainer.bottomAnchor],
+            [stationBox.widthAnchor constraintEqualToAnchor:stationOuterStack.widthAnchor],
+            [timeBox.widthAnchor constraintEqualToAnchor:stationOuterStack.widthAnchor],
+            [logBox.widthAnchor constraintEqualToAnchor:stationOuterStack.widthAnchor],
+            [appearanceBox.widthAnchor constraintEqualToAnchor:stationOuterStack.widthAnchor],
+            [safetyBox.widthAnchor constraintEqualToAnchor:stationOuterStack.widthAnchor]
+        ]];
+
+        // Cloud Stack for Tab 1
+        NSTextField *cloudTitleLabel = [self label:@"Cloud & Logbook Accounts"];
+        cloudTitleLabel.font = [NSFont systemFontOfSize:18 weight:NSFontWeightBold];
+
+        NSTextField *cloudSubLabel = [self label:@"Manage credentials and synchronization for LoTW, QRZ.com, Club Log, eQSL, and HamQTH."];
+        cloudSubLabel.font = [NSFont systemFontOfSize:12 weight:NSFontWeightRegular];
+        cloudSubLabel.textColor = NSColor.secondaryLabelColor;
+
+        NSView *cloudView = [TX500CloudSettingsController sharedController].settingsView;
+        cloudView.translatesAutoresizingMaskIntoConstraints = NO;
+
+        NSStackView *cloudStack = [NSStackView stackViewWithViews:@[cloudTitleLabel, cloudSubLabel, cloudView]];
+        cloudStack.orientation = NSUserInterfaceLayoutOrientationVertical;
+        cloudStack.alignment = NSLayoutAttributeLeading;
+        cloudStack.spacing = 10;
+        cloudStack.translatesAutoresizingMaskIntoConstraints = NO;
+        [self.prefCloudContainer addSubview:cloudStack];
+
+        [NSLayoutConstraint activateConstraints:@[
+            [cloudStack.topAnchor constraintEqualToAnchor:self.prefCloudContainer.topAnchor],
+            [cloudStack.leadingAnchor constraintEqualToAnchor:self.prefCloudContainer.leadingAnchor],
+            [cloudStack.trailingAnchor constraintEqualToAnchor:self.prefCloudContainer.trailingAnchor],
+            [cloudStack.bottomAnchor constraintLessThanOrEqualToAnchor:self.prefCloudContainer.bottomAnchor],
+            [cloudView.widthAnchor constraintEqualToAnchor:cloudStack.widthAnchor]
+        ]];
+
         // --- Bottom Action Buttons ---
         NSButton *cancelBtn = [NSButton buttonWithTitle:@"Cancel" target:self action:@selector(cancelPreferences:)];
         cancelBtn.bezelStyle = NSBezelStyleRounded;
@@ -2702,24 +3138,22 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
         btnRow.spacing = 12;
         btnRow.translatesAutoresizingMaskIntoConstraints = NO;
 
-        NSStackView *mainStack = [NSStackView stackViewWithViews:@[titleLabel, subLabel, stationBox, timeBox, logBox, appearanceBox, safetyBox, btnRow]];
-        mainStack.orientation = NSUserInterfaceLayoutOrientationVertical;
-        mainStack.alignment = NSLayoutAttributeLeading;
-        mainStack.spacing = 12;
-        mainStack.translatesAutoresizingMaskIntoConstraints = NO;
-        [self.preferencesWindow.contentView addSubview:mainStack];
+        [self.preferencesWindow.contentView addSubview:self.prefTabSegment];
+        [self.preferencesWindow.contentView addSubview:tabHostView];
+        [self.preferencesWindow.contentView addSubview:btnRow];
 
         [NSLayoutConstraint activateConstraints:@[
-            [mainStack.leadingAnchor constraintEqualToAnchor:self.preferencesWindow.contentView.leadingAnchor constant:24],
-            [mainStack.trailingAnchor constraintEqualToAnchor:self.preferencesWindow.contentView.trailingAnchor constant:-24],
-            [mainStack.topAnchor constraintEqualToAnchor:self.preferencesWindow.contentView.topAnchor constant:20],
-            [mainStack.bottomAnchor constraintLessThanOrEqualToAnchor:self.preferencesWindow.contentView.bottomAnchor constant:-16],
-            [stationBox.widthAnchor constraintEqualToAnchor:mainStack.widthAnchor],
-            [timeBox.widthAnchor constraintEqualToAnchor:mainStack.widthAnchor],
-            [logBox.widthAnchor constraintEqualToAnchor:mainStack.widthAnchor],
-            [appearanceBox.widthAnchor constraintEqualToAnchor:mainStack.widthAnchor],
-            [safetyBox.widthAnchor constraintEqualToAnchor:mainStack.widthAnchor],
-            [btnRow.trailingAnchor constraintEqualToAnchor:mainStack.trailingAnchor]
+            [self.prefTabSegment.topAnchor constraintEqualToAnchor:self.preferencesWindow.contentView.topAnchor constant:14],
+            [self.prefTabSegment.centerXAnchor constraintEqualToAnchor:self.preferencesWindow.contentView.centerXAnchor],
+            [self.prefTabSegment.heightAnchor constraintEqualToConstant:28],
+
+            [tabHostView.topAnchor constraintEqualToAnchor:self.prefTabSegment.bottomAnchor constant:12],
+            [tabHostView.leadingAnchor constraintEqualToAnchor:self.preferencesWindow.contentView.leadingAnchor constant:24],
+            [tabHostView.trailingAnchor constraintEqualToAnchor:self.preferencesWindow.contentView.trailingAnchor constant:-24],
+            [tabHostView.bottomAnchor constraintEqualToAnchor:btnRow.topAnchor constant:-12],
+
+            [btnRow.trailingAnchor constraintEqualToAnchor:self.preferencesWindow.contentView.trailingAnchor constant:-24],
+            [btnRow.bottomAnchor constraintEqualToAnchor:self.preferencesWindow.contentView.bottomAnchor constant:-16]
         ]];
 
     }
@@ -2762,6 +3196,21 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     [NSApp activateIgnoringOtherApps:YES];
 }
 
+- (void)selectPreferencesTab:(NSInteger)tab {
+    if (tab < 0 || tab >= 2) tab = 0;
+    self.prefTabSegment.selectedSegment = tab;
+    [self prefTabChanged:self.prefTabSegment];
+}
+
+- (void)prefTabChanged:(NSSegmentedControl *)sender {
+    NSInteger tab = sender.selectedSegment;
+    self.prefStationContainer.hidden = (tab != 0);
+    self.prefCloudContainer.hidden = (tab != 1);
+    if (tab == 1) {
+        [[TX500CloudSettingsController sharedController] loadSavedSettings];
+    }
+}
+
 - (void)savePreferences:(id)sender {
     (void)sender;
     NSString *call = [[self.prefCallsignField.stringValue uppercaseString] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
@@ -2790,6 +3239,9 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
     [[NSUserDefaults standardUserDefaults] setInteger:themeIdx forKey:@"TX500_AppTheme"];
     [[NSUserDefaults standardUserDefaults] setDouble:swrThreshold forKey:@"TX500_SWRThreshold"];
     [[NSUserDefaults standardUserDefaults] synchronize];
+
+    // Also persist cloud credentials if configured
+    [[TX500CloudSettingsController sharedController] saveAndApplyClicked];
 
     // Apply theme immediately
     NSAppearance *appearance = nil;
@@ -2993,6 +3445,106 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender {
     (void)sender;
     return YES;
+}
+
+- (void)ensureWindowFitsVisibleScreen {
+    if (!self.window) return;
+    NSScreen *screen = self.window.screen ?: [NSScreen mainScreen];
+    if (!screen) return;
+    NSRect screenRect = [screen visibleFrame];
+    NSRect winFrame = self.window.frame;
+
+    BOOL needsAdjust = NO;
+    CGFloat maxW = MAX(780.0, screenRect.size.width - 24.0);
+    CGFloat maxH = MAX(460.0, screenRect.size.height - 44.0);
+
+    CGFloat targetW = winFrame.size.width;
+    CGFloat targetH = winFrame.size.height;
+
+    // On laptops or smaller displays (e.g. width <= 1440 pt or height <= 900 pt),
+    // clamp overly bloated restored frames to comfortable bounds
+    CGFloat comfortableMaxW = MIN(1080.0, screenRect.size.width - 40.0);
+    CGFloat comfortableMaxH = MIN(720.0, screenRect.size.height - 50.0);
+    if (comfortableMaxW < 780.0) comfortableMaxW = 780.0;
+    if (comfortableMaxH < 460.0) comfortableMaxH = 460.0;
+
+    if (targetW > maxW) {
+        targetW = maxW;
+        needsAdjust = YES;
+    } else if (screenRect.size.width <= 1440.0 && targetW > comfortableMaxW) {
+        targetW = comfortableMaxW;
+        needsAdjust = YES;
+    }
+
+    if (targetH > maxH) {
+        targetH = maxH;
+        needsAdjust = YES;
+    } else if (screenRect.size.height <= 900.0 && targetH > comfortableMaxH) {
+        targetH = comfortableMaxH;
+        needsAdjust = YES;
+    }
+
+    if (targetW < 780.0 && screenRect.size.width >= 780.0) {
+        targetW = 780.0;
+        needsAdjust = YES;
+    }
+    if (targetH < 460.0 && screenRect.size.height >= 460.0) {
+        targetH = 460.0;
+        needsAdjust = YES;
+    }
+
+    CGFloat targetX = winFrame.origin.x;
+    CGFloat targetY = winFrame.origin.y;
+
+    if (targetX < screenRect.origin.x) {
+        targetX = screenRect.origin.x + 10.0;
+        needsAdjust = YES;
+    } else if (targetX + targetW > NSMaxX(screenRect)) {
+        targetX = NSMaxX(screenRect) - targetW - 10.0;
+        needsAdjust = YES;
+    }
+
+    if (targetY < screenRect.origin.y) {
+        targetY = screenRect.origin.y + 10.0;
+        needsAdjust = YES;
+    } else if (targetY + targetH > NSMaxY(screenRect)) {
+        targetY = NSMaxY(screenRect) - targetH - 10.0;
+        needsAdjust = YES;
+    }
+
+    if (needsAdjust) {
+        NSRect adjustedFrame = NSMakeRect(targetX, targetY, targetW, targetH);
+        [self.window setFrame:adjustedFrame display:YES animate:NO];
+    }
+}
+
+- (void)resetWindowBoundsToScreen:(id)sender {
+    (void)sender;
+    [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"NSWindow Frame Lab599UtilityMainWindow"];
+    [[NSUserDefaults standardUserDefaults] synchronize];
+
+    NSScreen *screen = self.window.screen ?: [NSScreen mainScreen];
+    NSRect screenRect = screen ? [screen visibleFrame] : NSMakeRect(0, 0, 960, 620);
+
+    CGFloat defaultW = MIN(960.0, screenRect.size.width - 60.0);
+    CGFloat defaultH = MIN(620.0, screenRect.size.height - 80.0);
+    if (defaultW < 780.0) defaultW = 780.0;
+    if (defaultH < 460.0) defaultH = 460.0;
+
+    NSRect targetFrame;
+    targetFrame.size.width = defaultW;
+    targetFrame.size.height = defaultH;
+    targetFrame.origin.x = screenRect.origin.x + (screenRect.size.width - defaultW) / 2.0;
+    targetFrame.origin.y = screenRect.origin.y + (screenRect.size.height - defaultH) / 2.0;
+
+    [self.window setFrame:targetFrame display:YES animate:YES];
+    [self.window saveFrameUsingName:@"Lab599UtilityMainWindow"];
+    [self appendLog:[NSString stringWithFormat:@"Window size reset to %.0f x %.0f.", defaultW, defaultH]];
+}
+
+- (void)windowDidChangeScreen:(NSNotification *)notification {
+    (void)notification;
+    [self ensureWindowFitsVisibleScreen];
 }
 
 @end

@@ -48,9 +48,11 @@ static NSString * const kGitHubNewIssueURL = @"https://github.com/fact0real/Lab5
 static NSTextField *CreateLabel(NSString *text, BOOL bold, CGFloat size, NSColor *color) {
     NSTextField *field = [NSTextField wrappingLabelWithString:text];
     field.translatesAutoresizingMaskIntoConstraints = NO;
+    field.preferredMaxLayoutWidth = 350.0;
     field.font = bold ? [NSFont systemFontOfSize:size weight:NSFontWeightBold] :
                         [NSFont systemFontOfSize:size weight:NSFontWeightRegular];
     if (color) field.textColor = color;
+    [field setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
     return field;
 }
 

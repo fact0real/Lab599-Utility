@@ -34,6 +34,34 @@
 		1000003C /* TX500ScreenRenderer.m in Sources */ = {isa = PBXBuildFile; fileRef = 2000003C /* TX500ScreenRenderer.m */; };
 		1000003D /* TX500ScreenCaptureController.m in Sources */ = {isa = PBXBuildFile; fileRef = 2000003D /* TX500ScreenCaptureController.m */; };
 		1000003E /* TX500SettingsModel.m in Sources */ = {isa = PBXBuildFile; fileRef = 2000003E /* TX500SettingsModel.m */; };
+		1000000D /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2000000D /* AVFoundation.framework */; };
+		1000000E /* CoreAudio.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2000000E /* CoreAudio.framework */; };
+		1000000F /* AudioToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2000000F /* AudioToolbox.framework */; };
+		10000050 /* TX500AudioEngine.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000050 /* TX500AudioEngine.m */; };
+		10000051 /* TX500AudioVisualizerView.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000051 /* TX500AudioVisualizerView.m */; };
+		10000052 /* TX500AudioMonitorController.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000052 /* TX500AudioMonitorController.m */; };
+		10000053 /* TX500CWAudioDecoder.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000053 /* TX500CWAudioDecoder.m */; };
+		10000054 /* TX500CWKeyer.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000054 /* TX500CWKeyer.m */; };
+		10000055 /* TX500CWQSOAssistant.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000055 /* TX500CWQSOAssistant.m */; };
+		10000056 /* TX500CWSpectrumView.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000056 /* TX500CWSpectrumView.m */; };
+		10000057 /* TX500CWStationController.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000057 /* TX500CWStationController.m */; };
+		10000058 /* TX500FT8Message.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000058 /* TX500FT8Message.m */; };
+		10000059 /* TX500FT8AudioEngine.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000059 /* TX500FT8AudioEngine.m */; };
+		1000005A /* TX500FT8AutoEngine.m in Sources */ = {isa = PBXBuildFile; fileRef = 2000005A /* TX500FT8AutoEngine.m */; };
+		1000005B /* TX500FT8WaterfallView.m in Sources */ = {isa = PBXBuildFile; fileRef = 2000005B /* TX500FT8WaterfallView.m */; };
+		1000005C /* TX500FT8StationController.m in Sources */ = {isa = PBXBuildFile; fileRef = 2000005C /* TX500FT8StationController.m */; };
+		1000005D /* constants.c in Sources */ = {isa = PBXBuildFile; fileRef = 2000005D /* constants.c */; };
+		1000005E /* crc.c in Sources */ = {isa = PBXBuildFile; fileRef = 2000005E /* crc.c */; };
+		1000005F /* encode.c in Sources */ = {isa = PBXBuildFile; fileRef = 2000005F /* encode.c */; };
+		10000060 /* decode.c in Sources */ = {isa = PBXBuildFile; fileRef = 20000060 /* decode.c */; };
+		10000061 /* ldpc.c in Sources */ = {isa = PBXBuildFile; fileRef = 20000061 /* ldpc.c */; };
+		10000062 /* message.c in Sources */ = {isa = PBXBuildFile; fileRef = 20000062 /* message.c */; };
+		10000063 /* text.c in Sources */ = {isa = PBXBuildFile; fileRef = 20000063 /* text.c */; };
+		10000064 /* kiss_fft.c in Sources */ = {isa = PBXBuildFile; fileRef = 20000064 /* kiss_fft.c */; };
+		10000065 /* kiss_fftr.c in Sources */ = {isa = PBXBuildFile; fileRef = 20000065 /* kiss_fftr.c */; };
+		10000066 /* wave.c in Sources */ = {isa = PBXBuildFile; fileRef = 20000066 /* wave.c */; };
+		10000067 /* monitor.c in Sources */ = {isa = PBXBuildFile; fileRef = 20000067 /* monitor.c */; };
+		10000068 /* tx500_ft8_shim.c in Sources */ = {isa = PBXBuildFile; fileRef = 20000068 /* tx500_ft8_shim.c */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -84,6 +112,48 @@
 		2000004C /* TX500ScreenRenderer.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TX500ScreenRenderer.h; sourceTree = "<group>"; };
 		2000004D /* TX500ScreenCaptureController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TX500ScreenCaptureController.h; sourceTree = "<group>"; };
 		2000004E /* TX500SettingsModel.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TX500SettingsModel.h; sourceTree = "<group>"; };
+		2000000D /* AVFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVFoundation.framework; path = System/Library/Frameworks/AVFoundation.framework; sourceTree = SDKROOT; };
+		2000000E /* CoreAudio.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreAudio.framework; path = System/Library/Frameworks/CoreAudio.framework; sourceTree = SDKROOT; };
+		2000000F /* AudioToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioToolbox.framework; path = System/Library/Frameworks/AudioToolbox.framework; sourceTree = SDKROOT; };
+		20000050 /* TX500AudioEngine.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "TX500AudioEngine.m"; sourceTree = "<group>"; };
+		20000051 /* TX500AudioVisualizerView.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "TX500AudioVisualizerView.m"; sourceTree = "<group>"; };
+		20000052 /* TX500AudioMonitorController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "TX500AudioMonitorController.m"; sourceTree = "<group>"; };
+		20000053 /* TX500CWAudioDecoder.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "TX500CWAudioDecoder.m"; sourceTree = "<group>"; };
+		20000054 /* TX500CWKeyer.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "TX500CWKeyer.m"; sourceTree = "<group>"; };
+		20000055 /* TX500CWQSOAssistant.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "TX500CWQSOAssistant.m"; sourceTree = "<group>"; };
+		20000056 /* TX500CWSpectrumView.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "TX500CWSpectrumView.m"; sourceTree = "<group>"; };
+		20000057 /* TX500CWStationController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "TX500CWStationController.m"; sourceTree = "<group>"; };
+		20000058 /* TX500FT8Message.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "TX500FT8Message.m"; sourceTree = "<group>"; };
+		20000059 /* TX500FT8AudioEngine.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "TX500FT8AudioEngine.m"; sourceTree = "<group>"; };
+		2000005A /* TX500FT8AutoEngine.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "TX500FT8AutoEngine.m"; sourceTree = "<group>"; };
+		2000005B /* TX500FT8WaterfallView.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "TX500FT8WaterfallView.m"; sourceTree = "<group>"; };
+		2000005C /* TX500FT8StationController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "TX500FT8StationController.m"; sourceTree = "<group>"; };
+		2000005D /* constants.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = "cft8/ft8/constants.c"; sourceTree = "<group>"; };
+		2000005E /* crc.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = "cft8/ft8/crc.c"; sourceTree = "<group>"; };
+		2000005F /* encode.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = "cft8/ft8/encode.c"; sourceTree = "<group>"; };
+		20000060 /* decode.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = "cft8/ft8/decode.c"; sourceTree = "<group>"; };
+		20000061 /* ldpc.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = "cft8/ft8/ldpc.c"; sourceTree = "<group>"; };
+		20000062 /* message.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = "cft8/ft8/message.c"; sourceTree = "<group>"; };
+		20000063 /* text.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = "cft8/ft8/text.c"; sourceTree = "<group>"; };
+		20000064 /* kiss_fft.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = "cft8/fft/kiss_fft.c"; sourceTree = "<group>"; };
+		20000065 /* kiss_fftr.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = "cft8/fft/kiss_fftr.c"; sourceTree = "<group>"; };
+		20000066 /* wave.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = "cft8/common/wave.c"; sourceTree = "<group>"; };
+		20000067 /* monitor.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = "cft8/common/monitor.c"; sourceTree = "<group>"; };
+		20000068 /* tx500_ft8_shim.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = "cft8/shim/tx500_ft8_shim.c"; sourceTree = "<group>"; };
+		20000080 /* TX500AudioEngine.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "TX500AudioEngine.h"; sourceTree = "<group>"; };
+		20000081 /* TX500AudioVisualizerView.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "TX500AudioVisualizerView.h"; sourceTree = "<group>"; };
+		20000082 /* TX500AudioMonitorController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "TX500AudioMonitorController.h"; sourceTree = "<group>"; };
+		20000083 /* TX500CWAudioDecoder.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "TX500CWAudioDecoder.h"; sourceTree = "<group>"; };
+		20000084 /* TX500CWKeyer.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "TX500CWKeyer.h"; sourceTree = "<group>"; };
+		20000085 /* TX500CWQSOAssistant.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "TX500CWQSOAssistant.h"; sourceTree = "<group>"; };
+		20000086 /* TX500CWSpectrumView.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "TX500CWSpectrumView.h"; sourceTree = "<group>"; };
+		20000087 /* TX500CWStationController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "TX500CWStationController.h"; sourceTree = "<group>"; };
+		20000088 /* TX500FT8Message.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "TX500FT8Message.h"; sourceTree = "<group>"; };
+		20000089 /* TX500FT8AudioEngine.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "TX500FT8AudioEngine.h"; sourceTree = "<group>"; };
+		2000008A /* TX500FT8AutoEngine.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "TX500FT8AutoEngine.h"; sourceTree = "<group>"; };
+		2000008B /* TX500FT8WaterfallView.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "TX500FT8WaterfallView.h"; sourceTree = "<group>"; };
+		2000008C /* TX500FT8StationController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "TX500FT8StationController.h"; sourceTree = "<group>"; };
+		2000008D /* tx500_ft8_shim.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "cft8/tx500_ft8_shim.h"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -93,6 +163,9 @@
 			files = (
 				10000005 /* Cocoa.framework in Frameworks */,
 				10000006 /* UniformTypeIdentifiers.framework in Frameworks */,
+				1000000D /* AVFoundation.framework in Frameworks */,
+				1000000E /* CoreAudio.framework in Frameworks */,
+				1000000F /* AudioToolbox.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -132,6 +205,31 @@
 				2000003C /* TX500ScreenRenderer.m */,
 				2000003D /* TX500ScreenCaptureController.m */,
 				2000003E /* TX500SettingsModel.m */,
+				20000050 /* TX500AudioEngine.m */,
+				20000051 /* TX500AudioVisualizerView.m */,
+				20000052 /* TX500AudioMonitorController.m */,
+				20000053 /* TX500CWAudioDecoder.m */,
+				20000054 /* TX500CWKeyer.m */,
+				20000055 /* TX500CWQSOAssistant.m */,
+				20000056 /* TX500CWSpectrumView.m */,
+				20000057 /* TX500CWStationController.m */,
+				20000058 /* TX500FT8Message.m */,
+				20000059 /* TX500FT8AudioEngine.m */,
+				2000005A /* TX500FT8AutoEngine.m */,
+				2000005B /* TX500FT8WaterfallView.m */,
+				2000005C /* TX500FT8StationController.m */,
+				2000005D /* constants.c */,
+				2000005E /* crc.c */,
+				2000005F /* encode.c */,
+				20000060 /* decode.c */,
+				20000061 /* ldpc.c */,
+				20000062 /* message.c */,
+				20000063 /* text.c */,
+				20000064 /* kiss_fft.c */,
+				20000065 /* kiss_fftr.c */,
+				20000066 /* wave.c */,
+				20000067 /* monitor.c */,
+				20000068 /* tx500_ft8_shim.c */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
@@ -157,6 +255,20 @@
 				2000004C /* TX500ScreenRenderer.h */,
 				2000004D /* TX500ScreenCaptureController.h */,
 				2000004E /* TX500SettingsModel.h */,
+				20000080 /* TX500AudioEngine.h */,
+				20000081 /* TX500AudioVisualizerView.h */,
+				20000082 /* TX500AudioMonitorController.h */,
+				20000083 /* TX500CWAudioDecoder.h */,
+				20000084 /* TX500CWKeyer.h */,
+				20000085 /* TX500CWQSOAssistant.h */,
+				20000086 /* TX500CWSpectrumView.h */,
+				20000087 /* TX500CWStationController.h */,
+				20000088 /* TX500FT8Message.h */,
+				20000089 /* TX500FT8AudioEngine.h */,
+				2000008A /* TX500FT8AutoEngine.h */,
+				2000008B /* TX500FT8WaterfallView.h */,
+				2000008C /* TX500FT8StationController.h */,
+				2000008D /* tx500_ft8_shim.h */,
 			);
 			path = Headers;
 			sourceTree = "<group>";
@@ -180,6 +292,9 @@
 			children = (
 				20000005 /* Cocoa.framework */,
 				20000006 /* UniformTypeIdentifiers.framework */,
+				2000000D /* AVFoundation.framework */,
+				2000000E /* CoreAudio.framework */,
+				2000000F /* AudioToolbox.framework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -284,6 +399,31 @@
 				1000003C /* TX500ScreenRenderer.m in Sources */,
 				1000003D /* TX500ScreenCaptureController.m in Sources */,
 				1000003E /* TX500SettingsModel.m in Sources */,
+				10000050 /* TX500AudioEngine.m in Sources */,
+				10000051 /* TX500AudioVisualizerView.m in Sources */,
+				10000052 /* TX500AudioMonitorController.m in Sources */,
+				10000053 /* TX500CWAudioDecoder.m in Sources */,
+				10000054 /* TX500CWKeyer.m in Sources */,
+				10000055 /* TX500CWQSOAssistant.m in Sources */,
+				10000056 /* TX500CWSpectrumView.m in Sources */,
+				10000057 /* TX500CWStationController.m in Sources */,
+				10000058 /* TX500FT8Message.m in Sources */,
+				10000059 /* TX500FT8AudioEngine.m in Sources */,
+				1000005A /* TX500FT8AutoEngine.m in Sources */,
+				1000005B /* TX500FT8WaterfallView.m in Sources */,
+				1000005C /* TX500FT8StationController.m in Sources */,
+				1000005D /* constants.c in Sources */,
+				1000005E /* crc.c in Sources */,
+				1000005F /* encode.c in Sources */,
+				10000060 /* decode.c in Sources */,
+				10000061 /* ldpc.c in Sources */,
+				10000062 /* message.c in Sources */,
+				10000063 /* text.c in Sources */,
+				10000064 /* kiss_fft.c in Sources */,
+				10000065 /* kiss_fftr.c in Sources */,
+				10000066 /* wave.c in Sources */,
+				10000067 /* monitor.c in Sources */,
+				10000068 /* tx500_ft8_shim.c in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -346,7 +486,9 @@
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)/Headers",
+					"$(SRCROOT)/Headers/cft8",
 					"$(SRCROOT)/Sources",
+					"$(SRCROOT)/Sources/cft8",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
@@ -355,7 +497,12 @@
 				SDKROOT = macosx;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SUPPORTED_PLATFORMS = macosx;
-				USER_HEADER_SEARCH_PATHS = "$(SRCROOT)/Headers";
+				USER_HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/Headers",
+					"$(SRCROOT)/Headers/cft8",
+					"$(SRCROOT)/Sources",
+					"$(SRCROOT)/Sources/cft8",
+				);
 			};
 			name = Debug;
 		};
@@ -409,7 +556,9 @@
 				HEADER_SEARCH_PATHS = (
 					"$(inherited)",
 					"$(SRCROOT)/Headers",
+					"$(SRCROOT)/Headers/cft8",
 					"$(SRCROOT)/Sources",
+					"$(SRCROOT)/Sources/cft8",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
@@ -417,7 +566,12 @@
 				SDKROOT = macosx;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SUPPORTED_PLATFORMS = macosx;
-				USER_HEADER_SEARCH_PATHS = "$(SRCROOT)/Headers";
+				USER_HEADER_SEARCH_PATHS = (
+					"$(SRCROOT)/Headers",
+					"$(SRCROOT)/Headers/cft8",
+					"$(SRCROOT)/Sources",
+					"$(SRCROOT)/Sources/cft8",
+				);
 			};
 			name = Release;
 		};

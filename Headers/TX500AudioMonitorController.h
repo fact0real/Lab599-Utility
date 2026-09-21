@@ -24,6 +24,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy, nullable) NSString *(^selectedPortProvider)(void);
 @property (nonatomic, copy, nullable) BOOL (^serialCommandSender)(NSString *catCommand);
 @property (nonatomic, copy, nullable) NSString * _Nullable (^catQueryHandler)(NSString *catCommand, NSTimeInterval timeout);
+@property (nonatomic, copy, nullable) void (^onQuickLogRequested)(uint64_t freqHz, NSString *mode);
 
 // Radio State
 @property (nonatomic, assign, readonly) uint64_t currentFrequencyHz;

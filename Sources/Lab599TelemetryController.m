@@ -218,10 +218,24 @@
     NSButton *resetPeakBtn = [NSButton buttonWithTitle:@"Reset Peaks" target:self action:@selector(resetPeaks:)];
     resetPeakBtn.bezelStyle = NSBezelStyleInline;
 
-    NSStackView *guardsStack = [NSStackView stackViewWithViews:@[self.voltGuard, self.swrGuard, self.tempGuard, avgLabel, self.avgSegment, resetPeakBtn]];
-    guardsStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    guardsStack.spacing = 12;
-    guardsStack.alignment = NSLayoutAttributeCenterY;
+    [self.voltGuard setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [self.swrGuard setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [self.tempGuard setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    NSStackView *guardsRow1 = [NSStackView stackViewWithViews:@[self.voltGuard, self.swrGuard]];
+    guardsRow1.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    guardsRow1.spacing = 12;
+    guardsRow1.alignment = NSLayoutAttributeCenterY;
+
+    NSStackView *guardsRow2 = [NSStackView stackViewWithViews:@[self.tempGuard, avgLabel, self.avgSegment, resetPeakBtn]];
+    guardsRow2.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    guardsRow2.spacing = 12;
+    guardsRow2.alignment = NSLayoutAttributeCenterY;
+
+    NSStackView *guardsStack = [NSStackView stackViewWithViews:@[guardsRow1, guardsRow2]];
+    guardsStack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    guardsStack.spacing = 6;
+    guardsStack.alignment = NSLayoutAttributeLeading;
 
     self.connStatusLabel = [NSTextField labelWithString:@"Ready. Click 'Start Monitoring' or enable 'Demo / Sim Mode'."];
     self.connStatusLabel.font = [NSFont systemFontOfSize:11 weight:NSFontWeightRegular];

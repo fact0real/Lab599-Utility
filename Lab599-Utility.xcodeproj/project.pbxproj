@@ -62,6 +62,11 @@
 		10000066 /* wave.c in Sources */ = {isa = PBXBuildFile; fileRef = 20000066 /* wave.c */; };
 		10000067 /* monitor.c in Sources */ = {isa = PBXBuildFile; fileRef = 20000067 /* monitor.c */; };
 		10000068 /* tx500_ft8_shim.c in Sources */ = {isa = PBXBuildFile; fileRef = 20000068 /* tx500_ft8_shim.c */; };
+		10000010 /* libsqlite3.tbd in Frameworks */ = {isa = PBXBuildFile; fileRef = 20000010 /* libsqlite3.tbd */; };
+		10000069 /* TX500LogbookManager.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000069 /* TX500LogbookManager.m */; };
+		1000006A /* TX500CallsignLookupService.m in Sources */ = {isa = PBXBuildFile; fileRef = 2000006A /* TX500CallsignLookupService.m */; };
+		1000006B /* TX500CloudSyncEngine.m in Sources */ = {isa = PBXBuildFile; fileRef = 2000006B /* TX500CloudSyncEngine.m */; };
+		1000006C /* TX500LogbookController.m in Sources */ = {isa = PBXBuildFile; fileRef = 2000006C /* TX500LogbookController.m */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -154,6 +159,15 @@
 		2000008B /* TX500FT8WaterfallView.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "TX500FT8WaterfallView.h"; sourceTree = "<group>"; };
 		2000008C /* TX500FT8StationController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "TX500FT8StationController.h"; sourceTree = "<group>"; };
 		2000008D /* tx500_ft8_shim.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "cft8/tx500_ft8_shim.h"; sourceTree = "<group>"; };
+		20000010 /* libsqlite3.tbd */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.text-based-dylib-definition"; name = libsqlite3.tbd; path = usr/lib/libsqlite3.tbd; sourceTree = SDKROOT; };
+		20000069 /* TX500LogbookManager.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "TX500LogbookManager.m"; sourceTree = "<group>"; };
+		2000006A /* TX500CallsignLookupService.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "TX500CallsignLookupService.m"; sourceTree = "<group>"; };
+		2000006B /* TX500CloudSyncEngine.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "TX500CloudSyncEngine.m"; sourceTree = "<group>"; };
+		2000006C /* TX500LogbookController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "TX500LogbookController.m"; sourceTree = "<group>"; };
+		2000008E /* TX500LogbookManager.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "TX500LogbookManager.h"; sourceTree = "<group>"; };
+		2000008F /* TX500CallsignLookupService.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "TX500CallsignLookupService.h"; sourceTree = "<group>"; };
+		20000090 /* TX500CloudSyncEngine.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "TX500CloudSyncEngine.h"; sourceTree = "<group>"; };
+		20000091 /* TX500LogbookController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "TX500LogbookController.h"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -166,6 +180,7 @@
 				1000000D /* AVFoundation.framework in Frameworks */,
 				1000000E /* CoreAudio.framework in Frameworks */,
 				1000000F /* AudioToolbox.framework in Frameworks */,
+				10000010 /* libsqlite3.tbd in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -230,6 +245,10 @@
 				20000066 /* wave.c */,
 				20000067 /* monitor.c */,
 				20000068 /* tx500_ft8_shim.c */,
+				20000069 /* TX500LogbookManager.m */,
+				2000006A /* TX500CallsignLookupService.m */,
+				2000006B /* TX500CloudSyncEngine.m */,
+				2000006C /* TX500LogbookController.m */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
@@ -269,6 +288,10 @@
 				2000008B /* TX500FT8WaterfallView.h */,
 				2000008C /* TX500FT8StationController.h */,
 				2000008D /* tx500_ft8_shim.h */,
+				2000008E /* TX500LogbookManager.h */,
+				2000008F /* TX500CallsignLookupService.h */,
+				20000090 /* TX500CloudSyncEngine.h */,
+				20000091 /* TX500LogbookController.h */,
 			);
 			path = Headers;
 			sourceTree = "<group>";
@@ -295,6 +318,7 @@
 				2000000D /* AVFoundation.framework */,
 				2000000E /* CoreAudio.framework */,
 				2000000F /* AudioToolbox.framework */,
+				20000010 /* libsqlite3.tbd */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -424,6 +448,10 @@
 				10000066 /* wave.c in Sources */,
 				10000067 /* monitor.c in Sources */,
 				10000068 /* tx500_ft8_shim.c in Sources */,
+				10000069 /* TX500LogbookManager.m in Sources */,
+				1000006A /* TX500CallsignLookupService.m in Sources */,
+				1000006B /* TX500CloudSyncEngine.m in Sources */,
+				1000006C /* TX500LogbookController.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -582,7 +610,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 96;
+				CURRENT_PROJECT_VERSION = 140;
 				DEAD_CODE_STRIPPING = YES;
 				INFOPLIST_FILE = Resources/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Lab599 Utility";
@@ -591,7 +619,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
-				MARKETING_VERSION = 2.90;
+				MARKETING_VERSION = 2.134;
 				PRODUCT_BUNDLE_IDENTIFIER = local.lab599.utility;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 			};
@@ -604,7 +632,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 96;
+				CURRENT_PROJECT_VERSION = 140;
 				DEAD_CODE_STRIPPING = YES;
 				INFOPLIST_FILE = Resources/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Lab599 Utility";
@@ -613,7 +641,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
-				MARKETING_VERSION = 2.90;
+				MARKETING_VERSION = 2.134;
 				PRODUCT_BUNDLE_IDENTIFIER = local.lab599.utility;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 			};

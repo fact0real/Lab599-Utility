@@ -68,6 +68,7 @@ static double Rad2Deg(double rad) {
                             myCall:(NSString *)myCall
                             myGrid:(NSString *)myGrid {
     TX500FT8Message *msg = [[TX500FT8Message alloc] init];
+    msg.mode = @"FT8";
     msg.rawText = [rawText stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     msg.freqHz = freq;
     msg.snrDb = snr;
@@ -785,6 +786,17 @@ static NSString *NormalizeCallsignForPrefix(NSString *call) {
                         rstRcvd:(NSString *)rstRcvd
                            grid:(nullable NSString *)grid
                            date:(NSDate *)date {
+    return [self adifRecordForCall:dxCall band:band freqHz:freqHz rstSent:rstSent rstRcvd:rstRcvd grid:grid date:date mode:@"FT8"];
+}
+
++ (NSString *)adifRecordForCall:(NSString *)dxCall
+                           band:(NSString *)band
+                         freqHz:(uint64_t)freqHz
+                        rstSent:(NSString *)rstSent
+                        rstRcvd:(NSString *)rstRcvd
+                           grid:(nullable NSString *)grid
+                           date:(NSDate *)date
+                           mode:(nullable NSString *)mode {
     if (!date) date = [NSDate date];
     NSDateFormatter *dfDate = [[NSDateFormatter alloc] init];
     dfDate.timeZone = [NSTimeZone timeZoneWithAbbreviation:@"UTC"];
@@ -805,7 +817,11 @@ static NSString *NormalizeCallsignForPrefix(NSString *call) {
     [adif appendFormat:@"<BAND:%lu>%@ ", (unsigned long)band.length, band];
     NSString *freqStr = [NSString stringWithFormat:@"%.6f", freqMHz];
     [adif appendFormat:@"<FREQ:%lu>%@ ", (unsigned long)freqStr.length, freqStr];
-    [adif appendString:@"<MODE:3>FT8 "];
+    if ([mode isEqualToString:@"FT4"]) {
+        [adif appendString:@"<MODE:4>MFSK <SUBMODE:3>FT4 "];
+    } else {
+        [adif appendString:@"<MODE:3>FT8 "];
+    }
 
     if (rstSent.length > 0) {
         [adif appendFormat:@"<RST_SENT:%lu>%@ ", (unsigned long)rstSent.length, rstSent];
@@ -833,6 +849,24 @@ static NSString *NormalizeCallsignForPrefix(NSString *call) {
 
     [adif appendString:@"<EOR>\n"];
     return adif;
+}
+
+- (NSString *)adifRecordWithMyCall:(NSString *)myCall myGrid:(NSString *)myGrid {
+    NSString *call = self.callerCall ?: @"";
+    NSString *rst = self.snrReport ?: [NSString stringWithFormat:@"%+d", (int)roundf(self.snrDb)];
+    NSString *band = @"20m";
+    uint64_t freq = 14074000;
+    if ([self.mode isEqualToString:@"FT4"]) {
+        freq = 14080000;
+    }
+    return [TX500FT8Message adifRecordForCall:call
+                                         band:band
+                                       freqHz:freq
+                                      rstSent:rst
+                                      rstRcvd:rst
+                                         grid:self.grid
+                                         date:self.timestamp ?: [NSDate date]
+                                         mode:self.mode];
 }
 
 @end

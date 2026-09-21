@@ -278,7 +278,79 @@ int main(int argc, const char * argv[]) {
         AssertTrue(!audioEng.isTransmitArmed, @"disarmTransmit cleared armed state");
         NSLog(@"PASS: Arm Transmit & logHandler invocation (ENABLE TX crash regression) verified.");
 
-        NSLog(@"ALL FT8 DIGITAL SUITE TESTS PASSED SUCCESSFULLY! (100%%)");
+        // 13. Test FT4 Message Encoding & 4-FSK Tone Generation
+        unsigned char ft4Tones[FT8808_MAX_TONES];
+        int numFt4Tones = tx500_ft8_encode_message("CQ EP2AES KM35", TX500_FT8_PROTOCOL_FT4, ft4Tones, FT8808_MAX_TONES);
+        AssertTrue(numFt4Tones == 105, [NSString stringWithFormat:@"Expected 105 tones for FT4, got %d", numFt4Tones]);
+        for (int i = 0; i < 105; i++) {
+            AssertTrue(ft4Tones[i] <= 3, [NSString stringWithFormat:@"FT4 tone %d at index %d exceeds 3", ft4Tones[i], i]);
+        }
+        NSLog(@"PASS: FT4 message encoding & 105 4-FSK tones verified.");
+
+        // 14. Test FT4 GFSK Audio Synthesis
+        int maxFt4Samples = sampleRate * 8; // 8 seconds buffer
+        float *ft4Synthesized = (float *)calloc(maxFt4Samples, sizeof(float));
+        int ft4SamplesWritten = tx500_ft8_synthesize(ft4Tones, numFt4Tones, 1500.0f, TX500_FT8_PROTOCOL_FT4, sampleRate, ft4Synthesized, maxFt4Samples);
+        AssertTrue(ft4SamplesWritten > 59000 && ft4SamplesWritten <= 62000,
+                   [NSString stringWithFormat:@"Expected ~60480 samples for FT4, got %d", ft4SamplesWritten]);
+
+        float maxAmpFt4 = 0.0f;
+        for (int i = 0; i < ft4SamplesWritten; i++) {
+            float a = fabsf(ft4Synthesized[i]);
+            if (a > maxAmpFt4) maxAmpFt4 = a;
+        }
+        AssertTrue(maxAmpFt4 > 0.3f && maxAmpFt4 <= 1.0f, [NSString stringWithFormat:@"FT4 peak amplitude valid: %.2f", maxAmpFt4]);
+        NSLog(@"PASS: Continuous-phase FT4 GFSK audio synthesis verified (%d samples, peak %.2f).", ft4SamplesWritten, maxAmpFt4);
+
+        // 15. Test FT4 Full End-to-End Loopback Decode
+        // FT4 slot length is 7.5s = 90,000 samples at 12 kHz
+        float *ft4SlotSamples = (float *)calloc(90000, sizeof(float));
+        memcpy(ft4SlotSamples, ft4Synthesized, ft4SamplesWritten * sizeof(float));
+
+        tx500_ft8_decoded_t ft4Decoded[10];
+        int numFt4Decoded = tx500_ft8_decode_samples(ft4SlotSamples, 90000, sampleRate, TX500_FT8_PROTOCOL_FT4, ft4Decoded, 10);
+        free(ft4Synthesized);
+        free(ft4SlotSamples);
+
+        AssertTrue(numFt4Decoded >= 1, [NSString stringWithFormat:@"FT4 loopback decode expected >= 1 message, got %d", numFt4Decoded]);
+        BOOL foundFt4Match = NO;
+        for (int i = 0; i < numFt4Decoded; i++) {
+            NSString *decText = [NSString stringWithUTF8String:ft4Decoded[i].text];
+            if ([decText isEqualToString:@"CQ EP2AES KM35"]) {
+                foundFt4Match = YES;
+                AssertTrue(fabsf(ft4Decoded[i].freq_hz - 1500.0f) < 25.0f,
+                           [NSString stringWithFormat:@"FT4 Frequency close to 1500 Hz (got %.1f)", ft4Decoded[i].freq_hz]);
+                break;
+            }
+        }
+        AssertTrue(foundFt4Match, @"FT4 decoded text reproduces original test message 'CQ EP2AES KM35'");
+        NSLog(@"PASS: Deep FT4 LDPC loopback decode verified (Decoded: %s, Freq: %.1f Hz, SNR: %.1f dB).",
+              ft4Decoded[0].text, ft4Decoded[0].freq_hz, ft4Decoded[0].snr_db);
+
+        // 16. Test FT4 Slot Quantization & ADIF record output
+        TX500FT8Message *ft4Msg = [TX500FT8Message messageWithRawText:@"CQ EP2AES KM35"
+                                                               freqHz:1500.0f
+                                                                snrDb:-5
+                                                                   dt:0.2f
+                                                             slotDate:[NSDate date]
+                                                           slotParity:0
+                                                               myCall:@"EP2AES"
+                                                               myGrid:@"KM35"];
+        ft4Msg.mode = @"FT4";
+        AssertTrue([ft4Msg.mode isEqualToString:@"FT4"], @"Message mode is FT4");
+        NSString *ft4Adif = [ft4Msg adifRecordWithMyCall:@"EP2AES" myGrid:@"KM35"];
+        AssertTrue([ft4Adif containsString:@"<MODE:4>MFSK"], @"FT4 ADIF record specifies MFSK mode");
+        AssertTrue([ft4Adif containsString:@"<SUBMODE:3>FT4"], @"FT4 ADIF record specifies FT4 submode");
+
+        audioEng.protocol = TX500_FT8_PROTOCOL_FT4;
+        AssertTrue(audioEng.currentSlotPeriod == 7.5, @"Audio engine FT4 slot period is 7.5s");
+        AssertTrue([audioEng.modeName isEqualToString:@"FT4"], @"Audio engine mode name is FT4");
+        audioEng.protocol = TX500_FT8_PROTOCOL_FT8;
+        AssertTrue(audioEng.currentSlotPeriod == 15.0, @"Audio engine FT8 slot period reset to 15.0s");
+        AssertTrue([audioEng.modeName isEqualToString:@"FT8"], @"Audio engine mode name reset to FT8");
+        NSLog(@"PASS: FT4 ADIF logging (<MODE:4>MFSK <SUBMODE:3>FT4) & Audio Engine timing quantization verified.");
+
+        NSLog(@"ALL FT8 & FT4 DIGITAL SUITE TESTS PASSED SUCCESSFULLY! (100%%)");
     }
     return 0;
 }

@@ -193,6 +193,7 @@ static void FT8AudioQueueOutputCallback(void *inUserData,
         _rxAudioFrequencyHz = 1200.0f;
         _txAudioFrequencyHz = 1500.0f;
         _lockTxRxFrequencies = NO;
+        _protocol = TX500_FT8_PROTOCOL_FT8;
         _txSlotParity = TX500FT8SlotParityEven;
         _isTransmitArmed = NO;
         _isSimulationMode = [[NSUserDefaults standardUserDefaults] boolForKey:@"TX500_FT8_SimulationModeEnabled"];
@@ -500,19 +501,37 @@ static void FT8AudioQueueOutputCallback(void *inUserData,
     }
 }
 
+- (double)currentSlotPeriod {
+    return (self.protocol == TX500_FT8_PROTOCOL_FT4) ? 7.5 : 15.0;
+}
+
+- (NSString *)modeName {
+    return (self.protocol == TX500_FT8_PROTOCOL_FT4) ? @"FT4" : @"FT8";
+}
+
+- (double)currentTxSeconds {
+    return (self.protocol == TX500_FT8_PROTOCOL_FT4) ? 5.1 : 14.5;
+}
+
+- (double)currentDecodeTriggerSecond {
+    return (self.protocol == TX500_FT8_PROTOCOL_FT4) ? 5.8 : 13.5;
+}
+
 #pragma mark - Slot Timing Engine
 
 - (void)processSlotTick {
     NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
-    double slotSec = fmod(now, FT8_SLOT_SECONDS);
-    NSInteger parity = ((NSInteger)(now / FT8_SLOT_SECONDS)) % 2; // 0=Even (:00,:30), 1=Odd (:15,:45)
+    double slotPeriod = self.currentSlotPeriod;
+    double slotSec = fmod(now, slotPeriod);
+    NSInteger parity = ((NSInteger)(now / slotPeriod)) % 2; // FT8: 0=Even (:00,:30), 1=Odd (:15,:45) | FT4: 0=Even, 1=Odd
 
     self.currentSlotSecond = slotSec;
     self.currentSlotParity = parity;
-    self.slotProgressFraction = slotSec / FT8_SLOT_SECONDS;
+    self.slotProgressFraction = slotSec / slotPeriod;
 
     // Detect slot transition (crossing 0.0s)
-    if (_lastSlotSecond > 13.0 && slotSec < 1.0) {
+    double transitionThreshold = slotPeriod - 1.5;
+    if (_lastSlotSecond > transitionThreshold && slotSec < 1.0) {
         _slotDecodeDispatched = NO;
 
         // Reset RX buffer for new slot
@@ -547,13 +566,13 @@ static void FT8AudioQueueOutputCallback(void *inUserData,
 
     _lastSlotSecond = slotSec;
 
-    // End Transmission at 12.64s
-    if (_isTransmitting && slotSec >= FT8_TX_SECONDS) {
+    // End Transmission
+    if (_isTransmitting && slotSec >= self.currentTxSeconds) {
         [self endTransmission];
     }
 
-    // Trigger Slot Decode at 13.5s
-    if (!_isTransmitting && !_slotDecodeDispatched && slotSec >= 13.5) {
+    // Trigger Slot Decode
+    if (!_isTransmitting && !_slotDecodeDispatched && slotSec >= self.currentDecodeTriggerSecond) {
         _slotDecodeDispatched = YES;
         [self triggerSlotDecodeWithParity:parity];
     }
@@ -577,8 +596,9 @@ static void FT8AudioQueueOutputCallback(void *inUserData,
     // Capture snapshot of incoming audio
     [_rxBufferLock lock];
     int sampleCount = _rxBufferCount;
-    if (sampleCount < FT8_SAMPLE_RATE * 8) {
-        // Less than 8s of audio recorded
+    int minSamples = (self.protocol == TX500_FT8_PROTOCOL_FT4) ? (FT8_SAMPLE_RATE * 4) : (FT8_SAMPLE_RATE * 8);
+    if (sampleCount < minSamples) {
+        // Less than required audio recorded
         [_rxBufferLock unlock];
         return;
     }
@@ -591,14 +611,18 @@ static void FT8AudioQueueOutputCallback(void *inUserData,
     NSString *myGrid = self.myGrid;
     __weak typeof(self) weakSelf = self;
 
+    double slotPeriod = self.currentSlotPeriod;
+    tx500_ft8_protocol_t proto = self.protocol;
+    NSString *curMode = self.modeName;
+
     NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
-    NSTimeInterval slotStartEpoch = floor(now / 15.0) * 15.0;
+    NSTimeInterval slotStartEpoch = floor(now / slotPeriod) * slotPeriod;
     NSDate *slotDate = [NSDate dateWithTimeIntervalSince1970:slotStartEpoch];
 
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
         tx500_ft8_decoded_t results[100];
         int numDecoded = tx500_ft8_decode_samples(snapshot, sampleCount, FT8_SAMPLE_RATE,
-                                                  TX500_FT8_PROTOCOL_FT8, results, 100);
+                                                  proto, results, 100);
         free(snapshot);
 
         NSMutableArray<TX500FT8Message *> *messages = [NSMutableArray array];
@@ -613,6 +637,7 @@ static void FT8AudioQueueOutputCallback(void *inUserData,
                                                                 slotParity:parity
                                                                     myCall:myCall
                                                                     myGrid:myGrid];
+                msg.mode = curMode;
                 [messages addObject:msg];
             }
         }
@@ -673,7 +698,11 @@ static void FT8AudioQueueOutputCallback(void *inUserData,
             [buffer appendFormat:@" <QSO_DATE:%lu>%@", (unsigned long)qsoDate.length, qsoDate];
             [buffer appendFormat:@" <TIME_ON:%lu>%@", (unsigned long)timeOn.length, timeOn];
             [buffer appendFormat:@" <FREQ:%lu>%@", (unsigned long)freqStr.length, freqStr];
-            [buffer appendString:@" <MODE:3>FT8"];
+            if (self.protocol == TX500_FT8_PROTOCOL_FT4) {
+                [buffer appendString:@" <MODE:4>MFSK <SUBMODE:3>FT4"];
+            } else {
+                [buffer appendString:@" <MODE:3>FT8"];
+            }
             [buffer appendFormat:@" <RST_RCVD:%lu>%@", (unsigned long)rstStr.length, rstStr];
             if (m.grid.length >= 4) {
                 [buffer appendFormat:@" <GRIDSQUARE:%lu>%@", (unsigned long)m.grid.length, m.grid];
@@ -705,9 +734,9 @@ static void FT8AudioQueueOutputCallback(void *inUserData,
     _autoParityLocked = -1; // Reset so next transition locks the parity
 
     if (self.logHandler) {
-        NSString *pName = (parity == TX500FT8SlotParityEven) ? @"Even (:00/:30)" :
-                          (parity == TX500FT8SlotParityOdd) ? @"Odd (:15/:45)" : @"Auto";
-        self.logHandler([NSString stringWithFormat:@"[FT8 Transmit Armed] Msg: '%@' on Slot %@", text, pName]);
+        NSString *pName = (parity == TX500FT8SlotParityEven) ? @"Even" :
+                          (parity == TX500FT8SlotParityOdd) ? @"Odd" : @"Auto";
+        self.logHandler([NSString stringWithFormat:@"[%@ Transmit Armed] Msg: '%@' on Slot %@", self.modeName, text, pName]);
     }
 }
 
@@ -718,7 +747,7 @@ static void FT8AudioQueueOutputCallback(void *inUserData,
         [self endTransmission];
     }
     if (self.logHandler) {
-        self.logHandler(@"[FT8 Transmit Disarmed]");
+        self.logHandler([NSString stringWithFormat:@"[%@ Transmit Disarmed]", self.modeName]);
     }
 }
 
@@ -727,17 +756,17 @@ static void FT8AudioQueueOutputCallback(void *inUserData,
 
     NSString *msgText = [self.queuedTxMessage uppercaseString];
     unsigned char tones[FT8808_MAX_TONES];
-    int numTones = tx500_ft8_encode_message([msgText UTF8String], TX500_FT8_PROTOCOL_FT8, tones, FT8808_MAX_TONES);
+    int numTones = tx500_ft8_encode_message([msgText UTF8String], self.protocol, tones, FT8808_MAX_TONES);
     if (numTones <= 0) {
         if (self.logHandler) {
-            self.logHandler([NSString stringWithFormat:@"[FT8 Error] Failed to encode text: '%@'", msgText]);
+            self.logHandler([NSString stringWithFormat:@"[%@ Error] Failed to encode text: '%@'", self.modeName, msgText]);
         }
         return;
     }
 
     [_txBufferLock lock];
     _txBufferTotalSamples = tx500_ft8_synthesize(tones, numTones, self.txAudioFrequencyHz,
-                                                 TX500_FT8_PROTOCOL_FT8, FT8_SAMPLE_RATE,
+                                                 self.protocol, FT8_SAMPLE_RATE,
                                                  _txBuffer, FT8_MAX_SLOT_SAMPLES);
     _txBufferReadIndex = 0;
     [_txBufferLock unlock];
@@ -1010,8 +1039,10 @@ static void FT8AudioQueueOutputCallback(void *inUserData,
     NSString *myGrid = self.myGrid;
 
     NSTimeInterval now = [[NSDate date] timeIntervalSince1970];
-    NSTimeInterval slotStartEpoch = floor(now / 15.0) * 15.0;
+    double slotPeriod = self.currentSlotPeriod;
+    NSTimeInterval slotStartEpoch = floor(now / slotPeriod) * slotPeriod;
     NSDate *slotDate = [NSDate dateWithTimeIntervalSince1970:slotStartEpoch];
+    NSString *curMode = self.modeName;
 
     // Rich catalog of realistic global DX stations calling CQ or working
     NSArray *candidates = @[
@@ -1037,6 +1068,7 @@ static void FT8AudioQueueOutputCallback(void *inUserData,
                                                         slotParity:parity
                                                             myCall:myCall
                                                             myGrid:myGrid];
+        msg.mode = curMode;
         [messages addObject:msg];
     }
 

@@ -584,12 +584,22 @@
     self.containerView = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 900, 520)];
     self.containerView.translatesAutoresizingMaskIntoConstraints = NO;
 
-    // --- Top Controls Bar ---
-    NSStackView *controlsBar = [NSStackView new];
+    // --- Top Controls Bar (Dual Row for Compact Width) ---
+    NSStackView *row1 = [NSStackView new];
+    row1.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    row1.alignment = NSLayoutAttributeCenterY;
+    row1.spacing = 8.0;
+
+    NSStackView *row2 = [NSStackView new];
+    row2.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    row2.alignment = NSLayoutAttributeCenterY;
+    row2.spacing = 8.0;
+
+    NSStackView *controlsBar = [NSStackView stackViewWithViews:@[row1, row2]];
     controlsBar.translatesAutoresizingMaskIntoConstraints = NO;
-    controlsBar.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    controlsBar.alignment = NSLayoutAttributeCenterY;
-    controlsBar.spacing = 8.0;
+    controlsBar.orientation = NSUserInterfaceLayoutOrientationVertical;
+    controlsBar.alignment = NSLayoutAttributeLeading;
+    controlsBar.spacing = 6.0;
 
     // Theme selector
     NSTextField *themeLbl = [NSTextField labelWithString:@"Theme:"];
@@ -672,16 +682,17 @@
         self.saveButton.image = [NSImage imageWithSystemSymbolName:@"camera" accessibilityDescription:@"Save Image"];
     }
 
-    [controlsBar addArrangedSubview:themeLbl];
-    [controlsBar addArrangedSubview:self.themePopup];
-    [controlsBar addArrangedSubview:viewLbl];
-    [controlsBar addArrangedSubview:self.viewModePopup];
-    [controlsBar addArrangedSubview:self.pixelGridCheckbox];
-    [controlsBar addArrangedSubview:self.modePicker];
-    [controlsBar addArrangedSubview:self.autoSyncCheckbox];
-    [controlsBar addArrangedSubview:self.refreshButton];
-    [controlsBar addArrangedSubview:self.clipboardButton];
-    [controlsBar addArrangedSubview:self.saveButton];
+    [row1 addArrangedSubview:themeLbl];
+    [row1 addArrangedSubview:self.themePopup];
+    [row1 addArrangedSubview:viewLbl];
+    [row1 addArrangedSubview:self.viewModePopup];
+    [row1 addArrangedSubview:self.pixelGridCheckbox];
+
+    [row2 addArrangedSubview:self.modePicker];
+    [row2 addArrangedSubview:self.autoSyncCheckbox];
+    [row2 addArrangedSubview:self.refreshButton];
+    [row2 addArrangedSubview:self.clipboardButton];
+    [row2 addArrangedSubview:self.saveButton];
 
     // --- Screen Display View ---
     self.displayView = [[TX500ScreenDisplayView alloc] initWithFrame:NSMakeRect(0, 0, 900, 380)];
@@ -730,7 +741,7 @@
         [controlsBar.topAnchor constraintEqualToAnchor:self.containerView.topAnchor constant:4],
         [controlsBar.leadingAnchor constraintEqualToAnchor:self.containerView.leadingAnchor],
         [controlsBar.trailingAnchor constraintLessThanOrEqualToAnchor:self.containerView.trailingAnchor],
-        [controlsBar.heightAnchor constraintEqualToConstant:28],
+        [controlsBar.heightAnchor constraintEqualToConstant:56],
 
         [self.displayView.topAnchor constraintEqualToAnchor:controlsBar.bottomAnchor constant:8],
         [self.displayView.leadingAnchor constraintEqualToAnchor:self.containerView.leadingAnchor],

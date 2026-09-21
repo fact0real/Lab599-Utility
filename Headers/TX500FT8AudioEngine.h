@@ -44,7 +44,10 @@ typedef NS_ENUM(NSInteger, TX500FT8SlotParity) {
 @property (nonatomic, assign) float txAudioFrequencyHz; // e.g. 1500 Hz
 @property (nonatomic, assign) BOOL lockTxRxFrequencies;
 
-// Operational State
+// Operational State & Protocol
+@property (nonatomic, assign) tx500_ft8_protocol_t protocol; // TX500_FT8_PROTOCOL_FT8 (0) or TX500_FT8_PROTOCOL_FT4 (1)
+@property (nonatomic, assign, readonly) double currentSlotPeriod; // 15.0s (FT8) or 7.5s (FT4)
+@property (nonatomic, copy, readonly) NSString *modeName; // @"FT8" or @"FT4"
 @property (nonatomic, assign, readonly) BOOL isMonitoring;
 @property (nonatomic, assign, readonly) BOOL isTransmitting;
 @property (nonatomic, assign) BOOL isTransmitArmed;

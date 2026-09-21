@@ -29,7 +29,9 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy, nullable) BOOL (^serialCommandSender)(NSString *catCommand);
 @property (nonatomic, copy, nullable) void (^stationStateChangedHandler)(BOOL isMonitoring);
 
-// Lifecycle
+// Lifecycle & Protocol
+@property (nonatomic, assign) tx500_ft8_protocol_t protocol;
+- (void)selectProtocol:(tx500_ft8_protocol_t)protocol;
 - (void)startStation;
 - (void)stopStation;
 - (void)updateFrequencyHz:(uint64_t)freqHz mode:(NSString *)mode;

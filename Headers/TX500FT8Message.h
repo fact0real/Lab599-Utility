@@ -30,6 +30,7 @@ typedef NS_ENUM(NSInteger, TX500FT8MessageType) {
 @property (nonatomic, assign) float timeSec; // DT
 @property (nonatomic, strong) NSDate *timestamp;
 @property (nonatomic, assign) NSInteger slotParity; // 0=Even (:00,:30), 1=Odd (:15,:45)
+@property (nonatomic, copy) NSString *mode; // @"FT8" or @"FT4"
 
 // Structured Semantic Fields
 @property (nonatomic, assign) TX500FT8MessageType messageType;
@@ -93,6 +94,17 @@ typedef NS_ENUM(NSInteger, TX500FT8MessageType) {
                         rstRcvd:(NSString *)rstRcvd
                            grid:(nullable NSString *)grid
                            date:(NSDate *)date;
+
++ (NSString *)adifRecordForCall:(NSString *)dxCall
+                           band:(NSString *)band
+                         freqHz:(uint64_t)freqHz
+                        rstSent:(NSString *)rstSent
+                        rstRcvd:(NSString *)rstRcvd
+                           grid:(nullable NSString *)grid
+                           date:(NSDate *)date
+                           mode:(nullable NSString *)mode;
+
+- (NSString *)adifRecordWithMyCall:(NSString *)myCall myGrid:(NSString *)myGrid;
 
 @end
 

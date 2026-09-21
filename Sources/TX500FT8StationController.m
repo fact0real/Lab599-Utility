@@ -35,10 +35,28 @@ static struct {
     {NULL, 0}
 };
 
+// FT4 Band Presets (Standard Contest & Operational Dial Frequencies)
+static struct {
+    const char *band;
+    uint64_t freqHz;
+} kFT4Presets[] = {
+    {"80m",   3575000},
+    {"40m",   7047500},
+    {"30m",  10140000},
+    {"20m",  14080000},
+    {"17m",  18104000},
+    {"15m",  21140000},
+    {"12m",  24919000},
+    {"10m",  28180000},
+    {"6m",   50318000},
+    {NULL, 0}
+};
+
 @interface TX500FT8SlotProgressView : NSView
 @property (nonatomic, assign) double slotSecond;
 @property (nonatomic, assign) NSInteger parity;
 @property (nonatomic, assign) BOOL isTransmitting;
+@property (nonatomic, assign) BOOL isFT4;
 @end
 
 @implementation TX500FT8SlotProgressView
@@ -61,14 +79,18 @@ static struct {
     [[NSColor colorWithCalibratedWhite:0.92 alpha:1.0] setFill];
     NSRectFill(bounds);
 
+    double slotTotal = self.isFT4 ? 7.5 : 15.0;
+    double txTime = self.isFT4 ? 5.04 : 14.5;
+    double decTime = self.isFT4 ? 5.8 : 13.5;
+
     // Progress bar fill
-    double fraction = fmin(1.0, fmax(0.0, self.slotSecond / 15.0));
+    double fraction = fmin(1.0, fmax(0.0, self.slotSecond / slotTotal));
     NSRect fillRect = NSMakeRect(0, 0, bounds.size.width * fraction, bounds.size.height);
 
     NSColor *barColor;
     if (self.isTransmitting) {
         barColor = [NSColor colorWithCalibratedRed:0.88 green:0.20 blue:0.20 alpha:0.90]; // Alert Red
-    } else if (self.slotSecond >= 13.5) {
+    } else if (self.slotSecond >= decTime) {
         barColor = [NSColor colorWithCalibratedRed:0.92 green:0.65 blue:0.10 alpha:0.92]; // Amber Gold
     } else {
         barColor = [NSColor colorWithCalibratedRed:0.12 green:0.68 blue:0.38 alpha:0.88]; // Tactical Emerald RX
@@ -77,12 +99,12 @@ static struct {
     [barColor setFill];
     NSRectFill(fillRect);
 
-    // Boundary marker at 14.5s (TX end) and 13.5s (Decode start)
-    CGFloat txEnd = (14.5 / 15.0) * bounds.size.width;
+    // Boundary marker at TX end and Decode start
+    CGFloat txEnd = (txTime / slotTotal) * bounds.size.width;
     [[NSColor separatorColor] setStroke];
     [NSBezierPath strokeLineFromPoint:NSMakePoint(txEnd, 0) toPoint:NSMakePoint(txEnd, bounds.size.height)];
 
-    CGFloat decStart = (13.5 / 15.0) * bounds.size.width;
+    CGFloat decStart = (decTime / slotTotal) * bounds.size.width;
     [[NSColor colorWithCalibratedRed:0.85 green:0.55 blue:0.08 alpha:0.85] setStroke];
     [NSBezierPath strokeLineFromPoint:NSMakePoint(decStart, 0) toPoint:NSMakePoint(decStart, bounds.size.height)];
 
@@ -93,9 +115,15 @@ static struct {
     [borderPath stroke];
 
     // Center text label with high contrast
-    NSString *phaseStr = self.isTransmitting ? @"TX" : (self.slotSecond >= 13.5 ? @"DECODING" : @"RX");
-    NSString *parityStr = (self.parity == 0) ? @"EVEN (:00/:30)" : @"ODD (:15/:45)";
-    NSString *text = [NSString stringWithFormat:@"%@ · %.1fs / 15.0s · %@", phaseStr, self.slotSecond, parityStr];
+    NSString *phaseStr = self.isTransmitting ? @"TX" : (self.slotSecond >= decTime ? @"DECODING" : @"RX");
+    NSString *parityStr;
+    if (self.isFT4) {
+        parityStr = (self.parity == 0) ? @"EVEN (:00,:15,:30,:45)" : @"ODD (:07.5,:22.5,...)";
+    } else {
+        parityStr = (self.parity == 0) ? @"EVEN (:00/:30)" : @"ODD (:15/:45)";
+    }
+    NSString *text = [NSString stringWithFormat:@"%@ · %@ · %.1fs / %.1fs · %@",
+                      self.isFT4 ? @"FT4" : @"FT8", phaseStr, self.slotSecond, slotTotal, parityStr];
 
     NSDictionary *attrs = @{
         NSFontAttributeName: [NSFont monospacedSystemFontOfSize:10.5 weight:NSFontWeightBold],
@@ -117,6 +145,7 @@ static struct {
 
 // UI Components - Top Ribbon
 @property (nonatomic, strong) NSButton *startStopButton;
+@property (nonatomic, strong) NSSegmentedControl *modeSegment;
 @property (nonatomic, strong) NSPopUpButton *bandPopup;
 @property (nonatomic, strong) NSTextField *dialFreqLabel;
 @property (nonatomic, strong) NSPopUpButton *audioInPopup;
@@ -128,6 +157,7 @@ static struct {
 @property (nonatomic, strong) NSButton *armTxButton;
 @property (nonatomic, strong) NSButton *tuneButton;
 @property (nonatomic, strong) TX500FT8SlotProgressView *slotProgressView;
+@property (nonatomic, strong) NSTextField *panUtcBadge;
 
 // UI Components - Autonomous Algorithms Banner
 @property (nonatomic, strong) NSButton *autoCQButton;
@@ -208,7 +238,9 @@ static struct {
 - (instancetype)init {
     self = [super init];
     if (self) {
+        _protocol = TX500_FT8_PROTOCOL_FT8;
         _audioEngine = [[TX500FT8AudioEngine alloc] init];
+        _audioEngine.protocol = _protocol;
         _autoEngine = [[TX500FT8AutoEngine alloc] init];
         _autoEngine.audioEngine = _audioEngine;
 
@@ -248,6 +280,7 @@ static struct {
         if (!strongSelf) return;
         strongSelf.slotProgressView.slotSecond = slotSec;
         strongSelf.slotProgressView.parity = parity;
+        strongSelf.slotProgressView.isFT4 = (strongSelf.protocol == TX500_FT8_PROTOCOL_FT4);
         strongSelf.slotProgressView.isTransmitting = strongSelf.audioEngine.isTransmitting;
         [strongSelf.slotProgressView setNeedsDisplay:YES];
     };
@@ -381,7 +414,92 @@ static struct {
                                                object:nil];
 }
 
-#pragma mark - Lifecycle
+#pragma mark - Lifecycle & Protocol
+
+- (void)selectProtocol:(tx500_ft8_protocol_t)proto {
+    _protocol = proto;
+    self.audioEngine.protocol = proto;
+    self.slotProgressView.isFT4 = (proto == TX500_FT8_PROTOCOL_FT4);
+    [self.slotProgressView setNeedsDisplay:YES];
+
+    if (self.modeSegment && self.modeSegment.selectedSegment != (NSInteger)proto) {
+        self.modeSegment.selectedSegment = (NSInteger)proto;
+    }
+
+    NSString *mName = (proto == TX500_FT8_PROTOCOL_FT4) ? @"FT4" : @"FT8";
+
+    // Update Panadapter UTC slot badge
+    if (self.panUtcBadge) {
+        self.panUtcBadge.stringValue = (proto == TX500_FT8_PROTOCOL_FT4) ?
+            @"7.5s UTC FT4 SLOT · WATERFALL" : @"15.0s UTC FT8 SLOT · WATERFALL";
+    }
+
+    // Update start/stop button label
+    if (self.audioEngine.isMonitoring) {
+        self.startStopButton.title = [NSString stringWithFormat:@"Stop %@", mName];
+    } else {
+        self.startStopButton.title = [NSString stringWithFormat:@"Start %@", mName];
+    }
+
+    // Refresh Band presets popup with appropriate dial frequencies
+    [self refreshBandPopupForCurrentProtocol];
+
+    // Select the current band preset frequency
+    NSString *selectedBand = self.bandPopup.titleOfSelectedItem ?: @"20m";
+    uint64_t newDialHz = [self defaultFrequencyForBand:selectedBand protocol:proto];
+    if (newDialHz > 0) {
+        [self updateFrequencyHz:newDialHz mode:@"DIG"];
+        if (self.serialCommandSender) {
+            self.serialCommandSender([NSString stringWithFormat:@"FA%011llu;", (unsigned long long)newDialHz]);
+            self.serialCommandSender(@"MD6;");
+        }
+    }
+
+    [self appendToQSOConsole:[NSString stringWithFormat:@"[Protocol Switched] Active mode: %@ (%.1fs slot).",
+                              mName, self.audioEngine.currentSlotPeriod]];
+}
+
+- (void)modeSegmentChanged:(NSSegmentedControl *)sender {
+    tx500_ft8_protocol_t newProto = (sender.selectedSegment == 1) ? TX500_FT8_PROTOCOL_FT4 : TX500_FT8_PROTOCOL_FT8;
+    [self selectProtocol:newProto];
+}
+
+- (uint64_t)defaultFrequencyForBand:(NSString *)band protocol:(tx500_ft8_protocol_t)proto {
+    if (proto == TX500_FT8_PROTOCOL_FT4) {
+        for (int i = 0; kFT4Presets[i].band != NULL; i++) {
+            if ([band isEqualToString:[NSString stringWithUTF8String:kFT4Presets[i].band]]) {
+                return kFT4Presets[i].freqHz;
+            }
+        }
+        return 14080000;
+    } else {
+        for (int i = 0; kFT8Presets[i].band != NULL; i++) {
+            if ([band isEqualToString:[NSString stringWithUTF8String:kFT8Presets[i].band]]) {
+                return kFT8Presets[i].freqHz;
+            }
+        }
+        return 14074000;
+    }
+}
+
+- (void)refreshBandPopupForCurrentProtocol {
+    NSString *currentSelection = self.bandPopup.titleOfSelectedItem;
+    [self.bandPopup removeAllItems];
+    if (self.protocol == TX500_FT8_PROTOCOL_FT4) {
+        for (int i = 0; kFT4Presets[i].band != NULL; i++) {
+            [self.bandPopup addItemWithTitle:[NSString stringWithUTF8String:kFT4Presets[i].band]];
+        }
+    } else {
+        for (int i = 0; kFT8Presets[i].band != NULL; i++) {
+            [self.bandPopup addItemWithTitle:[NSString stringWithUTF8String:kFT8Presets[i].band]];
+        }
+    }
+    if (currentSelection && [self.bandPopup itemWithTitle:currentSelection]) {
+        [self.bandPopup selectItemWithTitle:currentSelection];
+    } else {
+        [self.bandPopup selectItemWithTitle:@"20m"];
+    }
+}
 
 - (void)startStation {
     // Connect serial port command sender
@@ -393,9 +511,11 @@ static struct {
 
     NSError *err = nil;
     if ([self.audioEngine startMonitoring:&err]) {
-        self.startStopButton.title = @"Stop FT8";
+        NSString *mName = (self.protocol == TX500_FT8_PROTOCOL_FT4) ? @"FT4" : @"FT8";
+        self.startStopButton.title = [NSString stringWithFormat:@"Stop %@", mName];
         self.startStopButton.bezelColor = [NSColor colorWithCalibratedRed:0.8 green:0.2 blue:0.2 alpha:1.0];
-        [self appendToQSOConsole:@"[FT8 Engine] Monitoring active. 15-second slot synchronized."];
+        [self appendToQSOConsole:[NSString stringWithFormat:@"[%@ Engine] Monitoring active. %.1f-second slot synchronized.",
+                                  mName, self.audioEngine.currentSlotPeriod]];
         if (self.stationStateChangedHandler) self.stationStateChangedHandler(YES);
     }
 }
@@ -404,9 +524,10 @@ static struct {
     [self.autoEngine stopAutoCQ];
     [self.autoEngine stopAutoHunter];
     [self.audioEngine stopMonitoring];
-    self.startStopButton.title = @"Start FT8";
+    NSString *mName = (self.protocol == TX500_FT8_PROTOCOL_FT4) ? @"FT4" : @"FT8";
+    self.startStopButton.title = [NSString stringWithFormat:@"Start %@", mName];
     self.startStopButton.bezelColor = nil;
-    [self appendToQSOConsole:@"[FT8 Engine] Monitoring stopped."];
+    [self appendToQSOConsole:[NSString stringWithFormat:@"[%@ Engine] Monitoring stopped.", mName]];
     if (self.stationStateChangedHandler) self.stationStateChangedHandler(NO);
 }
 
@@ -434,16 +555,20 @@ static struct {
 
     self.startStopButton = [NSButton buttonWithTitle:@"Start FT8" target:self action:@selector(toggleMonitoring:)];
     self.startStopButton.bezelStyle = NSBezelStyleRounded;
-    [self.startStopButton.widthAnchor constraintEqualToConstant:85].active = YES;
+    [self.startStopButton.widthAnchor constraintEqualToConstant:82].active = YES;
+
+    self.modeSegment = [NSSegmentedControl segmentedControlWithLabels:@[@"FT8", @"FT4"]
+                                                         trackingMode:NSSegmentSwitchTrackingSelectOne
+                                                               target:self
+                                                               action:@selector(modeSegmentChanged:)];
+    self.modeSegment.selectedSegment = (self.protocol == TX500_FT8_PROTOCOL_FT4) ? 1 : 0;
+    [self.modeSegment.widthAnchor constraintEqualToConstant:76].active = YES;
 
     self.bandPopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
-    for (int i = 0; kFT8Presets[i].band != NULL; i++) {
-        [self.bandPopup addItemWithTitle:[NSString stringWithUTF8String:kFT8Presets[i].band]];
-    }
-    [self.bandPopup selectItemWithTitle:@"20m"];
+    [self refreshBandPopupForCurrentProtocol];
     self.bandPopup.target = self;
     self.bandPopup.action = @selector(bandSelected:);
-    [self.bandPopup.widthAnchor constraintEqualToConstant:75].active = YES;
+    [self.bandPopup.widthAnchor constraintEqualToConstant:72].active = YES;
 
     self.dialFreqLabel = [NSTextField labelWithString:@"14.074.000 MHz DIG"];
     self.dialFreqLabel.font = [NSFont monospacedSystemFontOfSize:12.0 weight:NSFontWeightBold];
@@ -453,7 +578,7 @@ static struct {
     [self updateAudioDeviceMenus];
     self.audioInPopup.target = self;
     self.audioInPopup.action = @selector(audioDeviceSelected:);
-    [self.audioInPopup.widthAnchor constraintGreaterThanOrEqualToConstant:130].active = YES;
+    [self.audioInPopup.widthAnchor constraintGreaterThanOrEqualToConstant:115].active = YES;
 
     self.simCheckbox = [NSButton checkboxWithTitle:@"Simulation Mode" target:self action:@selector(toggleSimulation:)];
     self.simCheckbox.state = self.audioEngine.isSimulationMode ? NSControlStateValueOn : NSControlStateValueOff;
@@ -474,15 +599,15 @@ static struct {
 
     self.lockFreqsButton = [NSButton buttonWithTitle:@"Lock" target:self action:@selector(toggleLockFreqs:)];
     self.lockFreqsButton.bezelStyle = NSBezelStyleInline;
-    [self.lockFreqsButton.widthAnchor constraintEqualToConstant:48].active = YES;
+    [self.lockFreqsButton.widthAnchor constraintEqualToConstant:46].active = YES;
 
     self.tuneButton = [NSButton buttonWithTitle:@"Tune" target:self action:@selector(toggleTune:)];
     self.tuneButton.bezelStyle = NSBezelStyleInline;
-    [self.tuneButton.widthAnchor constraintEqualToConstant:48].active = YES;
+    [self.tuneButton.widthAnchor constraintEqualToConstant:46].active = YES;
 
     self.armTxButton = [NSButton buttonWithTitle:@"ENABLE TX" target:self action:@selector(toggleArmTx:)];
     self.armTxButton.bezelStyle = NSBezelStyleRounded;
-    [self.armTxButton.widthAnchor constraintEqualToConstant:92].active = YES;
+    [self.armTxButton.widthAnchor constraintEqualToConstant:86].active = YES;
 
     // TX Slot Parity: Even / Auto / Odd
     self.txParitySegment = [NSSegmentedControl segmentedControlWithLabels:@[@"Even", @"Auto", @"Odd"]
@@ -490,7 +615,7 @@ static struct {
                                                                     target:self
                                                                     action:@selector(txParityChanged:)];
     self.txParitySegment.selectedSegment = 1; // Default Auto
-    [self.txParitySegment.widthAnchor constraintEqualToConstant:142].active = YES;
+    [self.txParitySegment.widthAnchor constraintEqualToConstant:126].active = YES;
 
 
     // SWR live indicator
@@ -498,29 +623,54 @@ static struct {
     self.swrLabel.font = [NSFont monospacedSystemFontOfSize:11.5 weight:NSFontWeightBold];
     self.swrLabel.textColor = [NSColor secondaryLabelColor];
 
-    NSBox *sep1 = [NSBox new]; sep1.boxType = NSBoxSeparator; [sep1.heightAnchor constraintEqualToConstant:18].active = YES;
-    NSBox *sep2 = [NSBox new]; sep2.boxType = NSBoxSeparator; [sep2.heightAnchor constraintEqualToConstant:18].active = YES;
-    NSBox *sep3 = [NSBox new]; sep3.boxType = NSBoxSeparator; [sep3.heightAnchor constraintEqualToConstant:18].active = YES;
+    // Row 1: Session Control, Mode, Band, Dial VFO & Audio Interface
+    NSBox *sepRow1_1 = [NSBox new]; sepRow1_1.boxType = NSBoxSeparator; [sepRow1_1.heightAnchor constraintEqualToConstant:16].active = YES;
+    NSBox *sepRow1_2 = [NSBox new]; sepRow1_2.boxType = NSBoxSeparator; [sepRow1_2.heightAnchor constraintEqualToConstant:16].active = YES;
 
-    NSStackView *topStack = [NSStackView stackViewWithViews:@[
-        self.startStopButton, self.bandPopup, self.dialFreqLabel, sep1,
-        self.audioInPopup, self.simCheckbox, sep2,
-        rxLbl, self.rxFreqField, txLbl, self.txFreqField,
-        self.lockFreqsButton, self.tuneButton, self.armTxButton, sep3,
-        self.txParitySegment, self.swrLabel
+    NSView *spacerR1 = [NSView new];
+    spacerR1.translatesAutoresizingMaskIntoConstraints = NO;
+    [spacerR1 setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    NSStackView *row1Stack = [NSStackView stackViewWithViews:@[
+        self.startStopButton, self.modeSegment, self.bandPopup, self.dialFreqLabel, sepRow1_1,
+        self.audioInPopup, sepRow1_2, self.simCheckbox, spacerR1
     ]];
+    row1Stack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    row1Stack.alignment = NSLayoutAttributeCenterY;
+    row1Stack.spacing = 8;
 
-    topStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    topStack.alignment = NSLayoutAttributeCenterY;
-    topStack.spacing = 8;
-    topStack.translatesAutoresizingMaskIntoConstraints = NO;
-    [topRibbon.contentView addSubview:topStack];
+    // Row 2: AF Frequencies, Tuning, Transmit Control, Parity & SWR Protection
+    NSBox *sepRow2_1 = [NSBox new]; sepRow2_1.boxType = NSBoxSeparator; [sepRow2_1.heightAnchor constraintEqualToConstant:16].active = YES;
+    NSBox *sepRow2_2 = [NSBox new]; sepRow2_2.boxType = NSBoxSeparator; [sepRow2_2.heightAnchor constraintEqualToConstant:16].active = YES;
+
+    NSView *spacerR2 = [NSView new];
+    spacerR2.translatesAutoresizingMaskIntoConstraints = NO;
+    [spacerR2 setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    NSStackView *row2Stack = [NSStackView stackViewWithViews:@[
+        rxLbl, self.rxFreqField, txLbl, self.txFreqField,
+        self.lockFreqsButton, self.tuneButton, self.armTxButton, sepRow2_1,
+        self.txParitySegment, sepRow2_2, self.swrLabel, spacerR2
+    ]];
+    row2Stack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    row2Stack.alignment = NSLayoutAttributeCenterY;
+    row2Stack.spacing = 8;
+
+    NSStackView *ribbonVStack = [NSStackView stackViewWithViews:@[row1Stack, row2Stack]];
+    ribbonVStack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    ribbonVStack.alignment = NSLayoutAttributeLeading;
+    ribbonVStack.spacing = 6;
+    ribbonVStack.translatesAutoresizingMaskIntoConstraints = NO;
+    [topRibbon.contentView addSubview:ribbonVStack];
 
     [NSLayoutConstraint activateConstraints:@[
-        [topStack.leadingAnchor constraintEqualToAnchor:topRibbon.contentView.leadingAnchor constant:8],
-        [topStack.trailingAnchor constraintLessThanOrEqualToAnchor:topRibbon.contentView.trailingAnchor constant:-8],
-        [topStack.centerYAnchor constraintEqualToAnchor:topRibbon.contentView.centerYAnchor],
-        [topRibbon.heightAnchor constraintEqualToConstant:38]
+        [ribbonVStack.topAnchor constraintEqualToAnchor:topRibbon.contentView.topAnchor constant:6],
+        [ribbonVStack.leadingAnchor constraintEqualToAnchor:topRibbon.contentView.leadingAnchor constant:10],
+        [ribbonVStack.trailingAnchor constraintEqualToAnchor:topRibbon.contentView.trailingAnchor constant:-10],
+        [ribbonVStack.bottomAnchor constraintEqualToAnchor:topRibbon.contentView.bottomAnchor constant:-6],
+        [row1Stack.widthAnchor constraintEqualToAnchor:ribbonVStack.widthAnchor],
+        [row2Stack.widthAnchor constraintEqualToAnchor:ribbonVStack.widthAnchor],
+        [topRibbon.heightAnchor constraintEqualToConstant:64]
     ]];
 
     // --- 2. Lab599 Precision Panadapter & Spectrogram Chassis ---
@@ -542,16 +692,16 @@ static struct {
     panSubBadge.font = [NSFont monospacedSystemFontOfSize:9.0 weight:NSFontWeightMedium];
     panSubBadge.textColor = [NSColor secondaryLabelColor];
 
-    NSTextField *panUtcBadge = [NSTextField labelWithString:@"15.0s UTC FT8 SLOT · WATERFALL"];
-    panUtcBadge.font = [NSFont monospacedSystemFontOfSize:9.0 weight:NSFontWeightBold];
-    panUtcBadge.textColor = [NSColor colorWithCalibratedRed:0.05 green:0.45 blue:0.75 alpha:1.0]; // Tactical Blue
+    self.panUtcBadge = [NSTextField labelWithString:@"15.0s UTC FT8 SLOT · WATERFALL"];
+    self.panUtcBadge.font = [NSFont monospacedSystemFontOfSize:9.0 weight:NSFontWeightBold];
+    self.panUtcBadge.textColor = [NSColor colorWithCalibratedRed:0.05 green:0.45 blue:0.75 alpha:1.0]; // Tactical Blue
 
     NSStackView *panHeaderLeft = [NSStackView stackViewWithViews:@[panTitleBadge, panSubBadge]];
     panHeaderLeft.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     panHeaderLeft.spacing = 8;
     panHeaderLeft.alignment = NSLayoutAttributeCenterY;
 
-    NSStackView *panHeader = [NSStackView stackViewWithViews:@[panHeaderLeft, panUtcBadge]];
+    NSStackView *panHeader = [NSStackView stackViewWithViews:@[panHeaderLeft, self.panUtcBadge]];
     panHeader.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     panHeader.alignment = NSLayoutAttributeCenterY;
     panHeader.distribution = NSStackViewDistributionEqualSpacing;
@@ -568,6 +718,9 @@ static struct {
     self.waterfallView.translatesAutoresizingMaskIntoConstraints = NO;
     [panadapterBox.contentView addSubview:self.waterfallView];
 
+    NSLayoutConstraint *wfHeight = [self.waterfallView.heightAnchor constraintEqualToConstant:110];
+    wfHeight.priority = NSLayoutPriorityDefaultHigh;
+
     [NSLayoutConstraint activateConstraints:@[
         [panHeader.topAnchor constraintEqualToAnchor:panadapterBox.contentView.topAnchor constant:5],
         [panHeader.leadingAnchor constraintEqualToAnchor:panadapterBox.contentView.leadingAnchor constant:10],
@@ -583,7 +736,8 @@ static struct {
         [self.waterfallView.leadingAnchor constraintEqualToAnchor:panadapterBox.contentView.leadingAnchor constant:8],
         [self.waterfallView.trailingAnchor constraintEqualToAnchor:panadapterBox.contentView.trailingAnchor constant:-8],
         [self.waterfallView.bottomAnchor constraintEqualToAnchor:panadapterBox.contentView.bottomAnchor constant:-7],
-        [self.waterfallView.heightAnchor constraintEqualToConstant:115]
+        wfHeight,
+        [self.waterfallView.heightAnchor constraintGreaterThanOrEqualToConstant:70]
     ]];
 
     // --- 4. Autonomous Algorithms HUD Box ---
@@ -664,13 +818,13 @@ static struct {
     self.tableFilterSegment = [NSSegmentedControl segmentedControlWithLabels:@[@"All", @"CQ Only", @"To Me"] trackingMode:NSSegmentSwitchTrackingSelectOne target:self action:@selector(filterChanged:)];
     self.tableFilterSegment.selectedSegment = 0;
     self.tableFilterSegment.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.tableFilterSegment.widthAnchor constraintEqualToConstant:175].active = YES;
+    [self.tableFilterSegment.widthAnchor constraintEqualToConstant:148].active = YES;
 
     self.searchField = [[NSSearchField alloc] initWithFrame:NSZeroRect];
     self.searchField.translatesAutoresizingMaskIntoConstraints = NO;
     self.searchField.target = self;
     self.searchField.action = @selector(searchChanged:);
-    [self.searchField.widthAnchor constraintEqualToConstant:140].active = YES;
+    [self.searchField.widthAnchor constraintEqualToConstant:110].active = YES;
 
     NSButton *clearDecodesBtn = [NSButton buttonWithTitle:@"Clear" target:self action:@selector(clearDecodesClicked:)];
     clearDecodesBtn.translatesAutoresizingMaskIntoConstraints = NO;
@@ -681,7 +835,7 @@ static struct {
     self.timeModeButton = [NSButton buttonWithTitle:showUTC ? @"Time: UTC" : @"Time: Local" target:self action:@selector(toggleTimeDisplayMode:)];
     self.timeModeButton.translatesAutoresizingMaskIntoConstraints = NO;
     self.timeModeButton.bezelStyle = NSBezelStyleInline;
-    [self.timeModeButton.widthAnchor constraintEqualToConstant:85].active = YES;
+    [self.timeModeButton.widthAnchor constraintEqualToConstant:78].active = YES;
 
     // SNR Range Filter fields
     NSTextField *snrMinLbl = [NSTextField labelWithString:@"SNR≥"];
@@ -721,7 +875,7 @@ static struct {
     [self.alertCountryPopup addItemWithTitle:@"Canada 🇨🇦"];
     self.alertCountryPopup.target = self;
     self.alertCountryPopup.action = @selector(filterChanged:);
-    [self.alertCountryPopup.widthAnchor constraintEqualToConstant:140].active = YES;
+    [self.alertCountryPopup.widthAnchor constraintEqualToConstant:125].active = YES;
 
     NSStackView *advFilterBar = [NSStackView stackViewWithViews:@[
         snrMinLbl, self.snrMinField, snrMaxLbl, self.snrMaxField, snrUnit,
@@ -745,8 +899,10 @@ static struct {
     NSScrollView *tableScrollView = [[NSScrollView alloc] initWithFrame:NSZeroRect];
     tableScrollView.translatesAutoresizingMaskIntoConstraints = NO;
     tableScrollView.hasVerticalScroller = YES;
-    tableScrollView.hasHorizontalScroller = NO;
+    tableScrollView.hasHorizontalScroller = YES;
+    tableScrollView.autohidesScrollers = YES;
     tableScrollView.borderType = NSBezelBorder;
+    [tableScrollView setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
 
     self.activityTableView = [[NSTableView alloc] initWithFrame:NSZeroRect];
     self.activityTableView.dataSource = self;
@@ -755,6 +911,7 @@ static struct {
     self.activityTableView.usesAlternatingRowBackgroundColors = NO;
     self.activityTableView.target = self;
     self.activityTableView.doubleAction = @selector(tableRowDoubleClicked:);
+    self.activityTableView.columnAutoresizingStyle = NSTableViewUniformColumnAutoresizingStyle;
 
     [self addColumnToTable:self.activityTableView title:showUTC ? @"UTC" : @"Local" identifier:kColTime width:68];
     [self addColumnToTable:self.activityTableView title:@"dB" identifier:kColSNR width:38];
@@ -945,7 +1102,7 @@ static struct {
         [rightBox.trailingAnchor constraintEqualToAnchor:workstationContainer.trailingAnchor],
         [rightBox.topAnchor constraintEqualToAnchor:workstationContainer.topAnchor],
         [rightBox.bottomAnchor constraintEqualToAnchor:workstationContainer.bottomAnchor],
-        [rightBox.widthAnchor constraintEqualToConstant:340]
+        [rightBox.widthAnchor constraintEqualToConstant:315]
     ]];
 
     // --- 6. Bottom Status Bar ---
@@ -965,14 +1122,21 @@ static struct {
     self.clearLogButton.bezelStyle = NSBezelStyleRounded;
     self.clearLogButton.translatesAutoresizingMaskIntoConstraints = NO;
 
+    NSView *bottomSpacer = [NSView new];
+    bottomSpacer.translatesAutoresizingMaskIntoConstraints = NO;
+    [bottomSpacer setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+
     NSStackView *bottomStack = [NSStackView stackViewWithViews:@[
-        self.sessionLogCountLabel, self.openLogsButton, self.exportADIFButton, self.clearLogButton
+        self.sessionLogCountLabel, bottomSpacer, self.openLogsButton, self.exportADIFButton, self.clearLogButton
     ]];
     bottomStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     bottomStack.alignment = NSLayoutAttributeCenterY;
     bottomStack.spacing = 10;
     bottomStack.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:bottomStack];
+
+    NSLayoutConstraint *wsHeight = [workstationContainer.heightAnchor constraintEqualToConstant:330];
+    wsHeight.priority = NSLayoutPriorityDefaultHigh;
 
     // --- Main Vertical Stack Auto-Layout Constraints ---
     [NSLayoutConstraint activateConstraints:@[
@@ -991,10 +1155,12 @@ static struct {
         [workstationContainer.topAnchor constraintEqualToAnchor:algoBox.bottomAnchor constant:6],
         [workstationContainer.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:12],
         [workstationContainer.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-12],
-        [workstationContainer.heightAnchor constraintEqualToConstant:340],
+        wsHeight,
+        [workstationContainer.heightAnchor constraintGreaterThanOrEqualToConstant:200],
 
         [bottomStack.topAnchor constraintEqualToAnchor:workstationContainer.bottomAnchor constant:6],
         [bottomStack.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor constant:12],
+        [bottomStack.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor constant:-12],
         [bottomStack.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor constant:-8],
         [bottomStack.heightAnchor constraintEqualToConstant:24]
     ]];
@@ -1008,6 +1174,8 @@ static struct {
     NSTableColumn *col = [[NSTableColumn alloc] initWithIdentifier:ident];
     col.title = title;
     col.width = w;
+    col.minWidth = w * 0.7;
+    col.resizingMask = NSTableColumnAutoresizingMask | NSTableColumnUserResizingMask;
     [table addTableColumn:col];
 }
 
@@ -1024,14 +1192,16 @@ static struct {
 
 - (void)bandSelected:(id)sender {
     (void)sender;
-    NSInteger idx = self.bandPopup.indexOfSelectedItem;
-    if (idx >= 0 && kFT8Presets[idx].band != NULL) {
-        uint64_t freq = kFT8Presets[idx].freqHz;
-        self.audioEngine.dialFrequencyHz = freq;
-        [self updateFrequencyHz:freq mode:@"DIG"];
-        if (self.serialCommandSender) {
-            self.serialCommandSender([NSString stringWithFormat:@"FA%011llu;", freq]);
-            self.serialCommandSender(@"MD6;");
+    NSString *band = self.bandPopup.titleOfSelectedItem;
+    if (band.length > 0) {
+        uint64_t freq = [self defaultFrequencyForBand:band protocol:self.protocol];
+        if (freq > 0) {
+            self.audioEngine.dialFrequencyHz = freq;
+            [self updateFrequencyHz:freq mode:@"DIG"];
+            if (self.serialCommandSender) {
+                self.serialCommandSender([NSString stringWithFormat:@"FA%011llu;", (unsigned long long)freq]);
+                self.serialCommandSender(@"MD6;");
+            }
         }
     }
 }

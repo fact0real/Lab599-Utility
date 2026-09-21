@@ -76,7 +76,9 @@
 
 static NSTextField *Label(NSString *text) {
     NSTextField *label = [NSTextField wrappingLabelWithString:text];
+    label.preferredMaxLayoutWidth = 350.0;
     label.textColor = NSColor.secondaryLabelColor;
+    [label setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
     return label;
 }
 

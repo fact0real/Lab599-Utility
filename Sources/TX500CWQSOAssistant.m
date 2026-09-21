@@ -6,6 +6,8 @@
 //
 
 #import "TX500CWQSOAssistant.h"
+#import "TX500LogbookManager.h"
+#import "TX500CloudSyncEngine.h"
 
 @implementation TX500CWHeardStation
 - (instancetype)init {
@@ -381,6 +383,23 @@
     @synchronized (self.internalLoggedContacts) {
         [self.internalLoggedContacts insertObject:contact atIndex:0];
     }
+
+    // Also persist to central SQLite logbook and trigger zero-click cloud uploads
+    [[TX500LogbookManager sharedManager] addContactFromCW:contact
+                                                   myCall:self.myCallsign
+                                                   myGrid:nil];
+    TX500LogRecord *cloudRec = [[TX500LogRecord alloc] init];
+    cloudRec.callsign = [contact.callsign uppercaseString];
+    cloudRec.band = [contact.band lowercaseString];
+    cloudRec.frequencyHz = (uint64_t)(contact.frequencyMHz * 1e6);
+    cloudRec.mode = @"CW";
+    cloudRec.rstSent = contact.rstSent ?: @"599";
+    cloudRec.rstRcvd = contact.rstRcvd ?: @"599";
+    cloudRec.name = contact.name;
+    cloudRec.qth = contact.qth;
+    cloudRec.notes = contact.notes;
+    cloudRec.myCall = self.myCallsign ?: @"EP2AES";
+    [[TX500CloudSyncEngine sharedEngine] uploadContactImmediately:cloudRec completion:nil];
 
     if (self.onContactLogged) {
         dispatch_async(dispatch_get_main_queue(), ^{

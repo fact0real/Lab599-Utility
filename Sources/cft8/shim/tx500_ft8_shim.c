@@ -108,33 +108,65 @@ static float ft8808_estimate_snr(const ftx_waterfall_t* wf,
     double sig_sum = 0.0, noise_sum = 0.0;
     int sig_n = 0, noise_n = 0;
 
-    for (int m = 0; m < FT8_NUM_SYNC; ++m) {
-        for (int k = 0; k < FT8_LENGTH_SYNC; ++k) {
-            int block = (FT8_SYNC_OFFSET * m) + k;
-            int block_abs = cand->time_offset + block;
-            if (block_abs < 0) continue;
-            if (block_abs >= wf->num_blocks) break;
+    if (wf->protocol == FTX_PROTOCOL_FT4) {
+        for (int m = 0; m < FT4_NUM_SYNC; ++m) {
+            for (int k = 0; k < FT4_LENGTH_SYNC; ++k) {
+                int block = 1 + (FT4_SYNC_OFFSET * m) + k;
+                int block_abs = cand->time_offset + block;
+                if (block_abs < 0) continue;
+                if (block_abs >= wf->num_blocks) break;
 
-            const WF_ELEM_T* p8 = mag_cand + (block * wf->block_stride);
-            int sm = kFT8_Costas_pattern[k];   // expected tone
-            for (int tone = 0; tone < 8; ++tone) {
-                double lin = pow(10.0, WF_ELEM_MAG(p8[tone]) / 10.0);
-                if (tone == sm) { sig_sum += lin; ++sig_n; }
-                else            { noise_sum += lin; ++noise_n; }
+                const WF_ELEM_T* p4 = mag_cand + (block * wf->block_stride);
+                int sm = kFT4_Costas_pattern[m][k]; // expected tone 0..3
+                for (int tone = 0; tone < 4; ++tone) {
+                    double lin = pow(10.0, WF_ELEM_MAG(p4[tone]) / 10.0);
+                    if (tone == sm) { sig_sum += lin; ++sig_n; }
+                    else            { noise_sum += lin; ++noise_n; }
+                }
             }
         }
+        if (sig_n == 0 || noise_n == 0) return -20.0f;
+
+        double signal_plus_noise = sig_sum / sig_n;
+        double noise = noise_sum / noise_n;
+        double signal = signal_plus_noise - noise;
+        if (signal < 1e-12) signal = 1e-12;
+
+        // Tone spacing = 20.8333 Hz, reference noise bandwidth = 2500 Hz
+        // 10 * log10(2500 / 20.8333) = 10 * log10(120) ≈ 20.79 dB
+        double snr = 10.0 * log10(signal / noise) - 20.8;
+        if (snr < -24.0) snr = -24.0;
+        if (snr >  40.0) snr =  40.0;
+        return (float)snr;
+    } else {
+        for (int m = 0; m < FT8_NUM_SYNC; ++m) {
+            for (int k = 0; k < FT8_LENGTH_SYNC; ++k) {
+                int block = (FT8_SYNC_OFFSET * m) + k;
+                int block_abs = cand->time_offset + block;
+                if (block_abs < 0) continue;
+                if (block_abs >= wf->num_blocks) break;
+
+                const WF_ELEM_T* p8 = mag_cand + (block * wf->block_stride);
+                int sm = kFT8_Costas_pattern[k];   // expected tone
+                for (int tone = 0; tone < 8; ++tone) {
+                    double lin = pow(10.0, WF_ELEM_MAG(p8[tone]) / 10.0);
+                    if (tone == sm) { sig_sum += lin; ++sig_n; }
+                    else            { noise_sum += lin; ++noise_n; }
+                }
+            }
+        }
+        if (sig_n == 0 || noise_n == 0) return -24.0f;
+
+        double signal_plus_noise = sig_sum / sig_n;
+        double noise = noise_sum / noise_n;
+        double signal = signal_plus_noise - noise;
+        if (signal < 1e-12) signal = 1e-12;
+
+        double snr = 10.0 * log10(signal / noise) - 26.0;  // → 2500 Hz reference
+        if (snr < -28.0) snr = -28.0;
+        if (snr >  40.0) snr =  40.0;
+        return (float)snr;
     }
-    if (sig_n == 0 || noise_n == 0) return -24.0f;
-
-    double signal_plus_noise = sig_sum / sig_n;
-    double noise = noise_sum / noise_n;
-    double signal = signal_plus_noise - noise;
-    if (signal < 1e-12) signal = 1e-12;
-
-    double snr = 10.0 * log10(signal / noise) - 26.0;  // → 2500 Hz reference
-    if (snr < -28.0) snr = -28.0;
-    if (snr >  40.0) snr =  40.0;
-    return (float)snr;
 }
 
 // ---------------------------------------------------------------------------

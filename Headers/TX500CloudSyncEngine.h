@@ -43,6 +43,7 @@ extern NSString * const TX500CloudSyncStatusDidChangeNotification;
 // Batch Uploads
 - (void)uploadPendingContactsWithCompletion:(nullable void (^)(NSInteger uploadedCount, NSInteger failedCount, NSString *summary))completion;
 - (void)uploadFullLogbookToLoTWWithCompletion:(nullable void (^)(BOOL success, NSString *message))completion;
+- (void)signAndUploadContactsToLoTW:(NSArray<TX500LogRecord *> *)records completion:(nullable void (^)(BOOL success, NSString *message))completion;
 
 // Service Verification Tests
 - (void)testQRZLogbookAPIKey:(NSString *)apiKey

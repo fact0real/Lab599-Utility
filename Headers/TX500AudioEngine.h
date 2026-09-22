@@ -29,6 +29,8 @@ typedef NS_ENUM(NSInteger, TX500AudioFilterPreset) {
 @property (nonatomic, copy) NSString *name;
 @property (nonatomic, copy) NSString *uid;
 @property (nonatomic, assign) BOOL isAD508;
+@property (nonatomic, assign) BOOL isUSB;
+@property (nonatomic, assign) BOOL isVirtual;
 @property (nonatomic, assign) BOOL isInput;
 @end
 
@@ -65,6 +67,25 @@ typedef NS_ENUM(NSInteger, TX500AudioFilterPreset) {
 @property (nonatomic, assign) float notchFreqHz;  // 200 - 3500 Hz
 @property (nonatomic, assign) float notchQ;       // default 8.0 (sharp)
 
+// Auto-Notch Filter (ANF)
+@property (nonatomic, assign) BOOL autoNotchEnabled;
+@property (nonatomic, assign, readonly) float detectedAutoNotchHz;
+
+// DSP Spectral Noise Reduction (LMS / Speech Enhancer)
+@property (nonatomic, assign) BOOL nrEnabled;
+@property (nonatomic, assign) float nrLevel; // 0.0 to 1.0 (Depth / Strength, default 0.6)
+
+// 3-Band Speech Equalizer (Intelligibility Booster)
+@property (nonatomic, assign) BOOL eqEnabled;
+@property (nonatomic, assign) float eqLowGainDb;  // 250 Hz, -12 to +12 dB
+@property (nonatomic, assign) float eqMidGainDb;  // 1800 Hz, -12 to +12 dB
+@property (nonatomic, assign) float eqHighGainDb; // 3200 Hz, -12 to +12 dB
+
+// Instant Replay 15s (Rolling Audio Buffer)
+@property (nonatomic, assign, readonly) BOOL isReplaying;
+@property (nonatomic, assign, readonly) float replayProgress; // 0.0 to 1.0
+@property (nonatomic, copy, nullable) void (^onReplayProgressChanged)(BOOL isReplaying, float progress);
+
 // Noise Gate / Squelch
 @property (nonatomic, assign) BOOL squelchEnabled;
 @property (nonatomic, assign) float squelchThresholdDb; // -80 dB to -20 dB
@@ -100,6 +121,10 @@ typedef NS_ENUM(NSInteger, TX500AudioFilterPreset) {
 - (void)processRawAudioSamples:(const float *)samples count:(NSInteger)count;
 
 - (void)applyPreset:(TX500AudioFilterPreset)preset;
+
+// Instant Replay
+- (void)startInstantReplay;
+- (void)stopInstantReplay;
 
 - (BOOL)startRecordingWithError:(NSError **)error;
 - (void)stopRecording;

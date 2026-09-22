@@ -25,6 +25,11 @@ if [ "${1:-}" = "--test" ]; then
     clang -O2 -Wall -Wextra -Wno-unused-parameter -Werror -fobjc-arc \
         -mmacosx-version-min=12.0 -framework Foundation \
         -IHeaders -ISources \
+        tests/TimeDisciplineTests.m Sources/TX500TimeDiscipline.m Sources/TX500FT8Message.m -o build/TimeDisciplineTests
+    ./build/TimeDisciplineTests
+    clang -O2 -Wall -Wextra -Wno-unused-parameter -Werror -fobjc-arc \
+        -mmacosx-version-min=12.0 -framework Foundation \
+        -IHeaders -ISources \
         tests/UtilityTests.m Sources/Lab599SerialPort.m Sources/TX500CATTest.m Sources/TX500Configuration.m Sources/TX500ProfilesAndBackup.m Sources/TX500SettingsModel.m -o build/UtilityTests
     ./build/UtilityTests
     clang -O2 -Wall -Wextra -Wno-unused-parameter -Werror -fobjc-arc \
@@ -53,6 +58,7 @@ if [ "${1:-}" = "--test" ]; then
         tests/CWStationTests.m Sources/TX500CWAudioDecoder.m Sources/TX500CWKeyer.m Sources/TX500CWQSOAssistant.m Sources/TX500CWSpectrumView.m Sources/TX500CWStationController.m \
         Sources/TX500LogbookManager.m Sources/TX500CallsignLookupService.m Sources/TX500CloudSyncEngine.m Sources/TX500WebAuthenticatorController.m -o build/CWStationTests
     ./build/CWStationTests
+    sh tests/run-cw-decoder-tests.sh
     clang -O2 -Wall -Wextra -Wno-unused-parameter -Werror -fobjc-arc \
         -mmacosx-version-min=12.0 -framework Cocoa -framework AVFoundation -framework CoreAudio -framework AudioToolbox \
         -IHeaders -ISources \
@@ -61,16 +67,21 @@ if [ "${1:-}" = "--test" ]; then
     clang -O2 -Wall -Wextra -Wno-unused-parameter -Werror -fobjc-arc \
         -mmacosx-version-min=12.0 -framework Cocoa -framework CoreAudio -framework AudioToolbox -framework AVFoundation -framework WebKit -framework Security -lsqlite3 \
         -IHeaders -ISources -IHeaders/cft8 -ISources/cft8 \
-        tests/FT8StationTests.m Sources/TX500FT8Message.m Sources/TX500FT8AudioEngine.m Sources/TX500FT8AutoEngine.m \
+        tests/FT8StationTests.m Sources/TX500FT8Message.m Sources/TX500FT8AudioEngine.m Sources/TX500FT8AutoEngine.m Sources/TX500TimeDiscipline.m \
         Sources/TX500LogbookManager.m Sources/TX500CallsignLookupService.m Sources/TX500CloudSyncEngine.m Sources/TX500WebAuthenticatorController.m \
         Sources/cft8/ft8/constants.c Sources/cft8/ft8/crc.c Sources/cft8/ft8/encode.c Sources/cft8/ft8/decode.c Sources/cft8/ft8/ldpc.c Sources/cft8/ft8/message.c Sources/cft8/ft8/text.c Sources/cft8/fft/kiss_fft.c Sources/cft8/fft/kiss_fftr.c Sources/cft8/common/wave.c Sources/cft8/common/monitor.c Sources/cft8/shim/tx500_ft8_shim.c \
         -o build/FT8StationTests
     ./build/FT8StationTests
     clang -O2 -Wall -Wextra -Wno-unused-parameter -Werror -fobjc-arc \
+        -mmacosx-version-min=12.0 -framework Cocoa \
+        -IHeaders -ISources \
+        tests/FT8WaterfallTests.m Sources/TX500FT8WaterfallView.m -o build/FT8WaterfallTests
+    ./build/FT8WaterfallTests
+    clang -O2 -Wall -Wextra -Wno-unused-parameter -Werror -fobjc-arc \
         -mmacosx-version-min=12.0 -framework Cocoa -framework UniformTypeIdentifiers -framework AVFoundation -framework CoreAudio -framework AudioToolbox -framework WebKit -framework Security -lsqlite3 \
         -IHeaders -ISources -IHeaders/cft8 -ISources/cft8 \
         tests/LogbookAndCloudTests.m Sources/TX500LogbookManager.m Sources/TX500CallsignLookupService.m Sources/TX500CloudSyncEngine.m \
-        Sources/TX500FT8AutoEngine.m Sources/TX500CWQSOAssistant.m Sources/TX500FT8Message.m Sources/TX500FT8AudioEngine.m \
+        Sources/TX500FT8AutoEngine.m Sources/TX500CWQSOAssistant.m Sources/TX500FT8Message.m Sources/TX500FT8AudioEngine.m Sources/TX500TimeDiscipline.m \
         Sources/TX500WebAuthenticatorController.m Sources/TX500CloudSettingsController.m \
         Sources/cft8/ft8/constants.c Sources/cft8/ft8/crc.c Sources/cft8/ft8/encode.c Sources/cft8/ft8/decode.c Sources/cft8/ft8/ldpc.c Sources/cft8/ft8/message.c Sources/cft8/ft8/text.c Sources/cft8/fft/kiss_fft.c Sources/cft8/fft/kiss_fftr.c Sources/cft8/common/wave.c Sources/cft8/common/monitor.c Sources/cft8/shim/tx500_ft8_shim.c \
         -o build/LogbookAndCloudTests
@@ -111,7 +122,7 @@ clang -O2 -Wall -Wextra -Wno-unused-parameter -Werror -fobjc-arc \
     -arch arm64 -arch x86_64 -mmacosx-version-min=12.0 \
     -framework Cocoa -framework UniformTypeIdentifiers -framework AVFoundation -framework CoreAudio -framework AudioToolbox -framework WebKit -framework Security -lsqlite3 \
     -IHeaders -ISources -IHeaders/cft8 -ISources/cft8 \
-    Sources/Lab599Utility.m Sources/Lab599FirmwareCatalog.m Sources/TX500Transfer.m Sources/TX500TimeSync.m Sources/Lab599SerialPort.m Sources/TX500CATTest.m Sources/TX500Configuration.m Sources/TX500ProfilesAndBackup.m Sources/TX500SettingsModel.m Sources/TX500ScreenModel.m Sources/TX500ScreenRenderer.m Sources/TX500ScreenCaptureController.m Sources/Lab599ToolsController.m Sources/Lab599DriverController.m Sources/Lab599DocsController.m Sources/TXGaugeView.m Sources/TX500TelemetryEngine.m Sources/Lab599TelemetryController.m Sources/Lab599FeedbackController.m Sources/TX500CWAudioDecoder.m Sources/TX500CWKeyer.m Sources/TX500CWQSOAssistant.m Sources/TX500CWSpectrumView.m Sources/TX500CWStationController.m Sources/TX500AudioEngine.m Sources/TX500AudioVisualizerView.m Sources/TX500AudioMonitorController.m \
+    Sources/Lab599Utility.m Sources/Lab599FirmwareCatalog.m Sources/TX500Transfer.m Sources/TX500TimeSync.m Sources/TX500TimeDiscipline.m Sources/Lab599SerialPort.m Sources/TX500CATTest.m Sources/TX500Configuration.m Sources/TX500ProfilesAndBackup.m Sources/TX500SettingsModel.m Sources/TX500ScreenModel.m Sources/TX500ScreenRenderer.m Sources/TX500ScreenCaptureController.m Sources/Lab599ToolsController.m Sources/Lab599DriverController.m Sources/Lab599DocsController.m Sources/TXGaugeView.m Sources/TX500TelemetryEngine.m Sources/Lab599TelemetryController.m Sources/Lab599FeedbackController.m Sources/TX500CWAudioDecoder.m Sources/TX500CWKeyer.m Sources/TX500CWQSOAssistant.m Sources/TX500CWSpectrumView.m Sources/TX500CWStationController.m Sources/TX500AudioEngine.m Sources/TX500AudioVisualizerView.m Sources/TX500AudioMonitorController.m \
     Sources/TX500FT8Message.m Sources/TX500FT8AudioEngine.m Sources/TX500FT8AutoEngine.m Sources/TX500FT8WaterfallView.m Sources/TX500FT8StationController.m \
     Sources/TX500LogbookManager.m Sources/TX500CallsignLookupService.m Sources/TX500CloudSyncEngine.m Sources/TX500WebAuthenticatorController.m Sources/TX500CloudSettingsController.m Sources/TX500LogbookController.m \
     Sources/cft8/ft8/constants.c Sources/cft8/ft8/crc.c Sources/cft8/ft8/encode.c Sources/cft8/ft8/decode.c Sources/cft8/ft8/ldpc.c Sources/cft8/ft8/message.c Sources/cft8/ft8/text.c Sources/cft8/fft/kiss_fft.c Sources/cft8/fft/kiss_fftr.c Sources/cft8/common/wave.c Sources/cft8/common/monitor.c Sources/cft8/shim/tx500_ft8_shim.c \
@@ -134,6 +145,11 @@ codesign --verify --deep --strict "$APP_NAME"
 plutil -lint "$APP_NAME/Contents/Info.plist"
 echo "Built $APP_NAME successfully with architectures:"
 lipo -archs "$APP_NAME/Contents/MacOS/$BIN_NAME"
+
+# Build/sign a reviewable bundle without modifying the installed application.
+if [ "${1:-}" = "--build-only" ]; then
+    exit 0
+fi
 
 echo "==> Deploying $APP_NAME ($NEW_VER Build $NEW_BUILD) to /Applications/..."
 /bin/rm -rf "/Applications/$APP_NAME"

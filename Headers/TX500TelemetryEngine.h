@@ -62,6 +62,7 @@ typedef void (^TXTelemetryStatusHandler)(NSString *status, BOOL isConnected);
 @property (nonatomic, assign) BOOL demoMode;
 @property (nonatomic, assign) NSTimeInterval pollInterval; // Default: 0.25s (250ms)
 @property (nonatomic, copy, nullable) NSString *serialPortPath;
+@property (nonatomic, copy, nullable) NSString * _Nullable (^catQueryHandler)(NSString *catCommand, NSTimeInterval timeout);
 
 - (void)startWithPort:(nullable NSString *)portPath
              interval:(NSTimeInterval)interval
@@ -82,6 +83,7 @@ typedef void (^TXTelemetryStatusHandler)(NSString *status, BOOL isConnected);
 + (BOOL)parseRMReply:(NSString *)reply intoData:(TXTelemetryData *)data;
 + (BOOL)parseSMReply:(NSString *)reply intoData:(TXTelemetryData *)data;
 + (BOOL)parseVLReply:(NSString *)reply intoData:(TXTelemetryData *)data;
++ (double)swrRatioFromMeterDots:(NSInteger)dots;
 
 @end
 

@@ -28,6 +28,8 @@ typedef NS_ENUM(NSInteger, TX500FT8MessageType) {
 @property (nonatomic, assign) float freqHz;
 @property (nonatomic, assign) float snrDb;
 @property (nonatomic, assign) float timeSec; // DT
+@property (nonatomic, assign) float timingUncertaintySec;
+@property (nonatomic, copy, nullable) NSString *timingSourceIdentifier;
 @property (nonatomic, strong) NSDate *timestamp;
 @property (nonatomic, assign) NSInteger slotParity; // 0=Even (:00,:30), 1=Odd (:15,:45)
 @property (nonatomic, copy) NSString *mode; // @"FT8" or @"FT4"
@@ -44,12 +46,22 @@ typedef NS_ENUM(NSInteger, TX500FT8MessageType) {
 @property (nonatomic, assign) BOOL isCQ;
 @property (nonatomic, assign) BOOL isDirectedToMe;
 @property (nonatomic, assign) BOOL isMyTransmission;
+@property (nonatomic, assign) BOOL isNewDXCC;
+@property (nonatomic, assign) BOOL isNewGrid;
+@property (nonatomic, assign) BOOL isWorkedBefore;
+@property (nonatomic, assign) BOOL isAlertMatch;
+// Sentinel: when YES this row is rendered as a cycle-divider header, not a real decode
+@property (nonatomic, assign) BOOL isCycleSeparator;
+
 
 // Geolocation & DXCC Intelligence
 @property (nonatomic, copy) NSString *countryName;
 @property (nonatomic, copy) NSString *countryFlag;
+@property (nonatomic, copy, nullable) NSString *continent;
 @property (nonatomic, assign) double distanceKm;
 @property (nonatomic, assign) double bearingDeg;
+
++ (NSString *)continentForCallsign:(NSString *)callsign;
 
 // Factory Constructors
 + (instancetype)messageWithRawText:(NSString *)rawText
@@ -76,6 +88,7 @@ typedef NS_ENUM(NSInteger, TX500FT8MessageType) {
 // DXCC & Country Resolver
 + (NSString *)countryNameForCallsign:(NSString *)call;
 + (NSString *)countryFlagForCallsign:(NSString *)call;
++ (NSArray<NSDictionary<NSString *, NSString *> *> *)allDXCCEntities;
 
 // Standard Message Generation for Transmit Slots
 + (NSString *)messageForPhase:(NSInteger)phase

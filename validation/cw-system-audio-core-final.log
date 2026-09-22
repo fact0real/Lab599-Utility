@@ -1,0 +1,2 @@
+SKIP external M4A fixtures (pass their directory as first argument)
+CW regression: 129 checks, 0 failures

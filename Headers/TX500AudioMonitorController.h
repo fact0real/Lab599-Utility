@@ -30,6 +30,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, assign, readonly) uint64_t currentFrequencyHz;
 @property (nonatomic, copy, readonly) NSString *currentMode;
 @property (nonatomic, assign, readonly) NSInteger currentSMeter;
+@property (nonatomic, copy, readonly) NSArray<NSDictionary *> *bookmarks;
 
 // Lifecycle & Actions
 - (void)startController;
@@ -39,7 +40,10 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)toggleMonitoring;
 - (void)setRadioMode:(NSString *)mode;
 - (void)tuneRadioToFrequencyHz:(uint64_t)freqHz;
+- (void)tuneStep:(NSInteger)deltaHz;
 - (void)bookmarkCurrentFrequencyWithLabel:(nullable NSString *)label;
+- (void)toggleInstantReplay:(nullable id)sender;
+- (void)toggleCableGuide:(nullable id)sender;
 
 @end
 

@@ -80,6 +80,10 @@ typedef struct
 /// @return Number of candidates filled in the heap
 int ftx_find_candidates(const ftx_waterfall_t* power, int num_candidates, ftx_candidate_t heap[], int min_score);
 
+/// Re-evaluate Costas synchronization strength at a specific candidate. This
+/// is used for sub-bin parabolic timing refinement after CRC validation.
+int ftx_candidate_sync_score(const ftx_waterfall_t* power, const ftx_candidate_t* candidate);
+
 /// Attempt to decode a message candidate. Extracts the bit probabilities, runs LDPC decoder, checks CRC and unpacks the message in plain text.
 /// @param[in] power Waterfall data collected during message slot
 /// @param[in] cand Candidate to decode

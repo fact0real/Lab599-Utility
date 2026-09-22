@@ -9,6 +9,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, strong, readonly) NSView *view;
 @property (nonatomic, strong, readonly) TX500TelemetryEngine *engine;
 @property (nonatomic, copy, nullable) NSString *(^selectedPortProvider)(void);
+@property (nonatomic, copy, nullable) NSString * _Nullable (^catQueryHandler)(NSString *catCommand, NSTimeInterval timeout);
 @property (nonatomic, copy, nullable) void (^logHandler)(NSString *line);
 @property (nonatomic, copy, nullable) void (^onTelemetryData)(TXTelemetryData *data);
 

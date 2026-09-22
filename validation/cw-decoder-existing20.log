@@ -1,0 +1,51 @@
+2026-09-22 13:52:53.948 run20-after[90501:1676784] === Running TX-500 CW Audio Decoder Tests on 20 Random Word Files ===
+[TEST 01/20] PASS | Word: XJW     | Decoded: XJW     | WPM:  5.0 (Est:  5.0) | Tone:  650.0 Hz (Center:  651.6 Hz)
+[TEST 02/20] PASS | Word: QBZ     | Decoded: QBZ     | WPM:  6.0 (Est:  6.0) | Tone:  700.0 Hz (Center:  701.5 Hz)
+[TEST 03/20] PASS | Word: KVH     | Decoded: KVH     | WPM:  8.0 (Est:  8.0) | Tone:  600.0 Hz (Center:  601.4 Hz)
+[TEST 04/20] PASS | Word: PLFD    | Decoded: PLFD    | WPM: 10.0 (Est: 10.0) | Tone:  750.0 Hz (Center:  751.2 Hz)
+[TEST 05/20] PASS | Word: MYRX    | Decoded: MYRX    | WPM: 12.0 (Est: 12.0) | Tone:  800.0 Hz (Center:  801.2 Hz)
+[TEST 06/20] PASS | Word: TWCG    | Decoded: TWCG    | WPM: 13.0 (Est: 13.0) | Tone: 1225.0 Hz (Center: 1223.7 Hz)
+[TEST 07/20] PASS | Word: SBJN    | Decoded: SBJN    | WPM: 14.0 (Est: 14.0) | Tone:  650.0 Hz (Center:  651.4 Hz)
+[TEST 08/20] PASS | Word: HZKVT   | Decoded: HZKVT   | WPM: 15.0 (Est: 15.0) | Tone:  700.0 Hz (Center:  701.4 Hz)
+[TEST 09/20] PASS | Word: RDXMB   | Decoded: RDXMB   | WPM: 16.0 (Est: 16.0) | Tone:  600.0 Hz (Center:  601.1 Hz)
+[TEST 10/20] PASS | Word: WQLPJ   | Decoded: WQLPJ   | WPM: 18.0 (Est: 17.9) | Tone:  850.0 Hz (Center:  850.6 Hz)
+[TEST 11/20] PASS | Word: GMCFY   | Decoded: GMCFY   | WPM: 20.0 (Est: 20.0) | Tone:  650.0 Hz (Center:  651.5 Hz)
+[TEST 12/20] PASS | Word: KTRWQX  | Decoded: KTRWQX  | WPM: 22.0 (Est: 21.8) | Tone:  700.0 Hz (Center:  701.3 Hz)
+[TEST 13/20] PASS | Word: VBZPDL  | Decoded: VBZPDL  | WPM: 24.0 (Est: 24.0) | Tone:  650.0 Hz (Center:  651.4 Hz)
+[TEST 14/20] PASS | Word: NJMFGH  | Decoded: NJMFGH  | WPM: 25.0 (Est: 25.0) | Tone:  800.0 Hz (Center:  800.9 Hz)
+[TEST 15/20] PASS | Word: CXLYSW  | Decoded: CXLYSW  | WPM: 26.0 (Est: 26.1) | Tone:  600.0 Hz (Center:  601.4 Hz)
+[TEST 16/20] PASS | Word: PBKVWZT | Decoded: PBKVWZT | WPM: 28.0 (Est: 27.9) | Tone:  700.0 Hz (Center:  701.3 Hz)
+[TEST 17/20] PASS | Word: MRXDFLQ | Decoded: MRXDFLQ | WPM: 30.0 (Est: 30.0) | Tone:  650.0 Hz (Center:  651.4 Hz)
+[TEST 18/20] PASS | Word: TGNSHYC | Decoded: TGNSHYC | WPM: 32.0 (Est: 31.6) | Tone:  750.0 Hz (Center:  751.2 Hz)
+[TEST 19/20] PASS | Word: WJPMKBX | Decoded: WJPMKBX | WPM: 34.0 (Est: 34.3) | Tone:  600.0 Hz (Center:  601.3 Hz)
+[TEST 20/20] PASS | Word: FLVQZND | Decoded: FLVQZND | WPM: 36.0 (Est: 36.4) | Tone:  650.0 Hz (Center:  651.3 Hz)
+
+==============================================
+PASS 1 (CALIBRATED WPM): 20 / 20 PASSED, 0 FAILED (100.0% SUCCESS RATE)
+==============================================
+
+=== PASS 2: FULL BLIND ADAPTATION (Starting at 650 Hz nominal, 20.0 WPM for all files) ===
+[BLIND 01/20] PASS | Word: XJW     | Decoded: XJW     | WPM:  5.0 (Est:  5.0) | Tone:  650.0 Hz (Center:  651.6 Hz)
+[BLIND 02/20] PASS | Word: QBZ     | Decoded: QBZ     | WPM:  6.0 (Est:  6.0) | Tone:  700.0 Hz (Center:  701.5 Hz)
+[BLIND 03/20] PASS | Word: KVH     | Decoded: KVH     | WPM:  8.0 (Est:  8.0) | Tone:  600.0 Hz (Center:  601.4 Hz)
+[BLIND 04/20] PASS | Word: PLFD    | Decoded: PLFD    | WPM: 10.0 (Est: 10.0) | Tone:  750.0 Hz (Center:  751.2 Hz)
+[BLIND 05/20] PASS | Word: MYRX    | Decoded: MYRX    | WPM: 12.0 (Est: 12.0) | Tone:  800.0 Hz (Center:  801.2 Hz)
+[BLIND 06/20] PASS | Word: TWCG    | Decoded: TWCG    | WPM: 13.0 (Est: 13.0) | Tone: 1225.0 Hz (Center: 1223.7 Hz)
+[BLIND 07/20] PASS | Word: SBJN    | Decoded: SBJN    | WPM: 14.0 (Est: 14.0) | Tone:  650.0 Hz (Center:  651.4 Hz)
+[BLIND 08/20] PASS | Word: HZKVT   | Decoded: HZKVT   | WPM: 15.0 (Est: 15.0) | Tone:  700.0 Hz (Center:  701.4 Hz)
+[BLIND 09/20] PASS | Word: RDXMB   | Decoded: RDXMB   | WPM: 16.0 (Est: 16.0) | Tone:  600.0 Hz (Center:  601.1 Hz)
+[BLIND 10/20] PASS | Word: WQLPJ   | Decoded: WQLPJ   | WPM: 18.0 (Est: 17.9) | Tone:  850.0 Hz (Center:  850.6 Hz)
+[BLIND 11/20] PASS | Word: GMCFY   | Decoded: GMCFY   | WPM: 20.0 (Est: 20.0) | Tone:  650.0 Hz (Center:  651.5 Hz)
+[BLIND 12/20] PASS | Word: KTRWQX  | Decoded: KTRWQX  | WPM: 22.0 (Est: 21.8) | Tone:  700.0 Hz (Center:  701.3 Hz)
+[BLIND 13/20] PASS | Word: VBZPDL  | Decoded: VBZPDL  | WPM: 24.0 (Est: 24.0) | Tone:  650.0 Hz (Center:  651.4 Hz)
+[BLIND 14/20] PASS | Word: NJMFGH  | Decoded: NJMFGH  | WPM: 25.0 (Est: 25.0) | Tone:  800.0 Hz (Center:  800.9 Hz)
+[BLIND 15/20] PASS | Word: CXLYSW  | Decoded: CXLYSW  | WPM: 26.0 (Est: 26.1) | Tone:  600.0 Hz (Center:  601.4 Hz)
+[BLIND 16/20] PASS | Word: PBKVWZT | Decoded: PBKVWZT | WPM: 28.0 (Est: 27.9) | Tone:  700.0 Hz (Center:  701.3 Hz)
+[BLIND 17/20] PASS | Word: MRXDFLQ | Decoded: MRXDFLQ | WPM: 30.0 (Est: 30.0) | Tone:  650.0 Hz (Center:  651.4 Hz)
+[BLIND 18/20] PASS | Word: TGNSHYC | Decoded: TGNSHYC | WPM: 32.0 (Est: 31.6) | Tone:  750.0 Hz (Center:  751.2 Hz)
+[BLIND 19/20] PASS | Word: WJPMKBX | Decoded: WJPMKBX | WPM: 34.0 (Est: 34.3) | Tone:  600.0 Hz (Center:  601.3 Hz)
+[BLIND 20/20] PASS | Word: FLVQZND | Decoded: FLVQZND | WPM: 36.0 (Est: 36.4) | Tone:  650.0 Hz (Center:  651.3 Hz)
+
+==============================================
+PASS 2 (BLIND ADAPTATION): 20 / 20 PASSED, 0 FAILED (100.0% SUCCESS RATE)
+==============================================

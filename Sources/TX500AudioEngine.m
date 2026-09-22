@@ -99,6 +99,34 @@ static void TX500MakePeaking(TX500Biquad *f, double srate, double center, double
     f->a2 = (1.0 - alpha / a) / a0;
 }
 
+// Normalized LMS Adaptive Decorrelation Filter for Spectral Noise Reduction
+static inline double TX500ProcessNLMS(float *delayLine, int *delayIdx, float *weights, int numTaps, int delaySamples, double input, float mu, float leak) {
+    int idx = *delayIdx;
+    delayLine[idx % 128] = (float)input;
+
+    // Reference signal from decorrelation delay
+    double est = 0.0;
+    double power = 1e-4;
+    for (int k = 0; k < numTaps; k++) {
+        int tapPos = (idx - delaySamples - k + 256) % 128;
+        float x = delayLine[tapPos];
+        est += weights[k] * x;
+        power += x * x;
+    }
+
+    double err = input - est;
+    double normMu = mu / power;
+    if (normMu > 0.08) normMu = 0.08;
+
+    for (int k = 0; k < numTaps; k++) {
+        int tapPos = (idx - delaySamples - k + 256) % 128;
+        weights[k] = weights[k] * (1.0f - leak) + (float)(normMu * err * delayLine[tapPos]);
+    }
+
+    *delayIdx = (idx + 1) % 128;
+    return est;
+}
+
 // Fast Radix-2 FFT with in-place bit reversal
 static void TX500ComputeFFT(const float *realIn, float *magnitudesOut, int n) {
     float real[TX500_FFT_SIZE];
@@ -173,7 +201,30 @@ static void TX500ComputeFFT(const float *realIn, float *magnitudesOut, int n) {
     TX500Biquad _highPass;
     TX500Biquad _notch;
     TX500Biquad _peaking;
+    TX500Biquad _autoNotch;
+    TX500Biquad _eqLow;
+    TX500Biquad _eqMid;
+    TX500Biquad _eqHigh;
     pthread_mutex_t _filterMutex;
+
+    // LMS Noise Reduction State
+    float _nrDelayLine[128];
+    int _nrDelayIndex;
+    float _nrWeights[32];
+
+    // Auto-Notch Carrier Tone State
+    float _trackedToneFreq;
+
+    // 15-Second Instant Replay Rolling Buffer
+    float *_replayRingBuffer;
+    NSInteger _replayRingCapacity;
+    NSInteger _replayRingWriteIndex;
+    NSInteger _replayRingAvailableFrames;
+    pthread_mutex_t _replayMutex;
+
+    float *_replayPlaybackBuffer;
+    NSInteger _replayPlaybackLength;
+    NSInteger _replayPlaybackIndex;
 
     // Visualizer Buffers
     float _waveformBuffer[TX500_WAVEFORM_SIZE];
@@ -198,6 +249,9 @@ static void TX500ComputeFFT(const float *realIn, float *magnitudesOut, int n) {
 
 @property (nonatomic, assign, readwrite) BOOL isMonitoring;
 @property (nonatomic, assign, readwrite) BOOL isRecording;
+@property (nonatomic, assign, readwrite) BOOL isReplaying;
+@property (nonatomic, assign, readwrite) float replayProgress;
+@property (nonatomic, assign, readwrite) float detectedAutoNotchHz;
 @property (nonatomic, assign, readwrite) BOOL isAD508Connected;
 @property (nonatomic, copy, readwrite, nullable) NSString *ad508DeviceName;
 
@@ -276,6 +330,33 @@ static void TX500OutputBufferCallback(void *inUserData,
         _notchFreqHz = 1000.0f;
         _notchQ = 8.0f;
 
+        _autoNotchEnabled = NO;
+        _detectedAutoNotchHz = 0.0f;
+        _trackedToneFreq = 0.0f;
+
+        _nrEnabled = NO;
+        _nrLevel = 0.6f;
+        _nrDelayIndex = 0;
+        memset(_nrDelayLine, 0, sizeof(_nrDelayLine));
+        memset(_nrWeights, 0, sizeof(_nrWeights));
+
+        _eqEnabled = NO;
+        _eqLowGainDb = 0.0f;
+        _eqMidGainDb = 3.0f;
+        _eqHighGainDb = 0.0f;
+
+        // 15-Second Instant Replay Ring Buffer
+        _replayRingCapacity = 48000 * 15;
+        _replayRingBuffer = (float *)calloc(_replayRingCapacity, sizeof(float));
+        _replayPlaybackBuffer = (float *)calloc(_replayRingCapacity, sizeof(float));
+        _replayRingWriteIndex = 0;
+        _replayRingAvailableFrames = 0;
+        _replayPlaybackLength = 0;
+        _replayPlaybackIndex = 0;
+        _isReplaying = NO;
+        _replayProgress = 0.0f;
+        pthread_mutex_init(&_replayMutex, NULL);
+
         _squelchEnabled = NO;
         _squelchThresholdDb = -65.0f;
         _isSquelchOpen = YES;
@@ -293,15 +374,46 @@ static void TX500OutputBufferCallback(void *inUserData,
 
         [self updateFilters];
         [self refreshDevices];
+
+        AudioObjectPropertyAddress devAddr = {
+            kAudioHardwarePropertyDevices,
+            kAudioObjectPropertyScopeGlobal,
+            kAudioObjectPropertyElementMain
+        };
+        AudioObjectAddPropertyListener(kAudioObjectSystemObject, &devAddr, AudioMonitorHardwareDevicesListener, (__bridge void *)self);
     }
     return self;
 }
 
+static OSStatus AudioMonitorHardwareDevicesListener(AudioObjectID inObjectID,
+                                                    UInt32 inNumberAddresses,
+                                                    const AudioObjectPropertyAddress *inAddresses,
+                                                    void *inClientData) {
+    (void)inObjectID; (void)inNumberAddresses; (void)inAddresses;
+    TX500AudioEngine *engine = (__bridge TX500AudioEngine *)inClientData;
+    if (engine) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [engine refreshDevices];
+        });
+    }
+    return noErr;
+}
+
 - (void)dealloc {
+    AudioObjectPropertyAddress devAddr = {
+        kAudioHardwarePropertyDevices,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain
+    };
+    AudioObjectRemovePropertyListener(kAudioObjectSystemObject, &devAddr, AudioMonitorHardwareDevicesListener, (__bridge void *)self);
+
     [self stopMonitoring];
     [self stopRecording];
     pthread_mutex_destroy(&_ringMutex);
     pthread_mutex_destroy(&_filterMutex);
+    pthread_mutex_destroy(&_replayMutex);
+    if (_replayRingBuffer) free(_replayRingBuffer);
+    if (_replayPlaybackBuffer) free(_replayPlaybackBuffer);
 }
 
 #pragma mark - Device Enumeration
@@ -364,14 +476,42 @@ static void TX500OutputBufferCallback(void *inUserData,
                         uid = (__bridge_transfer NSString *)uidRef;
                     }
 
-                    // Check if AD-508 / TX-500 audio
+                    // Transport type
+                    AudioObjectPropertyAddress transAddr = {
+                        kAudioDevicePropertyTransportType,
+                        kAudioObjectPropertyScopeGlobal,
+                        kAudioObjectPropertyElementMain
+                    };
+                    UInt32 transport = 0;
+                    UInt32 transSize = sizeof(UInt32);
+                    AudioObjectGetPropertyData(devID, &transAddr, 0, NULL, &transSize, &transport);
+
                     NSString *lower = name.lowercaseString;
-                    BOOL isAD508 = [lower containsString:@"usb audio"] ||
-                                   [lower containsString:@"ttgk"] ||
-                                   [lower containsString:@"ad-508"] ||
-                                   [lower containsString:@"ad-509"] ||
-                                   [lower containsString:@"c-media"] ||
-                                   [lower containsString:@"tx-500"];
+                    BOOL isUSBTransport = (transport == kAudioDeviceTransportTypeUSB);
+                    BOOL isVirtual = (transport == kAudioDeviceTransportTypeVirtual) ||
+                                     [lower containsString:@"background music"] ||
+                                     [lower containsString:@"blackhole"] ||
+                                     [lower containsString:@"teams"] ||
+                                     [lower containsString:@"soundflower"] ||
+                                     [lower containsString:@"aggregate"] ||
+                                     [lower containsString:@"multi-output"];
+
+                    BOOL isRadioOrUSB = isUSBTransport ||
+                                        [lower containsString:@"usb audio"] ||
+                                        [lower containsString:@"ttgk"] ||
+                                        [lower containsString:@"ad-508"] ||
+                                        [lower containsString:@"ad-509"] ||
+                                        [lower containsString:@"c-media"] ||
+                                        [lower containsString:@"tx-500"] ||
+                                        [lower containsString:@"digirig"] ||
+                                        [lower containsString:@"signallink"] ||
+                                        [lower containsString:@"codec"];
+
+                    BOOL isExplicitAD508 = [lower containsString:@"ad-508"] ||
+                                           [lower containsString:@"ad-509"] ||
+                                           [lower containsString:@"ttgk"] ||
+                                           [lower containsString:@"tx-500"] ||
+                                           ([lower containsString:@"usb audio"] && !isVirtual);
 
                     // Check Input Streams
                     AudioObjectPropertyAddress inStreamAddr = {
@@ -384,7 +524,9 @@ static void TX500OutputBufferCallback(void *inUserData,
                         TX500AudioDeviceItem *item = [TX500AudioDeviceItem new];
                         item.name = name;
                         item.uid = uid;
-                        item.isAD508 = isAD508;
+                        item.isAD508 = isExplicitAD508;
+                        item.isUSB = (isRadioOrUSB && !isVirtual);
+                        item.isVirtual = isVirtual;
                         item.isInput = YES;
                         [inputs addObject:item];
                     }
@@ -400,7 +542,9 @@ static void TX500OutputBufferCallback(void *inUserData,
                         TX500AudioDeviceItem *item = [TX500AudioDeviceItem new];
                         item.name = name;
                         item.uid = uid;
-                        item.isAD508 = isAD508;
+                        item.isAD508 = isExplicitAD508;
+                        item.isUSB = (isRadioOrUSB && !isVirtual);
+                        item.isVirtual = isVirtual;
                         item.isInput = NO;
                         [outputs addObject:item];
                     }
@@ -409,6 +553,28 @@ static void TX500OutputBufferCallback(void *inUserData,
             free(deviceIDs);
         }
     }
+
+    // Sort inputs:
+    // Priority 0: AD-508 / Radio USB Audio
+    // Priority 1: Other USB Audio
+    // Priority 2: Built-in
+    // Priority 3: Virtual
+    NSComparator comp = ^NSComparisonResult(TX500AudioDeviceItem *d1, TX500AudioDeviceItem *d2) {
+        int p1 = 2, p2 = 2;
+        if (d1.isAD508) p1 = 0;
+        else if (d1.isUSB) p1 = 1;
+        else if (d1.isVirtual) p1 = 3;
+
+        if (d2.isAD508) p2 = 0;
+        else if (d2.isUSB) p2 = 1;
+        else if (d2.isVirtual) p2 = 3;
+
+        if (p1 != p2) return (p1 < p2) ? NSOrderedAscending : NSOrderedDescending;
+        return [d1.name localizedCaseInsensitiveCompare:d2.name];
+    };
+
+    [inputs sortUsingComparator:comp];
+    [outputs sortUsingComparator:comp];
 
     // Default fallbacks if empty
     if (inputs.count == 0) {
@@ -427,23 +593,43 @@ static void TX500OutputBufferCallback(void *inUserData,
     // Check if AD-508 is present
     BOOL foundAD508 = NO;
     NSString *ad508Name = nil;
+    NSString *bestAD508InUID = nil;
+    NSString *bestUSBInUID = nil;
+
     for (TX500AudioDeviceItem *item in inputs) {
         if (item.isAD508) {
             foundAD508 = YES;
-            ad508Name = item.name;
-            if (!self.selectedInputDeviceUID || [self.selectedInputDeviceUID isEqualToString:@"default"]) {
-                _selectedInputDeviceUID = item.uid;
-            }
-            break;
+            if (!ad508Name) ad508Name = item.name;
+            if (!bestAD508InUID) bestAD508InUID = item.uid;
+        }
+        if (item.isUSB && !bestUSBInUID) {
+            bestUSBInUID = item.uid;
         }
     }
     self.isAD508Connected = foundAD508;
     self.ad508DeviceName = ad508Name;
 
-    // Default selections
-    if (!self.selectedInputDeviceUID) {
-        self.selectedInputDeviceUID = inputs.firstObject.uid;
+    // Check if current selection is valid or needs upgrade
+    BOOL selectedInValid = NO;
+    BOOL currentInIsVirtual = NO;
+    for (TX500AudioDeviceItem *item in inputs) {
+        if ([item.uid isEqualToString:self.selectedInputDeviceUID]) {
+            selectedInValid = YES;
+            if (item.isVirtual) currentInIsVirtual = YES;
+            break;
+        }
     }
+
+    if (!selectedInValid || (currentInIsVirtual && (bestAD508InUID || bestUSBInUID)) || !self.selectedInputDeviceUID || [self.selectedInputDeviceUID isEqualToString:@"default"]) {
+        if (bestAD508InUID) {
+            _selectedInputDeviceUID = bestAD508InUID;
+        } else if (bestUSBInUID) {
+            _selectedInputDeviceUID = bestUSBInUID;
+        } else {
+            self.selectedInputDeviceUID = inputs.firstObject.uid;
+        }
+    }
+
     if (!self.selectedOutputDeviceUID) {
         TX500AudioDeviceItem *bestOutput = nil;
         for (TX500AudioDeviceItem *outItem in outputs) {
@@ -482,7 +668,7 @@ static void TX500OutputBufferCallback(void *inUserData,
 
     if (self.onDeviceListChanged) {
         dispatch_async(dispatch_get_main_queue(), ^{
-            self.onDeviceListChanged();
+            if (self.onDeviceListChanged) self.onDeviceListChanged();
         });
     }
 }
@@ -502,6 +688,23 @@ static void TX500OutputBufferCallback(void *inUserData,
     } else {
         TX500BiquadReset(&_notch);
         _notch.b0 = 1.0; _notch.b1 = _notch.b2 = _notch.a1 = _notch.a2 = 0.0;
+    }
+
+    if (self.autoNotchEnabled && _detectedAutoNotchHz > 200.0f) {
+        TX500MakeNotch(&_autoNotch, srate, (double)_detectedAutoNotchHz, 14.0);
+    } else {
+        TX500BiquadReset(&_autoNotch);
+        _autoNotch.b0 = 1.0; _autoNotch.b1 = _autoNotch.b2 = _autoNotch.a1 = _autoNotch.a2 = 0.0;
+    }
+
+    if (self.eqEnabled) {
+        TX500MakePeaking(&_eqLow, srate, 250.0, 1.2, (double)self.eqLowGainDb);
+        TX500MakePeaking(&_eqMid, srate, 1800.0, 1.4, (double)self.eqMidGainDb);
+        TX500MakePeaking(&_eqHigh, srate, 3200.0, 1.3, (double)self.eqHighGainDb);
+    } else {
+        TX500BiquadReset(&_eqLow); _eqLow.b0 = 1.0; _eqLow.b1 = _eqLow.b2 = _eqLow.a1 = _eqLow.a2 = 0.0;
+        TX500BiquadReset(&_eqMid); _eqMid.b0 = 1.0; _eqMid.b1 = _eqMid.b2 = _eqMid.a1 = _eqMid.a2 = 0.0;
+        TX500BiquadReset(&_eqHigh); _eqHigh.b0 = 1.0; _eqHigh.b1 = _eqHigh.b2 = _eqHigh.a1 = _eqHigh.a2 = 0.0;
     }
 
     if (self.filterPreset == TX500AudioFilterPresetDXBoost) {
@@ -533,6 +736,87 @@ static void TX500OutputBufferCallback(void *inUserData,
 - (void)setNotchFreqHz:(float)notchFreqHz {
     _notchFreqHz = notchFreqHz;
     [self updateFilters];
+}
+
+- (void)setAutoNotchEnabled:(BOOL)autoNotchEnabled {
+    _autoNotchEnabled = autoNotchEnabled;
+    if (!autoNotchEnabled) {
+        _detectedAutoNotchHz = 0.0f;
+        _trackedToneFreq = 0.0f;
+    }
+    [self updateFilters];
+}
+
+- (void)setNrEnabled:(BOOL)nrEnabled {
+    _nrEnabled = nrEnabled;
+    if (!nrEnabled) {
+        _nrDelayIndex = 0;
+        memset(_nrDelayLine, 0, sizeof(_nrDelayLine));
+        memset(_nrWeights, 0, sizeof(_nrWeights));
+    }
+}
+
+- (void)setNrLevel:(float)nrLevel {
+    _nrLevel = fmaxf(0.0f, fminf(1.0f, nrLevel));
+}
+
+- (void)setEqEnabled:(BOOL)eqEnabled {
+    _eqEnabled = eqEnabled;
+    [self updateFilters];
+}
+
+- (void)setEqLowGainDb:(float)eqLowGainDb {
+    _eqLowGainDb = fmaxf(-12.0f, fminf(12.0f, eqLowGainDb));
+    [self updateFilters];
+}
+
+- (void)setEqMidGainDb:(float)eqMidGainDb {
+    _eqMidGainDb = fmaxf(-12.0f, fminf(12.0f, eqMidGainDb));
+    [self updateFilters];
+}
+
+- (void)setEqHighGainDb:(float)eqHighGainDb {
+    _eqHighGainDb = fmaxf(-12.0f, fminf(12.0f, eqHighGainDb));
+    [self updateFilters];
+}
+
+#pragma mark - Instant Replay 15s
+
+- (void)startInstantReplay {
+    pthread_mutex_lock(&_replayMutex);
+    if (!_replayRingBuffer || _replayRingAvailableFrames < 1000) {
+        pthread_mutex_unlock(&_replayMutex);
+        return;
+    }
+    _replayPlaybackLength = MIN(_replayRingAvailableFrames, _replayRingCapacity);
+    NSInteger startIdx = (_replayRingWriteIndex - _replayPlaybackLength + _replayRingCapacity * 2) % _replayRingCapacity;
+    for (NSInteger i = 0; i < _replayPlaybackLength; i++) {
+        _replayPlaybackBuffer[i] = _replayRingBuffer[(startIdx + i) % _replayRingCapacity];
+    }
+    _replayPlaybackIndex = 0;
+    _isReplaying = YES;
+    _replayProgress = 0.0f;
+    pthread_mutex_unlock(&_replayMutex);
+
+    if (self.onReplayProgressChanged) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (self.onReplayProgressChanged) self.onReplayProgressChanged(YES, 0.0f);
+        });
+    }
+}
+
+- (void)stopInstantReplay {
+    pthread_mutex_lock(&_replayMutex);
+    _isReplaying = NO;
+    _replayPlaybackIndex = 0;
+    _replayProgress = 1.0f;
+    pthread_mutex_unlock(&_replayMutex);
+
+    if (self.onReplayProgressChanged) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (self.onReplayProgressChanged) self.onReplayProgressChanged(NO, 1.0f);
+        });
+    }
 }
 
 - (void)setFilterPreset:(TX500AudioFilterPreset)preset {
@@ -780,6 +1064,20 @@ static void TX500OutputBufferCallback(void *inUserData,
     float leftGain = gain * sqrtf(0.5f * (1.0f - pan));
     float rightGain = gain * sqrtf(0.5f * (1.0f + pan));
 
+    // Continuous 15-second Instant Replay rolling buffer recording
+    pthread_mutex_lock(&_replayMutex);
+    if (_replayRingBuffer && _replayRingCapacity > 0) {
+        for (NSInteger i = 0; i < numFrames; i++) {
+            _replayRingBuffer[_replayRingWriteIndex % _replayRingCapacity] = inputSamples[i];
+            _replayRingWriteIndex++;
+            if (_replayRingAvailableFrames < _replayRingCapacity) {
+                _replayRingAvailableFrames++;
+            }
+        }
+    }
+    BOOL replayingActive = _isReplaying;
+    pthread_mutex_unlock(&_replayMutex);
+
     // Process Samples through DSP Filters and prepare Stereo Frames
     pthread_mutex_lock(&_filterMutex);
     pthread_mutex_lock(&_ringMutex);
@@ -790,16 +1088,59 @@ static void TX500OutputBufferCallback(void *inUserData,
     for (NSInteger i = 0; i < numFrames; i++) {
         double sample = (double)inputSamples[i];
 
-        // Apply Biquad Filters
+        // If Instant Replay is active, substitute source sample from replay buffer!
+        if (replayingActive) {
+            pthread_mutex_lock(&_replayMutex);
+            if (_isReplaying && _replayPlaybackIndex < _replayPlaybackLength) {
+                sample = (double)_replayPlaybackBuffer[_replayPlaybackIndex++];
+                self.replayProgress = (float)_replayPlaybackIndex / (float)_replayPlaybackLength;
+                if (_replayPlaybackIndex >= _replayPlaybackLength) {
+                    _isReplaying = NO;
+                    self.replayProgress = 1.0f;
+                    if (self.onReplayProgressChanged) {
+                        dispatch_async(dispatch_get_main_queue(), ^{
+                            if (self.onReplayProgressChanged) self.onReplayProgressChanged(NO, 1.0f);
+                        });
+                    }
+                }
+            } else {
+                _isReplaying = NO;
+            }
+            pthread_mutex_unlock(&_replayMutex);
+        }
+
+        // Apply Biquad Filters (HPF & LPF)
         if (self.filterEnabled) {
             sample = TX500BiquadProcess(&_highPass, sample);
             sample = TX500BiquadProcess(&_lowPass, sample);
         }
+
+        // Apply Manual Notch Filter
         if (self.notchEnabled) {
             sample = TX500BiquadProcess(&_notch, sample);
         }
+
+        // Apply Auto-Notch (ANF)
+        if (self.autoNotchEnabled && _detectedAutoNotchHz > 200.0f) {
+            sample = TX500BiquadProcess(&_autoNotch, sample);
+        }
+
+        // Apply DX Boost Peaking
         if (self.filterPreset == TX500AudioFilterPresetDXBoost) {
             sample = TX500BiquadProcess(&_peaking, sample);
+        }
+
+        // Apply 3-Band Speech Equalizer
+        if (self.eqEnabled) {
+            sample = TX500BiquadProcess(&_eqLow, sample);
+            sample = TX500BiquadProcess(&_eqMid, sample);
+            sample = TX500BiquadProcess(&_eqHigh, sample);
+        }
+
+        // Apply LMS Spectral Noise Reduction
+        if (self.nrEnabled && self.nrLevel > 0.01f) {
+            double clean = TX500ProcessNLMS(_nrDelayLine, &_nrDelayIndex, _nrWeights, 32, 48, sample, 0.006f * self.nrLevel, 0.0001f);
+            sample = (1.0f - self.nrLevel) * sample + self.nrLevel * clean;
         }
 
         // Peak Limiter / AGC
@@ -862,6 +1203,43 @@ static void TX500OutputBufferCallback(void *inUserData,
     if (_fftInputIndex >= TX500_FFT_SIZE) {
         _fftInputIndex = 0;
         TX500ComputeFFT(_fftInputBuffer, _fftMagnitudes, TX500_FFT_SIZE);
+
+        // Auto-Notch Carrier Tone Detection
+        if (self.autoNotchEnabled) {
+            double srate = self.sampleRate > 0 ? self.sampleRate : 48000.0;
+            float binWidth = (float)srate / (float)TX500_FFT_SIZE;
+            int minBin = (int)(250.0f / binWidth);
+            int maxBin = (int)(3400.0f / binWidth);
+            if (maxBin > TX500_FFT_SIZE / 2) maxBin = TX500_FFT_SIZE / 2;
+
+            float maxMag = 0.0f;
+            int maxBinIdx = -1;
+            float sumMag = 0.0f;
+            int count = 0;
+            for (int b = minBin; b < maxBin; b++) {
+                float m = _fftMagnitudes[b];
+                sumMag += m;
+                count++;
+                if (m > maxMag) {
+                    maxMag = m;
+                    maxBinIdx = b;
+                }
+            }
+            float avgMag = count > 0 ? (sumMag / (float)count) : 0.001f;
+            if (maxMag > 0.025f && maxMag > 4.5f * avgMag && maxBinIdx > 0) {
+                float detectedTone = maxBinIdx * binWidth;
+                if (_trackedToneFreq <= 0.0f) {
+                    _trackedToneFreq = detectedTone;
+                } else {
+                    _trackedToneFreq = 0.75f * _trackedToneFreq + 0.25f * detectedTone;
+                }
+                _detectedAutoNotchHz = _trackedToneFreq;
+                pthread_mutex_lock(&_filterMutex);
+                TX500MakeNotch(&_autoNotch, srate, (double)_trackedToneFreq, 14.0);
+                pthread_mutex_unlock(&_filterMutex);
+            }
+        }
+
         if (self.onSpectrumUpdated) {
             self.onSpectrumUpdated(_fftMagnitudes, TX500_FFT_SIZE / 2, (float)self.sampleRate);
         }
@@ -906,6 +1284,16 @@ static void TX500OutputBufferCallback(void *inUserData,
 #pragma mark - WAV Audio Recording
 
 - (NSString *)recordingsDirectory {
+    NSDictionary<NSString *, NSString *> *environment = NSProcessInfo.processInfo.environment;
+    NSString *testRoot = environment[@"TX500_TEST_ROOT"];
+    if (environment[@"TX500_TEST_MODE"].boolValue && testRoot.length > 0) {
+        NSString *testRecordings = [testRoot stringByAppendingPathComponent:@"Recordings"];
+        [[NSFileManager defaultManager] createDirectoryAtPath:testRecordings
+                                  withIntermediateDirectories:YES
+                                                   attributes:nil
+                                                        error:nil];
+        return testRecordings;
+    }
     NSString *musicDir = [NSSearchPathForDirectoriesInDomains(NSMusicDirectory, NSUserDomainMask, YES) firstObject];
     NSString *tx500Dir = [musicDir stringByAppendingPathComponent:@"TX-500 Recordings"];
     [[NSFileManager defaultManager] createDirectoryAtPath:tx500Dir withIntermediateDirectories:YES attributes:nil error:nil];

@@ -41,6 +41,8 @@ static double Rad2Deg(double rad) {
     copy.freqHz = self.freqHz;
     copy.snrDb = self.snrDb;
     copy.timeSec = self.timeSec;
+    copy.timingUncertaintySec = self.timingUncertaintySec;
+    copy.timingSourceIdentifier = self.timingSourceIdentifier;
     copy.timestamp = self.timestamp;
     copy.slotParity = self.slotParity;
     copy.messageType = self.messageType;
@@ -52,8 +54,13 @@ static double Rad2Deg(double rad) {
     copy.isCQ = self.isCQ;
     copy.isDirectedToMe = self.isDirectedToMe;
     copy.isMyTransmission = self.isMyTransmission;
+    copy.isNewDXCC = self.isNewDXCC;
+    copy.isNewGrid = self.isNewGrid;
+    copy.isWorkedBefore = self.isWorkedBefore;
+    copy.isAlertMatch = self.isAlertMatch;
     copy.countryName = self.countryName;
     copy.countryFlag = self.countryFlag;
+    copy.continent = self.continent;
     copy.distanceKm = self.distanceKm;
     copy.bearingDeg = self.bearingDeg;
     return copy;
@@ -152,10 +159,6 @@ static double Rad2Deg(double rad) {
         if (myCall.length > 0 && [self.targetCall isEqualToString:myCall]) {
             self.isDirectedToMe = YES;
         }
-        if (myCall.length > 0 && [self.callerCall isEqualToString:myCall]) {
-            self.isMyTransmission = YES;
-        }
-
         if (nonEmpty.count >= 3) {
             NSString *p3 = nonEmpty[2];
             if ([p3 isEqualToString:@"73"]) {
@@ -182,6 +185,13 @@ static double Rad2Deg(double rad) {
         }
     }
 
+    // A locally transmitted frame can be decoded back through the audio path.
+    // Mark it for every message type, including CQ, while preserving replies
+    // whose target (rather than origin) is this station.
+    if (myCall.length > 0 && [self.callerCall isEqualToString:myCall]) {
+        self.isMyTransmission = YES;
+    }
+
     // Resolve Country & Flag
     NSString *callForDXCC = self.callerCall;
     if (self.isMyTransmission && self.targetCall.length > 0 && ![self.targetCall isEqualToString:@"CQ"]) {
@@ -190,6 +200,7 @@ static double Rad2Deg(double rad) {
     if (callForDXCC.length > 0) {
         self.countryName = [TX500FT8Message countryNameForCallsign:callForDXCC];
         self.countryFlag = [TX500FT8Message countryFlagForCallsign:callForDXCC];
+        self.continent = [TX500FT8Message continentForCallsign:callForDXCC];
     }
 
     // Calculate Distance & Bearing if grid is known
@@ -729,6 +740,54 @@ static NSString *NormalizeCallsignForPrefix(NSString *call) {
         return [NSString stringWithUTF8String:entry->flag];
     }
     return @"🌐";
+}
+
++ (NSString *)continentForCallsign:(NSString *)call {
+    NSString *country = [self countryNameForCallsign:call];
+    if (!country || [country isEqualToString:@"International"]) return @"";
+
+    static NSDictionary<NSString *, NSString *> *s_countryContinents = nil;
+    static dispatch_once_t s_once;
+    dispatch_once(&s_once, ^{
+        s_countryContinents = @{
+            @"United States": @"NA", @"Canada": @"NA", @"Mexico": @"NA", @"Alaska": @"NA", @"Hawaii": @"OC",
+            @"Germany": @"EU", @"Italy": @"EU", @"France": @"EU", @"Spain": @"EU", @"United Kingdom": @"EU",
+            @"England": @"EU", @"Scotland": @"EU", @"Wales": @"EU", @"Northern Ireland": @"EU",
+            @"Netherlands": @"EU", @"Belgium": @"EU", @"Switzerland": @"EU", @"Austria": @"EU",
+            @"European Russia": @"EU", @"Poland": @"EU", @"Czech Republic": @"EU", @"Slovakia": @"EU",
+            @"Hungary": @"EU", @"Sweden": @"EU", @"Norway": @"EU", @"Finland": @"EU", @"Denmark": @"EU",
+            @"Greece": @"EU", @"Portugal": @"EU", @"Ireland": @"EU", @"Romania": @"EU", @"Bulgaria": @"EU",
+            @"Japan": @"AS", @"China": @"AS", @"Iran": @"AS", @"Asiatic Russia": @"AS", @"South Korea": @"AS",
+            @"India": @"AS", @"Taiwan": @"AS", @"Thailand": @"AS", @"Israel": @"AS", @"Turkey": @"AS",
+            @"Australia": @"OC", @"New Zealand": @"OC", @"Indonesia": @"OC", @"Philippines": @"OC",
+            @"Brazil": @"SA", @"Argentina": @"SA", @"Chile": @"SA", @"Colombia": @"SA", @"Peru": @"SA",
+            @"South Africa": @"AF", @"Egypt": @"AF", @"Morocco": @"AF", @"Kenya": @"AF"
+        };
+    });
+    NSString *cont = s_countryContinents[country];
+    return cont ?: @"";
+}
+
++ (NSArray<NSDictionary<NSString *, NSString *> *> *)allDXCCEntities {
+    NSMutableDictionary<NSString *, NSDictionary<NSString *, NSString *> *> *entitiesByName = [NSMutableDictionary dictionary];
+    for (int i = 0; s_dxccPrefixes[i].prefix != NULL; i++) {
+        NSString *cName = [NSString stringWithUTF8String:s_dxccPrefixes[i].country];
+        NSString *flag = [NSString stringWithUTF8String:s_dxccPrefixes[i].flag];
+        NSString *pfx = [NSString stringWithUTF8String:s_dxccPrefixes[i].prefix];
+        if (!entitiesByName[cName]) {
+            entitiesByName[cName] = @{
+                @"country": cName,
+                @"flag": flag ?: @"🌐",
+                @"prefix": pfx ?: @""
+            };
+        }
+    }
+    NSArray<NSString *> *sortedKeys = [[entitiesByName allKeys] sortedArrayUsingSelector:@selector(localizedCaseInsensitiveCompare:)];
+    NSMutableArray<NSDictionary<NSString *, NSString *> *> *result = [NSMutableArray arrayWithCapacity:sortedKeys.count];
+    for (NSString *k in sortedKeys) {
+        [result addObject:entitiesByName[k]];
+    }
+    return result;
 }
 
 #pragma mark - Standard FT8 Transmit Message Generation

@@ -50,6 +50,7 @@ typedef NS_ENUM(NSInteger, TX500FT8SlotParity) {
 @property (nonatomic, copy, readonly) NSString *modeName; // @"FT8" or @"FT4"
 @property (nonatomic, assign, readonly) BOOL isMonitoring;
 @property (nonatomic, assign, readonly) BOOL isTransmitting;
+@property (nonatomic, assign, readonly) BOOL isTuning;
 @property (nonatomic, assign) BOOL isTransmitArmed;
 @property (nonatomic, assign) TX500FT8SlotParity txSlotParity;
 @property (nonatomic, assign) BOOL isSimulationMode;
@@ -64,6 +65,8 @@ typedef NS_ENUM(NSInteger, TX500FT8SlotParity) {
 
 // CAT Integration Callbacks
 @property (nonatomic, copy, nullable) BOOL (^serialCommandSender)(NSString *catCommand);
+@property (nonatomic, copy, nullable) BOOL (^pttControlHandler)(BOOL pttActive);
+@property (nonatomic, copy, nullable) NSString * _Nullable (^catQueryHandler)(NSString *catCommand, NSTimeInterval timeout);
 @property (nonatomic, copy, nullable) void (^logHandler)(NSString *line);
 
 // Engine Event Callbacks
@@ -74,10 +77,26 @@ typedef NS_ENUM(NSInteger, TX500FT8SlotParity) {
 @property (nonatomic, copy, nullable) void (^onSpectrumUpdated)(const float *magnitudes, NSInteger count);
 @property (nonatomic, copy, nullable) void (^onAudioDevicesChanged)(void);
 
+// Live Audio Input VU Meter (dB)
+@property (nonatomic, assign, readonly) float audioInputLevelDb; // -60.0 to 0.0 dB
+@property (nonatomic, assign) float audioInputGain; // Multiplier, default 1.0 (0.1 to 5.0)
+@property (nonatomic, copy, nullable) void (^onAudioLevelUpdated)(float levelDb);
+
+// Split / Fake It Passband Optimization
+@property (nonatomic, assign) BOOL splitFakeItEnabled;
+@property (nonatomic, assign, readonly) int64_t fakeItVfoShiftHz;
+
 // Live SWR Monitoring (polled from radio via CAT during TX)
 @property (nonatomic, copy, nullable) void (^onSWRUpdated)(double swrValue); // called when SWR read from radio
+@property (nonatomic, copy, nullable) void (^onSWRMeterUpdated)(NSInteger rawDots, BOOL valid); // documented RM1 meter, 0...30 dots
 @property (nonatomic, assign) double maxSWRThreshold; // 0 = disabled, >0 = abort TX if exceeded
 @property (nonatomic, assign, readonly) double lastSWRReading;
+@property (nonatomic, assign, readonly) NSInteger lastSWRMeterDots;
+@property (nonatomic, assign, readonly) BOOL swrMeterValid;
+
+// Strict parser for the documented TX-500 RM1dddd; CAT frame.
++ (BOOL)parseSWRMeterReply:(nullable NSString *)reply rawDots:(NSInteger *)rawDots;
++ (double)swrRatioFromMeterDots:(NSInteger)dots;
 
 // Control Methods
 - (void)refreshAudioDevices;
@@ -88,6 +107,8 @@ typedef NS_ENUM(NSInteger, TX500FT8SlotParity) {
 // Transmit Control
 - (void)armTransmitWithText:(NSString *)text parity:(TX500FT8SlotParity)parity;
 - (void)disarmTransmit;
+- (void)beginTransmission;
+- (void)endTransmission;
 - (void)startTuneCarrier;
 - (void)stopTuneCarrier;
 

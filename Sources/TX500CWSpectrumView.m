@@ -66,12 +66,12 @@
         NSForegroundColorAttributeName: [NSColor colorWithCalibratedWhite:0.5 alpha:1.0]
     };
 
-    double minF = 400.0;
-    double maxF = 950.0;
+    double minF = 300.0;
+    double maxF = 1500.0;
     double rangeF = maxF - minF;
 
-    double gridFreqs[] = { 450.0, 550.0, 650.0, 750.0, 850.0 };
-    for (int i = 0; i < 5; i++) {
+    double gridFreqs[] = { 400.0, 600.0, 800.0, 1000.0, 1200.0, 1400.0 };
+    for (int i = 0; i < 6; i++) {
         double f = gridFreqs[i];
         CGFloat x = (CGFloat)((f - minF) / rangeF) * width;
         CGContextMoveToPoint(ctx, x, 0);
@@ -146,10 +146,10 @@
     NSPoint p = [self convertPoint:event.locationInWindow fromView:nil];
     CGFloat width = self.bounds.size.width;
     if (width > 0 && p.x >= 0 && p.x <= width) {
-        double minF = 400.0;
-        double maxF = 950.0;
+        double minF = 300.0;
+        double maxF = 1500.0;
         double freq = minF + ((double)p.x / (double)width) * (maxF - minF);
-        freq = fmin(950.0, fmax(400.0, round(freq / 5.0) * 5.0)); // Snap to nearest 5 Hz
+        freq = fmin(1500.0, fmax(300.0, round(freq / 5.0) * 5.0)); // Snap to nearest 5 Hz
         if (self.onPitchSelected) {
             self.onPitchSelected(freq);
         }

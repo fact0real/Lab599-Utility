@@ -1,0 +1,45 @@
+{
+  "installed": "/Applications/Lab599 Utility.app",
+  "version": "2.173",
+  "build": "179",
+  "sha256": "ba11bd68022078eeb65bee2d226ed5d8b8f048a7f6472a63ad9c9c3815aa3697",
+  "matches_tested_binary": true,
+  "live_results": [
+    {
+      "file": "3",
+      "expected": "OXIDE",
+      "actual": "OXIDE",
+      "passed": true
+    },
+    {
+      "file": "4",
+      "expected": "FIELD",
+      "actual": "FIELD",
+      "passed": true
+    },
+    {
+      "file": "5",
+      "expected": "COLOR",
+      "actual": "COLOR",
+      "passed": true
+    },
+    {
+      "file": "6",
+      "expected": "RELAY",
+      "actual": "RELAY",
+      "passed": true
+    },
+    {
+      "file": "7",
+      "expected": "JAMMER",
+      "actual": "JAMMER",
+      "passed": true
+    },
+    {
+      "file": "9",
+      "expected": "COLD",
+      "actual": "COLD",
+      "passed": true
+    }
+  ]
+}

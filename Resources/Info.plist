@@ -19,11 +19,13 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2.134</string>
+	<string>2.173</string>
 	<key>CFBundleVersion</key>
-	<string>140</string>
+	<string>179</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>12.0</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Decode Morse code directly from audio playing on this Mac when you select System Audio. Audio is processed locally and is never uploaded. Normal decoding does not save audio; an explicitly requested diagnostic test can save a local recording.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>

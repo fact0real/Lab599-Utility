@@ -22,7 +22,7 @@ Firmware header validation reads the BL20 model ID before transfer begins and di
 | View | What it does | Radio mode |
 | --- | --- | --- |
 | Firmware Update | Select a local `.fw` file or download from the built-in Lab599 catalog; validates the BL20 header and model ID; transfers with a two-ACK handshake and TIOCOUTQ-paced streaming; prevents system sleep during flash | Bootloader — "The loader is waiting..." |
-| Time Sync | Set the radio clock to Mac local time or UTC; reads back and verifies the result | Normal operation, CAT 9600 |
+| Time Sync | Disciplines a continuous internal UTC clock from multi-source NTP, TLS/HTTPS fallback, calibrated holdover and robust FT8 timing consensus; sets the radio to local time or UTC and verifies read-back | Normal operation, CAT 9600 |
 | Telemetry | Live arc-gauge dashboard: RF power, SWR (RM1 dots), supply/battery voltage, S-meter, frequency, mode, TX/RX state; rolling averages at 5 m / 15 m / 30 m / 60 m; over-voltage, low-voltage and high-SWR alert guards; selectable poll rate (250 ms / 500 ms / 1 s); Demo Mode | Normal operation, CAT 9600 |
 | Radio Screen | Real-time 256×128 LCD mirror via CAT; four display themes (Amber, Cool White / Daylight, Green phosphor, OLED); panadapter spectrum and calibrated meter bars; save screenshot to PNG or copy to clipboard; Demo Mode | Normal operation, CAT 9600 |
 | CAT Test | Single or continuous identification query; displays reply, round-trip latency and pass/fail counts | Normal operation, CAT 9600 |
@@ -45,6 +45,12 @@ Open **Lab599 Utility.app**, connect the CAT-USB cable and choose the serial por
 - **Telemetry / Radio Screen Demo Mode** — enable Demo Mode in either panel to explore the UI without a connected radio.
 
 Read and save the current settings/memory before restoring another bank. File-size checks cannot identify which radio model or firmware version created an untagged backup. A failed or interrupted write can leave the radio in a partially changed state; success is reported only after the implemented read-back checks complete.
+
+### FT8 time discipline
+
+Lab599 Utility does not step the macOS system clock. FT8/FT4 slot scheduling and the radio Time Sync command use a process-local UTC clock anchored to `mach_continuous_time`. Its two-state phase/frequency filter learns oscillator error from independent network sources, persists the calibration for offline holdover, and slews corrections while FT8 monitoring is active.
+
+If UDP NTP is blocked, three TLS-authenticated HTTP Date sources provide a lower-precision fallback with an explicit uncertainty. CRC-valid FT8 decodes then refine offline time after at least eight independent callsigns across three slots. Per-callsign baselines are scoped to the selected audio-device UID, one station gets one vote per slot, and a weighted median, MAD rejection and Huber reweighting prevent a mistimed transmitter from moving the clock. Real transmission is blocked whenever estimated UTC uncertainty exceeds one second; receive and decode remain available for recovery.
 
 > **Gatekeeper notice** — the build is ad-hoc signed and not Apple-notarized. On first launch, macOS may block the app. Open **System Settings → Privacy & Security** and click **Open Anyway**.
 

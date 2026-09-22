@@ -1,0 +1,34 @@
+PASS: disciplined UTC, slew safety, outlier gate, holdover state, and audio-clock tracking
+PASS: Clock formatting, zones, midnight, strict parsing and verification fixtures
+PASS: Exact clock read-back
+PASS: Fragmented reply beyond original 100 ms window
+PASS: Unrelated CAT frame and line endings
+PASS: Radio retains a wrong time
+PASS: Invalid clock fields
+PASS: Query echo is not clock confirmation
+PASS: Radio rejects clock command
+PASS: No radio response
+PASS: Partial response times out
+PASS: Set echo alone does not confirm query
+PASS: Cable disconnect
+PASS: Unterminated oversized response
+PASS: Missing port and invalid timing options
+All time synchronization checks passed. No physical radio was accessed.
+2026-09-21 21:56:23.336 FT8StationTests[33422:530042] Running Lab599 Discovery TX-500 FT8 Digital Suite Tests...
+2026-09-21 21:56:23.337 FT8StationTests[33422:530042] PASS: FT8 message encoding & 79 8-FSK tones verified.
+2026-09-21 21:56:23.339 FT8StationTests[33422:530042] PASS: Continuous-phase GFSK audio synthesis verified (151680 samples, peak 1.00).
+2026-09-21 21:56:23.368 FT8StationTests[33422:530042] PASS: Deep LDPC loopback decode verified (Decoded: CQ EP2AES KM35, Freq: 1500.0 Hz, SNR: -6.4 dB).
+2026-09-21 21:56:23.368 FT8StationTests[33422:530042] PASS: Maidenhead grid parsing & Great Circle Haversine distance math verified.
+2026-09-21 21:56:23.369 FT8StationTests[33422:530042] PASS: DXCC prefix & flag database verified (including China, Italy, Netherlands, Northern Ireland, Asiatic & European Russia).
+2026-09-21 21:56:23.369 FT8StationTests[33422:530042] PASS: Semantic message parsing verified.
+2026-09-21 21:56:23.373 FT8StationTests[33422:530042] PASS: Algorithm 1 (Auto-CQ loop & instant caller engagement) verified.
+2026-09-21 21:56:23.374 FT8StationTests[33422:530042] PASS: Algorithm 2 (Intelligent Auto-Hunter multi-criteria selection) verified.
+2026-09-21 21:56:23.375 FT8StationTests[33422:530042] PASS: Complete QSO state machine progression & ADIF generator verified.
+2026-09-21 21:56:23.375 FT8StationTests[33422:530042] PASS: 15-second slot quantization (:00, :15, :30, :45) verified.
+2026-09-21 21:56:23.887 FT8StationTests[33422:530042] PASS: Continuous ADIF logging (All-Decodes & QSO Logbook) in UTC verified.
+2026-09-21 21:56:23.887 FT8StationTests[33422:530042] PASS: Arm Transmit & logHandler invocation (ENABLE TX crash regression) verified.
+2026-09-21 21:56:23.887 FT8StationTests[33422:530042] PASS: FT4 message encoding & 105 4-FSK tones verified.
+2026-09-21 21:56:23.888 FT8StationTests[33422:530042] PASS: Continuous-phase FT4 GFSK audio synthesis verified (60480 samples, peak 1.00).
+2026-09-21 21:56:23.908 FT8StationTests[33422:530042] PASS: Deep FT4 LDPC loopback decode verified (Decoded: CQ EP2AES KM35, Freq: 1500.0 Hz, SNR: -0.8 dB).
+2026-09-21 21:56:23.909 FT8StationTests[33422:530042] PASS: FT4 ADIF logging (<MODE:4>MFSK <SUBMODE:3>FT4) & Audio Engine timing quantization verified.
+2026-09-21 21:56:23.909 FT8StationTests[33422:530042] ALL FT8 & FT4 DIGITAL SUITE TESTS PASSED SUCCESSFULLY! (100%)

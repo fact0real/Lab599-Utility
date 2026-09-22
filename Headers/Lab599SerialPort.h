@@ -19,6 +19,7 @@ typedef NS_ENUM(NSInteger, Lab599SerialError) {
 + (instancetype)openPath:(NSString *)path speed:(speed_t)speed error:(NSError **)error;
 - (BOOL)discardInput:(NSError **)error;
 - (BOOL)assertDTRAndRTS:(NSError **)error;
+- (BOOL)setPTTLinesActive:(BOOL)active error:(NSError **)error;
 - (BOOL)writeData:(NSData *)data timeout:(double)timeout cancellation:(Lab599Cancellation *)token error:(NSError **)error;
 - (NSData *)readMaximum:(NSUInteger)maximum timeout:(double)timeout cancellation:(Lab599Cancellation *)token error:(NSError **)error;
 - (void)close;

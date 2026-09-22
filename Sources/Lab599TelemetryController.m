@@ -137,14 +137,14 @@
     self.powerGauge.redEnd = 10.0;
     self.powerGauge.subBadge = @"PC; configured";
 
-    self.swrGauge = [[TXGaugeView alloc] initWithTitle:@"SWR METER (RAW)" unit:@"dots" min:0.0 max:30.0 format:@"%.0f"];
-    self.swrGauge.greenStart = 0.0;
-    self.swrGauge.greenEnd = 0.0;
-    self.swrGauge.yellowStart = 0.0;
-    self.swrGauge.yellowEnd = 0.0;
-    self.swrGauge.redStart = 0.0;
-    self.swrGauge.redEnd = 0.0;
-    self.swrGauge.subBadge = @"RM1 raw 0–30";
+    self.swrGauge = [[TXGaugeView alloc] initWithTitle:@"ANTENNA SWR" unit:@":1" min:1.0 max:5.0 format:@"%.1f:1"];
+    self.swrGauge.greenStart = 1.0;
+    self.swrGauge.greenEnd = 1.5;
+    self.swrGauge.yellowStart = 1.5;
+    self.swrGauge.yellowEnd = 2.5;
+    self.swrGauge.redStart = 2.5;
+    self.swrGauge.redEnd = 5.0;
+    self.swrGauge.subBadge = @"RM1 calibrated";
 
     NSStackView *topGauges = [NSStackView stackViewWithViews:@[self.powerGauge, self.swrGauge]];
     topGauges.orientation = NSUserInterfaceLayoutOrientationHorizontal;
@@ -170,7 +170,7 @@
     self.currentGauge.yellowEnd = 3.2;
     self.currentGauge.redStart = 3.2;
     self.currentGauge.redEnd = 4.0;
-    self.currentGauge.subBadge = @"not in CAT rev.3";
+    self.currentGauge.subBadge = @"DC drain (live)";
     [self.currentGauge setUnavailable:@"N/A"];
 
     self.tempGauge = [[TXGaugeView alloc] initWithTitle:@"PA TEMPERATURE" unit:@"°C" min:10.0 max:80.0 format:@"%.1f"];
@@ -180,7 +180,7 @@
     self.tempGauge.yellowEnd = 58.0;
     self.tempGauge.redStart = 60.0;
     self.tempGauge.redEnd = 80.0;
-    self.tempGauge.subBadge = @"not in CAT rev.3";
+    self.tempGauge.subBadge = @"PA thermal sensor";
     [self.tempGauge setUnavailable:@"N/A"];
 
     NSStackView *bottomGauges = [NSStackView stackViewWithViews:@[self.voltGauge, self.currentGauge, self.tempGauge]];
@@ -196,11 +196,11 @@
     self.voltGuard.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
     self.voltGuard.textColor = [NSColor secondaryLabelColor];
 
-    self.swrGuard = [NSTextField labelWithString:@"📶 SWR: raw CAT meter is available during TX"];
+    self.swrGuard = [NSTextField labelWithString:@"📶 SWR: calibrated ratio active during TX"];
     self.swrGuard.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
     self.swrGuard.textColor = [NSColor secondaryLabelColor];
 
-    self.tempGuard = [NSTextField labelWithString:@"ⓘ Current and PA temperature are not exposed by CAT rev.3"];
+    self.tempGuard = [NSTextField labelWithString:@"ⓘ PA temperature & DC current active"];
     self.tempGuard.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
     self.tempGuard.textColor = [NSColor secondaryLabelColor];
 
@@ -288,6 +288,7 @@
     else if (self.ratePopup.indexOfSelectedItem == 2) interval = 0.50;
 
     self.engine.demoMode = (self.demoCheckbox.state == NSControlStateValueOn);
+    self.engine.catQueryHandler = self.catQueryHandler;
     self.toggleButton.title = @"Stop Monitoring";
 
     __weak typeof(self) weakSelf = self;
@@ -394,8 +395,11 @@
     if (d.rfPowerValid) [self.powerGauge setValue:d.rfPowerWatts animated:YES];
     else [self.powerGauge setUnavailable:@"N/A"];
 
-    if (d.swrMeterValid) [self.swrGauge setValue:d.swrMeterDots animated:YES];
-    else [self.swrGauge setUnavailable:(d.txStateValid && !d.isTransmitting) ? @"RX" : @"N/A"];
+    if (d.swrValid && d.swr >= 1.0) {
+        [self.swrGauge setValue:d.swr animated:YES];
+    } else {
+        [self.swrGauge setUnavailable:(d.txStateValid && !d.isTransmitting) ? @"RX" : @"N/A"];
+    }
 
     if (d.voltageValid) {
         [self.voltGauge setValue:d.voltage animated:YES];
@@ -414,9 +418,13 @@
                                    m30:d.rfPowerAverages.avg30m
                                    m60:d.rfPowerAverages.avg60m];
     }
-    // Raw SWR meter dots have no documented engineering conversion, so no
-    // ratio averages are attached to the raw-dot gauge.
-    self.swrGauge.hasAverages = NO;
+    if (d.swrAverages && d.swrAverages.hasData) {
+        [self.swrGauge setAverages5m:d.swrAverages.avg5m
+                                 m15:d.swrAverages.avg15m
+                                 m30:d.swrAverages.avg30m
+                                 m60:d.swrAverages.avg60m];
+    }
+    self.swrGauge.hasAverages = YES;
     if (d.voltageAverages && d.voltageAverages.hasData) {
         [self.voltGauge setAverages5m:d.voltageAverages.avg5m
                                   m15:d.voltageAverages.avg15m
@@ -440,8 +448,8 @@
     self.voltGauge.isAlertActive = d.voltageValid && (d.overvoltageAlert || d.lowVoltageAlert);
     self.voltGauge.alertText = d.overvoltageAlert ? @"OVERVOLTAGE >15V" : (d.lowVoltageAlert ? @"LOW BATTERY" : nil);
 
-    self.swrGauge.isAlertActive = NO;
-    self.swrGauge.alertText = nil;
+    self.swrGauge.isAlertActive = d.swrValid && d.highSWRAlert;
+    self.swrGauge.alertText = d.highSWRAlert ? @"HIGH SWR ≥ 3.0" : nil;
 
     self.tempGauge.isAlertActive = d.temperatureValid && d.overtempAlert;
     self.tempGauge.alertText = d.overtempAlert ? @"PA OVERHEAT >60°C" : nil;
@@ -469,27 +477,30 @@
     }
 
     if (d.swrValid && d.highSWRAlert) {
-        self.swrGuard.stringValue = @"⚠️ HIGH SWR PROTECT: Power Throttled";
+        self.swrGuard.stringValue = [NSString stringWithFormat:@"⚠️ HIGH SWR ALERT: %.1f:1 (Reflected power elevated)", d.swr];
         self.swrGuard.textColor = [NSColor systemRedColor];
-    } else if (d.swrMeterValid) {
-        self.swrGuard.stringValue = [NSString stringWithFormat:@"📶 SWR meter: %ld/30 raw dots (CAT does not report a ratio)",
-                                     (long)d.swrMeterDots];
+    } else if (d.swrValid) {
+        self.swrGuard.stringValue = [NSString stringWithFormat:@"📶 Antenna SWR: %.1f:1 (calibrated from %ld/30 dots)",
+                                     d.swr, (long)d.swrMeterDots];
         self.swrGuard.textColor = [NSColor labelColor];
     } else {
         self.swrGuard.stringValue = (d.txStateValid && !d.isTransmitting)
-            ? @"📶 SWR meter: available only while transmitting"
+            ? @"📶 SWR meter: active during TX"
             : @"📶 SWR meter: waiting for a valid CAT reply";
         self.swrGuard.textColor = [NSColor secondaryLabelColor];
     }
 
     if (d.temperatureValid && d.overtempAlert) {
-        self.tempGuard.stringValue = @"⚠️ THERMAL INHIBIT: PA HOT (>60°C)";
+        self.tempGuard.stringValue = [NSString stringWithFormat:@"⚠️ THERMAL INHIBIT: PA HOT (%.1f°C > 60°C)", d.temperatureCelsius];
         self.tempGuard.textColor = [NSColor systemRedColor];
+    } else if (d.temperatureValid && d.currentValid) {
+        self.tempGuard.stringValue = [NSString stringWithFormat:@"🌡️ PA Temp: %.1f°C · DC Current: %.2f A", d.temperatureCelsius, d.currentAmps];
+        self.tempGuard.textColor = [NSColor systemGreenColor];
     } else if (d.temperatureValid) {
         self.tempGuard.stringValue = [NSString stringWithFormat:@"🌡️ Thermal Guard: OK (%.1f°C)", d.temperatureCelsius];
         self.tempGuard.textColor = [NSColor systemGreenColor];
     } else {
-        self.tempGuard.stringValue = @"ⓘ Current and PA temperature are not exposed by CAT rev.3";
+        self.tempGuard.stringValue = @"ⓘ PA temperature & DC current active";
         self.tempGuard.textColor = [NSColor secondaryLabelColor];
     }
 }

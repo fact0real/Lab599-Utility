@@ -1,0 +1,44 @@
+{
+  "results" : [
+    {
+      "actual" : "JAMMER",
+      "passed" : true,
+      "expected" : "JAMMER",
+      "file" : "7",
+      "capture" : {
+        "frames" : 504832,
+        "centerHz" : 1224.524818955148,
+        "wpm" : 13.043478260869557,
+        "text" : "JAMMER ",
+        "sampleRate" : 48000,
+        "buffers" : 986
+      }
+    },
+    {
+      "actual" : "S E SEE COLD",
+      "passed" : false,
+      "expected" : "COLD",
+      "file" : "9",
+      "capture" : {
+        "frames" : 1927168,
+        "centerHz" : 1225.0958335124362,
+        "wpm" : 13.043478260869557,
+        "text" : "JAMMER S E SEE COLD ",
+        "sampleRate" : 48000,
+        "buffers" : 3764
+      }
+    }
+  ],
+  "passed" : false,
+  "pcmFile" : "\/Users\/factoreal\/Downloads\/TX-500\/Updater\/validation\/cw-live-capture-7-9.f32",
+  "capture" : {
+    "frames" : 1927168,
+    "centerHz" : 1225.0958335124362,
+    "wpm" : 13.043478260869557,
+    "text" : "JAMMER S E SEE COLD ",
+    "sampleRate" : 48000,
+    "buffers" : 3764
+  },
+  "pcmFormat" : "Float32 mono, native sample rate from capture.sampleRate",
+  "version" : "2.171"
+}

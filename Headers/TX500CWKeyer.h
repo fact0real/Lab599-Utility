@@ -23,7 +23,7 @@ NS_ASSUME_NONNULL_BEGIN
 @interface TX500CWKeyer : NSObject
 
 // Operational Configuration
-@property (nonatomic, assign) NSInteger wpm; // 10 to 45 WPM, default 22
+@property (nonatomic, assign) NSInteger wpm; // 3 to 45 WPM, default 22
 @property (nonatomic, assign) double sidetonePitchHz; // default 650 Hz
 @property (nonatomic, assign) BOOL sidetoneEnabled;
 @property (nonatomic, assign) float sidetoneVolume;

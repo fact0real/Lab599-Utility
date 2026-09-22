@@ -62,7 +62,9 @@
             [TX500CWMacro macroWithId:8 label:@"F8 Info" template:@"NAME {NAME} QTH {QTH} BK"]
         ]];
 
-        [self setupSidetoneAudio];
+        if (!NSProcessInfo.processInfo.environment[@"TX500_TEST_MODE"].boolValue) {
+            [self setupSidetoneAudio];
+        }
     }
     return self;
 }
@@ -83,20 +85,29 @@
 #pragma mark - Sidetone Audio Setup
 
 - (void)setupSidetoneAudio {
-    self.sidetoneEngine = [[AVAudioEngine alloc] init];
-    self.sidetonePlayer = [[AVAudioPlayerNode alloc] init];
-    [self.sidetoneEngine attachNode:self.sidetonePlayer];
+    @try {
+        self.sidetoneEngine = [[AVAudioEngine alloc] init];
+        self.sidetonePlayer = [[AVAudioPlayerNode alloc] init];
+        [self.sidetoneEngine attachNode:self.sidetonePlayer];
 
-    AVAudioMixerNode *mainMixer = self.sidetoneEngine.mainMixerNode;
-    AVAudioFormat *format = [mainMixer outputFormatForBus:0];
-    [self.sidetoneEngine connect:self.sidetonePlayer to:mainMixer format:format];
+        AVAudioMixerNode *mainMixer = self.sidetoneEngine.mainMixerNode;
+        AVAudioFormat *format = [mainMixer outputFormatForBus:0];
+        [self.sidetoneEngine connect:self.sidetonePlayer to:mainMixer format:format];
 
-    NSError *err = nil;
-    [self.sidetoneEngine startAndReturnError:&err];
-    if (!err) {
-        self.sidetoneEngineReady = YES;
-    } else {
-        NSLog(@"TX500CWKeyer: Could not start sidetone audio: %@", err);
+        NSError *err = nil;
+        [self.sidetoneEngine startAndReturnError:&err];
+        if (!err) {
+            self.sidetoneEngineReady = YES;
+        } else {
+            NSLog(@"TX500CWKeyer: Could not start sidetone audio: %@", err);
+        }
+    } @catch (NSException *exception) {
+        // AVFAudio can raise (rather than return NSError) when no audio
+        // component is available, such as in a headless test process.
+        self.sidetoneEngineReady = NO;
+        self.sidetonePlayer = nil;
+        self.sidetoneEngine = nil;
+        NSLog(@"TX500CWKeyer: Sidetone audio unavailable: %@", exception.reason);
     }
 }
 
@@ -174,7 +185,7 @@
     }
 
     // 1. Send Keyer Speed Command: KS<wpm>;
-    NSInteger clampedWPM = fmax(5, fmin(45, self.wpm));
+    NSInteger clampedWPM = fmax(3, fmin(45, self.wpm));
     NSString *ksCmd = [NSString stringWithFormat:@"KS%03ld;", (long)clampedWPM];
     if (self.serialCommandSender) {
         self.serialCommandSender(ksCmd);

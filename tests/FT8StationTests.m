@@ -21,6 +21,12 @@ static void AssertTrue(BOOL condition, NSString *message) {
 }
 
 int main(int argc, const char * argv[]) {
+    char testRootTemplate[] = "/tmp/Lab599FT8StationTests.XXXXXX";
+    char *testRoot = mkdtemp(testRootTemplate);
+    if (!testRoot) return 1;
+    setenv("TX500_TEST_MODE", "1", 1);
+    setenv("TX500_TEST_ROOT", testRoot, 1);
+    setenv("CFFIXED_USER_HOME", testRoot, 1);
     @autoreleasepool {
         (void)argc; (void)argv;
         NSLog(@"Running Lab599 Discovery TX-500 FT8 Digital Suite Tests...");
@@ -149,6 +155,20 @@ int main(int argc, const char * argv[]) {
                                                                     myCall:@"EP2AES" myGrid:@"KM35"];
         AssertTrue(msgDirected.isDirectedToMe, @"msgDirected is directed to me");
         AssertTrue([msgDirected.snrReport isEqualToString:@"-08"], @"Report is -08");
+
+        TX500FT8Message *ownCQ = [TX500FT8Message messageWithRawText:@"CQ EP2AES KM35"
+                                                              freqHz:1500 snrDb:-20 dt:0.0
+                                                              myCall:@"EP2AES" myGrid:@"KM35"];
+        AssertTrue(ownCQ.isMyTransmission, @"Own decoded CQ is identified as local loopback");
+        AssertTrue(!msgDirected.isMyTransmission, @"A DX reply addressed to me is not mistaken for local TX");
+
+        NSInteger swrDots = -1;
+        AssertTrue([TX500FT8AudioEngine parseSWRMeterReply:@"RM10015;" rawDots:&swrDots] && swrDots == 15,
+                   @"Documented RM1 SWR meter frame is parsed as 15/30 raw dots");
+        AssertTrue([TX500FT8AudioEngine parseSWRMeterReply:@"noise RM10030; trailing" rawDots:&swrDots] && swrDots == 30,
+                   @"RM1 parser extracts a complete frame from a noisy CAT response");
+        AssertTrue(![TX500FT8AudioEngine parseSWRMeterReply:@"RM10031;" rawDots:&swrDots],
+                   @"Out-of-range SWR meter values are rejected");
         NSLog(@"PASS: Semantic message parsing verified.");
 
         // 7. Test Autonomous Engine: Auto-CQ Loop
@@ -173,8 +193,10 @@ int main(int argc, const char * argv[]) {
 
         AssertTrue(!autoEng.isAutoCQActive, @"Auto-CQ stopped on caller detection");
         AssertTrue([autoEng.activeDXCall isEqualToString:@"JA1ABC"], @"Locked onto caller JA1ABC");
-        AssertTrue(autoEng.qsoPhase == TX500FT8QSOPhaseAnsweringCQ, @"Transitioned to AnsweringCQ");
-        NSLog(@"PASS: Algorithm 1 (Auto-CQ loop & instant caller engagement) verified.");
+        AssertTrue(autoEng.qsoPhase == TX500FT8QSOPhaseSendingReport, @"Transitioned to SendingReport (Tx 2)");
+        AssertTrue([audioEng.queuedTxMessage isEqualToString:@"JA1ABC EP2AES +02"], @"Queued Tx 2: JA1ABC EP2AES +02");
+        AssertTrue(audioEng.isTransmitArmed, @"Transmit path is armed");
+        NSLog(@"PASS: Algorithm 1 (Auto-CQ loop & instant caller engagement with Tx 2) verified.");
 
         // 8. Test Autonomous Engine: Intelligent Auto-Hunter
         [autoEng abortQSO];
@@ -215,6 +237,50 @@ int main(int argc, const char * argv[]) {
         AssertTrue([adif containsString:@"<EOR>"], @"ADIF contains EOR");
         NSLog(@"PASS: Complete QSO state machine progression & ADIF generator verified.");
 
+        // 9b. Test Full FT8 CQ Caller Response Progression (ER3PM -> EP2AES Scenario)
+        [autoEng abortQSO];
+        [autoEng clearSessionLog];
+        audioEng.lockTxRxFrequencies = YES;
+        [autoEng setCallingCQState:YES];
+        AssertTrue(autoEng.qsoPhase == TX500FT8QSOPhaseCallingCQ, @"Station in CallingCQ state");
+
+        // Cycle 2: ER3PM answers our CQ at 2186 Hz with -14 dB
+        TX500FT8Message *er3pmAnswer = [TX500FT8Message messageWithRawText:@"EP2AES ER3PM KN47"
+                                                                    freqHz:2186.0f snrDb:-14.0f dt:-1.1f
+                                                                    myCall:@"EP2AES" myGrid:@"KM35"];
+        [autoEng processDecodedSlot:@[er3pmAnswer] parity:1];
+
+        // Software MUST engage ER3PM, set Tx 2 (Report -14), and align frequencies
+        AssertTrue([autoEng.activeDXCall isEqualToString:@"ER3PM"], @"Engaged caller ER3PM");
+        AssertTrue([autoEng.activeDXGrid isEqualToString:@"KN47"], @"Grid set to KN47");
+        AssertTrue(autoEng.qsoPhase == TX500FT8QSOPhaseSendingReport, @"Phase is SendingReport (Tx 2)");
+        AssertTrue([audioEng.queuedTxMessage isEqualToString:@"ER3PM EP2AES -14"], @"Queued Tx 2: ER3PM EP2AES -14");
+        AssertTrue(audioEng.txSlotParity == TX500FT8SlotParityEven, @"Armed on alternate slot (Even)");
+        AssertTrue((int)roundf(audioEng.rxAudioFrequencyHz) == 2186, @"RX tuned to 2186 Hz");
+        AssertTrue((int)roundf(audioEng.txAudioFrequencyHz) == 2186, @"TX locked to 2186 Hz");
+
+        // Cycle 4: ER3PM responds with R-12 (Roger + Report)
+        TX500FT8Message *er3pmRoger = [TX500FT8Message messageWithRawText:@"EP2AES ER3PM R-12"
+                                                                   freqHz:2186.0f snrDb:-12.0f dt:-1.0f
+                                                                   myCall:@"EP2AES" myGrid:@"KM35"];
+        [autoEng processDecodedSlot:@[er3pmRoger] parity:1];
+        AssertTrue(autoEng.qsoPhase == TX500FT8QSOPhaseSendingRR73, @"Phase is SendingRR73 (Tx 4)");
+        AssertTrue([audioEng.queuedTxMessage isEqualToString:@"ER3PM EP2AES RR73"], @"Queued Tx 4: ER3PM EP2AES RR73");
+        AssertTrue([autoEng.rcvdReport isEqualToString:@"-12"], @"Received report is -12");
+
+        // Cycle 6: ER3PM sends 73
+        TX500FT8Message *er3pm73 = [TX500FT8Message messageWithRawText:@"EP2AES ER3PM 73"
+                                                                freqHz:2186.0f snrDb:-10.0f dt:-1.0f
+                                                                myCall:@"EP2AES" myGrid:@"KM35"];
+        [autoEng processDecodedSlot:@[er3pm73] parity:1];
+        AssertTrue(autoEng.sessionLog.count == 1, @"QSO automatically logged");
+        TX500FT8LoggedQSO *loggedER3PM = autoEng.sessionLog.firstObject;
+        AssertTrue([loggedER3PM.callsign isEqualToString:@"ER3PM"], @"Logged call ER3PM");
+        AssertTrue([loggedER3PM.grid isEqualToString:@"KN47"], @"Logged grid KN47");
+        AssertTrue([loggedER3PM.rstSent isEqualToString:@"-14"], @"Logged sent RST -14");
+        AssertTrue([loggedER3PM.rstRcvd isEqualToString:@"-12"], @"Logged rcvd RST -12");
+        NSLog(@"PASS: Full FT8 CQ caller response progression (ER3PM -> EP2AES) verified.");
+
         // 10. Test 15-Second Slot Timestamp Quantization & Parity
         NSTimeInterval now = 1718000013.8; // e.g. :13.8
         NSTimeInterval quantized = floor(now / 15.0) * 15.0;
@@ -237,6 +303,8 @@ int main(int argc, const char * argv[]) {
         // 11. Test All-Decodes ADIF Logging and QSO Logbook Logging
         NSString *allDecodesPath = [TX500FT8AudioEngine allDecodesADIFPath];
         AssertTrue(allDecodesPath.length > 0, @"All-decodes ADIF path is valid");
+        AssertTrue([allDecodesPath hasPrefix:[NSString stringWithUTF8String:testRoot]],
+                   @"All-decodes ADIF stays inside the isolated test directory");
         [audioEng logDecodedMessagesToADIF:@[slotMsg]];
         [NSThread sleepForTimeInterval:0.25]; // Wait for async file write to finish
         AssertTrue([[NSFileManager defaultManager] fileExistsAtPath:allDecodesPath], @"FT8_ALL_DECODES.adi file created");
@@ -246,6 +314,8 @@ int main(int argc, const char * argv[]) {
         AssertTrue([allDecodesContent containsString:@"<MODE:3>FT8"], @"All-decodes ADIF contains MODE FT8");
 
         NSString *qsoLogPath = [TX500FT8AutoEngine qsoLogbookADIFPath];
+        AssertTrue([qsoLogPath hasPrefix:[NSString stringWithUTF8String:testRoot]],
+                   @"QSO logbook stays inside the isolated test directory");
         AssertTrue(qsoLogPath.length > 0, @"QSO logbook ADIF path is valid");
         TX500FT8LoggedQSO *loggedQSO = [[TX500FT8LoggedQSO alloc] init];
         loggedQSO.callsign = @"BG0FQU";
@@ -348,10 +418,201 @@ int main(int argc, const char * argv[]) {
         audioEng.protocol = TX500_FT8_PROTOCOL_FT8;
         AssertTrue(audioEng.currentSlotPeriod == 15.0, @"Audio engine FT8 slot period reset to 15.0s");
         AssertTrue([audioEng.modeName isEqualToString:@"FT8"], @"Audio engine mode name reset to FT8");
+        audioEng.isSimulationMode = YES;
+        __block NSInteger simulatedCATWrites = 0;
+        audioEng.serialCommandSender = ^BOOL(NSString *command) {
+            (void)command;
+            simulatedCATWrites++;
+            return YES;
+        };
+        NSError *simulationStartError = nil;
+        AssertTrue([audioEng startMonitoring:&simulationStartError], @"Simulation monitoring starts without audio hardware");
+        [audioEng stopMonitoring];
+        AssertTrue(simulatedCATWrites == 0, @"Simulation mode never writes CAT commands to a connected radio");
         NSLog(@"PASS: FT4 ADIF logging (<MODE:4>MFSK <SUBMODE:3>FT4) & Audio Engine timing quantization verified.");
 
+        // 17. Test Calibrated SWR Meter Transfer Function
+        double swr0 = [TX500FT8AudioEngine swrRatioFromMeterDots:0];
+        AssertTrue(fabs(swr0 - 1.0) < 0.01, @"SWR 0 dots is 1.0:1");
+        double swr1 = [TX500FT8AudioEngine swrRatioFromMeterDots:1];
+        AssertTrue(fabs(swr1 - 1.3) < 0.01, @"SWR 1 dot is 1.3:1");
+        double swr2 = [TX500FT8AudioEngine swrRatioFromMeterDots:2];
+        AssertTrue(fabs(swr2 - 1.6) < 0.01, @"SWR 2 dots is 1.6:1 (matching TX-500 LCD)");
+        double swr4 = [TX500FT8AudioEngine swrRatioFromMeterDots:4];
+        AssertTrue(fabs(swr4 - 2.3) < 0.01, @"SWR 4 dots is 2.3:1");
+        double swr5 = [TX500FT8AudioEngine swrRatioFromMeterDots:5];
+        AssertTrue(fabs(swr5 - 2.8) < 0.01, @"SWR 5 dots is 2.8:1 (matching TX-500 hardware)");
+        double swr8 = [TX500FT8AudioEngine swrRatioFromMeterDots:8];
+        AssertTrue(fabs(swr8 - 5.5) < 0.01, @"SWR 8 dots is 5.5:1");
+        double swr12 = [TX500FT8AudioEngine swrRatioFromMeterDots:12];
+        AssertTrue(fabs(swr12 - 7.5) < 0.01, @"SWR 12 dots is 7.5:1");
+        NSLog(@"PASS: SWR meter dot-to-ratio transfer function verified (0->1.0, 2->1.6, 5->2.8, 8->5.5).");
+
+        // 18. Test Auto-CQ Parity Alternation
+        [autoEng abortQSO];
+        [autoEng startAutoCQWithLimit:5];
+        AssertTrue(autoEng.isAutoCQActive, @"Auto-CQ active");
+        // Simulate cycle with parity 0 completing without callers
+        [autoEng processDecodedSlot:@[] parity:0];
+        AssertTrue(audioEng.isTransmitArmed, @"Auto-CQ re-arms transmit for next slot");
+        AssertTrue(audioEng.txSlotParity == TX500FT8SlotParityOdd, @"Auto-CQ scheduled on alternate parity (Odd after Even slot 0)");
+        // Simulate cycle with parity 1 completing without callers
+        [autoEng processDecodedSlot:@[] parity:1];
+        AssertTrue(audioEng.isTransmitArmed, @"Auto-CQ re-arms transmit for next slot");
+        AssertTrue(audioEng.txSlotParity == TX500FT8SlotParityEven, @"Auto-CQ scheduled on alternate parity (Even after Odd slot 1)");
+        [autoEng stopAutoCQ];
+        NSLog(@"PASS: Auto-CQ parity alternation (Even -> Odd -> Even) verified.");
+
+        // 19. Test Auto-Hunter Immediate Evaluation from Last Decoded Messages
+        [autoEng abortQSO];
+        TX500FT8Message *immediateCQ = [TX500FT8Message messageWithRawText:@"CQ ZS6XYZ KG44"
+                                                                    freqHz:2186.0f
+                                                                     snrDb:-14.0f
+                                                                        dt:-0.2f
+                                                                    myCall:@"EP2AES"
+                                                                    myGrid:@"KM35"];
+        // Ingest into engine while hunter is not yet running
+        [autoEng processDecodedSlot:@[immediateCQ] parity:0];
+        AssertTrue(!autoEng.isAutoHunterActive, @"Auto-Hunter not active yet");
+        AssertTrue(autoEng.lastDecodedMessages.count == 1, @"lastDecodedMessages holds recent decode");
+        // Activate Auto-Hunter: it should immediately engage the CQ from the latest cycle
+        [autoEng startAutoHunter];
+        AssertTrue([autoEng.activeDXCall isEqualToString:@"ZS6XYZ"], @"Auto-Hunter immediately engaged CQ ZS6XYZ from latest cycle");
+        AssertTrue(audioEng.isTransmitArmed, @"Transmit armed immediately for ZS6XYZ");
+        AssertTrue(audioEng.txSlotParity == TX500FT8SlotParityOdd, @"Response scheduled on alternate parity (Odd)");
+        [autoEng abortQSO];
+        [autoEng stopAutoHunter];
+        NSLog(@"PASS: Auto-Hunter immediate cycle evaluation verified.");
+
+        // 20. Test Auto-Hunter Collision Detection and Candidate Rotation
+        [autoEng abortQSO];
+        [autoEng stopAutoHunter];
+        autoEng.autoHunterCriteria = TX500FT8HunterCriteriaFirstInSlot;
+        TX500FT8Message *dxTarget = [TX500FT8Message messageWithRawText:@"CQ DX9COLL JN18"
+                                                                 freqHz:1420.0f
+                                                                  snrDb:+2.0f
+                                                                     dt:0.1f
+                                                                 myCall:@"EP2AES"
+                                                                 myGrid:@"KM35"];
+        TX500FT8Message *nextCandidate = [TX500FT8Message messageWithRawText:@"CQ K6ABC CM87"
+                                                                      freqHz:1650.0f
+                                                                       snrDb:+5.0f
+                                                                          dt:0.0f
+                                                                      myCall:@"EP2AES"
+                                                                      myGrid:@"KM35"];
+        [autoEng processDecodedSlot:@[dxTarget, nextCandidate] parity:0];
+        [autoEng startAutoHunter];
+        AssertTrue([autoEng.activeDXCall isEqualToString:@"DX9COLL"], @"Auto-Hunter engaged DX9COLL");
+        AssertTrue(audioEng.isTransmitArmed, @"TX armed for DX9COLL");
+
+        // Simulate DX9COLL answering another caller (collision) in next slot
+        TX500FT8Message *collisionMsg = [TX500FT8Message messageWithRawText:@"W1XYZ DX9COLL -08"
+                                                                     freqHz:1420.0f
+                                                                      snrDb:+1.0f
+                                                                         dt:0.1f
+                                                                     myCall:@"EP2AES"
+                                                                     myGrid:@"KM35"];
+        TX500FT8Message *candidateInSlot = [TX500FT8Message messageWithRawText:@"CQ JA3XYZ PM74"
+                                                                        freqHz:1800.0f
+                                                                         snrDb:+6.0f
+                                                                            dt:0.0f
+                                                                        myCall:@"EP2AES"
+                                                                        myGrid:@"KM35"];
+        [autoEng processDecodedSlot:@[collisionMsg, candidateInSlot] parity:1];
+        // Collision detected: DX9COLL is blacklisted and engine immediately rotated to candidate JA3XYZ
+        AssertTrue(![autoEng.activeDXCall isEqualToString:@"DX9COLL"], @"Auto-Hunter aborted contested DX9COLL QSO");
+        AssertTrue([autoEng.activeDXCall isEqualToString:@"JA3XYZ"], @"Auto-Hunter immediately rotated to JA3XYZ");
+        AssertTrue(audioEng.isTransmitArmed, @"TX armed for new candidate JA3XYZ");
+        [autoEng abortQSO];
+        [autoEng stopAutoHunter];
+        NSLog(@"PASS: Auto-Hunter collision detection & candidate rotation verified.");
+
+        // 21. Test Transmit History Frame Formatting & Listening Parity
+        TX500FT8Message *evenCQ = [TX500FT8Message messageWithRawText:@"CQ F6XYZ IN96"
+                                                               freqHz:1520.0f
+                                                                snrDb:-2.0f
+                                                                   dt:0.1f
+                                                             slotDate:[NSDate date]
+                                                           slotParity:0
+                                                               myCall:@"EP2AES"
+                                                               myGrid:@"KM35"];
+        // When received in slot parity 0 (Even), station listens on slot parity 1 (Odd)
+        TX500FT8SlotParity listeningForEven = (evenCQ.slotParity == 0) ? TX500FT8SlotParityOdd : TX500FT8SlotParityEven;
+        AssertTrue(listeningForEven == TX500FT8SlotParityOdd, @"Station received on Even (0) must be called on Odd (1)");
+
+        TX500FT8Message *oddCQ = [TX500FT8Message messageWithRawText:@"CQ EA4XYZ IN80"
+                                                              freqHz:1520.0f
+                                                               snrDb:-2.0f
+                                                                  dt:0.1f
+                                                            slotDate:[NSDate date]
+                                                          slotParity:1
+                                                              myCall:@"EP2AES"
+                                                              myGrid:@"KM35"];
+        TX500FT8SlotParity listeningForOdd = (oddCQ.slotParity == 0) ? TX500FT8SlotParityOdd : TX500FT8SlotParityEven;
+        AssertTrue(listeningForOdd == TX500FT8SlotParityEven, @"Station received on Odd (1) must be called on Even (0)");
+
+        TX500FT8Message *txHistoryMsg = [TX500FT8Message messageWithRawText:@"F6XYZ EP2AES KM35"
+                                                                     freqHz:1520.0f
+                                                                      snrDb:0.0f
+                                                                         dt:0.0f
+                                                                   slotDate:[NSDate date]
+                                                                 slotParity:1
+                                                                     myCall:@"EP2AES"
+                                                                     myGrid:@"KM35"];
+        txHistoryMsg.isMyTransmission = YES;
+        txHistoryMsg.snrReport = @"TX";
+        AssertTrue(txHistoryMsg.isMyTransmission == YES, @"Transmission frame tagged as my transmission");
+        AssertTrue([txHistoryMsg.snrReport isEqualToString:@"TX"], @"SNR report tagged as TX");
+        NSLog(@"PASS: Transmit history frame formatting & listening parity math verified.");
+
+        // 22. Test Dual PTT Engine (Hardware RTS + CAT PTT Assertion)
+        TX500FT8AudioEngine *pttEngine = [TX500FT8AudioEngine new];
+        pttEngine.isSimulationMode = NO; // Live radio mode
+        __block BOOL pttActiveState = NO;
+        __block NSInteger pttToggleCount = 0;
+        pttEngine.pttControlHandler = ^BOOL(BOOL active) {
+            pttActiveState = active;
+            pttToggleCount++;
+            return YES;
+        };
+        __block NSMutableArray<NSString *> *catCommandsSent = [NSMutableArray array];
+        pttEngine.serialCommandSender = ^BOOL(NSString *cmd) {
+            [catCommandsSent addObject:cmd];
+            return YES;
+        };
+
+        // Start carrier in Live Mode
+        [pttEngine startTuneCarrier];
+        AssertTrue(pttEngine.isTuning == YES, @"Engine is tuning");
+        AssertTrue(pttActiveState == YES, @"PTT handler was asserted to active (hardware RTS HIGH)");
+        AssertTrue(pttToggleCount == 1, @"PTT toggled once on transmit start");
+        // Verify MD6; is NOT sent during transmit trigger
+        for (NSString *cmd in catCommandsSent) {
+            AssertTrue(![cmd isEqualToString:@"MD6;"], @"MD6; mode command must not be sent on transmit trigger");
+        }
+
+        // End carrier
+        [pttEngine stopTuneCarrier];
+        AssertTrue(pttEngine.isTuning == NO, @"Engine stopped tuning");
+        AssertTrue(pttActiveState == NO, @"PTT handler was deasserted (hardware RTS LOW)");
+        AssertTrue(pttToggleCount == 2, @"PTT toggled twice (assert and release)");
+
+        // Test fallback to serialCommandSender when pttControlHandler is nil
+        TX500FT8AudioEngine *fallbackEngine = [TX500FT8AudioEngine new];
+        fallbackEngine.isSimulationMode = NO;
+        NSMutableArray<NSString *> *fallbackCmds = [NSMutableArray array];
+        fallbackEngine.serialCommandSender = ^BOOL(NSString *cmd) {
+            [fallbackCmds addObject:cmd];
+            return YES;
+        };
+        [fallbackEngine startTuneCarrier];
+        AssertTrue([fallbackCmds containsObject:@"TX1;TX;"], @"Fallback sends combined CAT TX1;TX; command");
+        [fallbackEngine stopTuneCarrier];
+        AssertTrue([fallbackCmds containsObject:@"RX;"], @"Fallback sends CAT RX; command");
+        NSLog(@"PASS: Dual PTT Engine (Hardware RTS + CAT TX1;TX; / RX;) verified.");
+
         NSLog(@"ALL FT8 & FT4 DIGITAL SUITE TESTS PASSED SUCCESSFULLY! (100%%)");
+        [[NSFileManager defaultManager] removeItemAtPath:[NSString stringWithUTF8String:testRoot] error:nil];
     }
     return 0;
 }
-

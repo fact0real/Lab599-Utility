@@ -25,7 +25,7 @@
 #define FT8808_LDPC_ITERS     40   // Increased LDPC belief propagation iterations for maximum convergence
 #define FT8808_MAX_DECODED    100  // Allow up to 100 decodes per 15s window
 #define FT8808_FREQ_OSR       2
-#define FT8808_TIME_OSR       2
+#define FT8808_TIME_OSR       4
 
 // ---- Callsign hashtable (adapted from ft8_lib demo) -----------------------
 // FT8 can transmit hashed (non-standard) callsigns; decoding those requires a
@@ -215,7 +215,28 @@ int ft8808_decode_samples(const float* samples,
         const ftx_candidate_t* cand = &candidates[idx];
 
         float freq_hz  = (mon.min_bin + cand->freq_offset + (float)cand->freq_sub / wf->freq_osr) / mon.symbol_period;
-        float time_sec = (cand->time_offset + (float)cand->time_sub / wf->time_osr) * mon.symbol_period;
+        int time_index = cand->time_offset * wf->time_osr + cand->time_sub;
+        float fine_delta = 0.0f;
+        float timing_sigma = mon.symbol_period / wf->time_osr;
+        if (time_index > -10 * wf->time_osr && time_index < 20 * wf->time_osr - 1) {
+            ftx_candidate_t before = *cand, after = *cand;
+            int before_index = time_index - 1, after_index = time_index + 1;
+            before.time_offset = before_index / wf->time_osr;
+            before.time_sub = (uint8_t)(before_index % wf->time_osr);
+            if ((int8_t)before.time_sub < 0) { before.time_sub += wf->time_osr; before.time_offset--; }
+            after.time_offset = after_index / wf->time_osr;
+            after.time_sub = (uint8_t)(after_index % wf->time_osr);
+            int score_before = ftx_candidate_sync_score(wf, &before);
+            int score_after = ftx_candidate_sync_score(wf, &after);
+            float denominator = (float)score_before - 2.0f * cand->score + (float)score_after;
+            if (denominator < -0.5f) {
+                fine_delta = 0.5f * ((float)score_before - (float)score_after) / denominator;
+                if (fine_delta < -0.5f) fine_delta = -0.5f;
+                if (fine_delta > 0.5f) fine_delta = 0.5f;
+                timing_sigma *= 0.5f;
+            }
+        }
+        float time_sec = ((float)time_index + fine_delta) / wf->time_osr * mon.symbol_period;
 
         ftx_message_t message;
         ftx_decode_status_t status;
@@ -252,6 +273,7 @@ int ft8808_decode_samples(const float* samples,
         o->text[sizeof(o->text) - 1] = '\0';
         o->freq_hz  = freq_hz;
         o->time_sec = time_sec;
+        o->time_uncertainty_sec = timing_sigma;
         o->score    = cand->score;
         o->snr_db   = ft8808_estimate_snr(wf, cand);
     }

@@ -37,6 +37,16 @@
 
     NSTimeInterval _lastRedrawTime;
     BOOL _redrawScheduled;
+    NSTimeInterval _clipHoldUntil;
+
+    // Mouse interaction for filter passband and click-to-notch
+    NSInteger _activeDragMode; // 0 = None, 1 = LowCut, 2 = HighCut, 3 = Passband, 4 = Notch
+    NSPoint _dragStartPoint;
+    float _dragInitialLowCut;
+    float _dragInitialHighCut;
+    float _dragInitialNotchFreq;
+    NSTrackingArea *_trackingArea;
+    NSRect _cachedSpectrumRect;
 }
 @end
 
@@ -53,6 +63,8 @@
         _waterfallSpeed = TX500WaterfallSpeedNormal;
         _maxFrequencySpanHz = DEFAULT_SPECTRUM_MAX_FREQ;
         _spectrumGainDb = 0.0f;
+        _waterfallFloorDb = -80.0f;
+        _waterfallDynamicRangeDb = 50.0f;
 
         _lowCutHz = 300.0f;
         _highCutHz = 2700.0f;
@@ -68,6 +80,10 @@
         _smoothedPeakDb = -90.0f;
         _peakHoldDb = -90.0f;
         _isSquelchOpen = YES;
+        _clipHoldUntil = 0;
+
+        _activeDragMode = 0;
+        _cachedSpectrumRect = NSZeroRect;
 
         _binCount = 0;
         _waveformCount = 0;
@@ -223,8 +239,10 @@
             mag = _spectrumBins[binIdx];
         }
 
-        float db = mag > 1e-5f ? 20.0f * log10f(mag) + self.spectrumGainDb : -90.0f;
-        float norm = (db + 80.0f) / 80.0f;
+        float db = mag > 1e-5f ? 20.0f * log10f(mag) + self.spectrumGainDb : -120.0f;
+        float floorDb = self.waterfallFloorDb != 0.0f ? self.waterfallFloorDb : -80.0f;
+        float dynRange = self.waterfallDynamicRangeDb > 5.0f ? self.waterfallDynamicRangeDb : 50.0f;
+        float norm = (db - floorDb) / dynRange;
         if (norm < 0.0f) norm = 0.0f;
         if (norm > 1.0f) norm = 1.0f;
 
@@ -334,13 +352,15 @@
     CGContextSaveGState(ctx);
     NSRectClip(rect);
 
+    _cachedSpectrumRect = rect;
+
     CGFloat bottomY = rect.origin.y + 20.0;
     CGFloat plotHeight = rect.size.height - 26.0;
     CGFloat plotWidth = rect.size.width - 24.0;
     CGFloat startX = rect.origin.x + 16.0;
     float maxFreq = self.maxFrequencySpanHz > 0 ? self.maxFrequencySpanHz : DEFAULT_SPECTRUM_MAX_FREQ;
 
-    // A. Draw Filter Bandpass Highlight
+    // A. Draw Filter Bandpass Highlight & Interactive Handles
     if (self.filterEnabled) {
         CGFloat xLow = startX + (self.lowCutHz / maxFreq) * plotWidth;
         CGFloat xHigh = startX + (self.highCutHz / maxFreq) * plotWidth;
@@ -350,23 +370,43 @@
         if (xHigh > xLow) {
             NSRect filterBandRect = NSMakeRect(xLow, bottomY, xHigh - xLow, plotHeight);
             NSColor *bandColor = self.phosphorAmberTheme ?
-                [NSColor colorWithCalibratedRed:1.0 green:0.65 blue:0.0 alpha:0.10] :
-                [NSColor colorWithCalibratedRed:0.0 green:0.85 blue:0.75 alpha:0.10];
+                [NSColor colorWithCalibratedRed:1.0 green:0.65 blue:0.0 alpha:0.12] :
+                [NSColor colorWithCalibratedRed:0.0 green:0.85 blue:0.75 alpha:0.12];
             [bandColor setFill];
             NSRectFillUsingOperation(filterBandRect, NSCompositingOperationSourceOver);
 
             // Filter edges vertical lines
             NSColor *edgeColor = self.phosphorAmberTheme ?
-                [NSColor colorWithCalibratedRed:1.0 green:0.65 blue:0.0 alpha:0.35] :
-                [NSColor colorWithCalibratedRed:0.0 green:0.85 blue:0.75 alpha:0.35];
+                [NSColor colorWithCalibratedRed:1.0 green:0.75 blue:0.15 alpha:0.85] :
+                [NSColor colorWithCalibratedRed:0.1 green:0.95 blue:0.85 alpha:0.85];
             [edgeColor setStroke];
             NSBezierPath *edges = [NSBezierPath bezierPath];
             [edges moveToPoint:NSMakePoint(xLow, bottomY)];
             [edges lineToPoint:NSMakePoint(xLow, bottomY + plotHeight)];
             [edges moveToPoint:NSMakePoint(xHigh, bottomY)];
             [edges lineToPoint:NSMakePoint(xHigh, bottomY + plotHeight)];
-            edges.lineWidth = 1.0;
+            edges.lineWidth = 2.0;
             [edges stroke];
+
+            // Visual drag grab tabs at top of filter edges
+            NSRect lowHandle = NSMakeRect(xLow - 3.5, bottomY + plotHeight - 12.0, 7.0, 12.0);
+            NSRect highHandle = NSMakeRect(xHigh - 3.5, bottomY + plotHeight - 12.0, 7.0, 12.0);
+            [edgeColor setFill];
+            [[NSBezierPath bezierPathWithRoundedRect:lowHandle xRadius:2 yRadius:2] fill];
+            [[NSBezierPath bezierPathWithRoundedRect:highHandle xRadius:2 yRadius:2] fill];
+
+            // Passband Label (Shows cutoff frequencies and bandwidth)
+            NSDictionary *bandAttr = @{
+                NSFontAttributeName: [NSFont monospacedSystemFontOfSize:9 weight:NSFontWeightBold],
+                NSForegroundColorAttributeName: edgeColor
+            };
+            NSString *bandText = [NSString stringWithFormat:@"PB: %.0f-%.0f Hz (BW %.0f)", self.lowCutHz, self.highCutHz, self.highCutHz - self.lowCutHz];
+            CGFloat labelY = bottomY + plotHeight - 27.0;
+            CGFloat labelX = fmaxf(xLow + 6.0, startX + 6.0);
+            if (labelX + 140.0 > startX + plotWidth) {
+                labelX = fmaxf(startX + 6.0, startX + plotWidth - 140.0);
+            }
+            [bandText drawAtPoint:NSMakePoint(labelX, labelY) withAttributes:bandAttr];
         }
     }
 
@@ -657,7 +697,212 @@
     NSString *peakStr = _peakHoldDb > -80.0f ? [NSString stringWithFormat:@"%4.1f", _peakHoldDb] : @"--.-";
     [peakStr drawAtPoint:NSMakePoint(rect.origin.x + (rect.size.width - 28.0) * 0.5, meterBottom - 21.0) withAttributes:numAttr];
 
+    // Peak Hold Tick Line
+    float peakNorm = (_peakHoldDb + 60.0f) / 60.0f;
+    if (peakNorm > 0.05f) {
+        if (peakNorm > 1.0f) peakNorm = 1.0f;
+        CGFloat peakY = meterBottom + peakNorm * meterHeight;
+        [[NSColor colorWithCalibratedRed:1.0 green:0.95 blue:0.4 alpha:0.95] setStroke];
+        NSBezierPath *peakTick = [NSBezierPath bezierPath];
+        [peakTick moveToPoint:NSMakePoint(leftX - 1.0, peakY)];
+        [peakTick lineToPoint:NSMakePoint(leftX + barWidth + 1.0, peakY)];
+        [peakTick moveToPoint:NSMakePoint(rightX - 1.0, peakY)];
+        [peakTick lineToPoint:NSMakePoint(rightX + barWidth + 1.0, peakY)];
+        peakTick.lineWidth = 2.0;
+        [peakTick stroke];
+    }
+
+    // Prominent CLIP Overload Alert Badge (1.5s persistent hold)
+    NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+    if (self.isClipping || self.peakDb >= -0.5f) {
+        _clipHoldUntil = now + 1.5;
+    }
+    BOOL isClipActive = self.isClipping || (now < _clipHoldUntil);
+
+    NSRect clipBadgeRect = NSMakeRect(rect.origin.x + (rect.size.width - 46.0) * 0.5, rect.origin.y + rect.size.height - 30.0, 46.0, 13.0);
+    NSColor *clipBg = isClipActive ?
+        [NSColor colorWithCalibratedRed:0.95 green:0.12 blue:0.12 alpha:0.95] :
+        [NSColor colorWithCalibratedRed:0.20 green:0.06 blue:0.06 alpha:0.35];
+    NSColor *clipFg = isClipActive ?
+        [NSColor whiteColor] :
+        [NSColor colorWithCalibratedRed:0.45 green:0.20 blue:0.20 alpha:0.5];
+    [clipBg setFill];
+    [[NSBezierPath bezierPathWithRoundedRect:clipBadgeRect xRadius:3.0 yRadius:3.0] fill];
+
+    NSDictionary *clipAttr = @{
+        NSFontAttributeName: [NSFont monospacedSystemFontOfSize:8.5 weight:NSFontWeightHeavy],
+        NSForegroundColorAttributeName: clipFg
+    };
+    [@"CLIP" drawAtPoint:NSMakePoint(clipBadgeRect.origin.x + 11.0, clipBadgeRect.origin.y + 1.0) withAttributes:clipAttr];
+
     CGContextRestoreGState(ctx);
+}
+
+#pragma mark - Mouse Interaction (Filter Passband Dragging & Click-to-Notch)
+
+- (void)updateTrackingAreas {
+    [super updateTrackingAreas];
+    if (_trackingArea) {
+        [self removeTrackingArea:_trackingArea];
+    }
+    _trackingArea = [[NSTrackingArea alloc] initWithRect:self.bounds
+                                                 options:(NSTrackingMouseMoved | NSTrackingActiveInKeyWindow | NSTrackingCursorUpdate)
+                                                   owner:self
+                                                userInfo:nil];
+    [self addTrackingArea:_trackingArea];
+}
+
+- (void)updateCursorForPoint:(NSPoint)pt {
+    NSRect specRect = _cachedSpectrumRect;
+    CGFloat startX = specRect.origin.x + 16.0;
+    CGFloat plotWidth = specRect.size.width - 24.0;
+    CGFloat bottomY = specRect.origin.y + 20.0;
+    CGFloat plotHeight = specRect.size.height - 26.0;
+    float maxFreq = self.maxFrequencySpanHz > 0 ? self.maxFrequencySpanHz : DEFAULT_SPECTRUM_MAX_FREQ;
+
+    if (pt.y >= bottomY && pt.y <= bottomY + plotHeight && pt.x >= startX && pt.x <= startX + plotWidth) {
+        CGFloat xLow = startX + (self.lowCutHz / maxFreq) * plotWidth;
+        CGFloat xHigh = startX + (self.highCutHz / maxFreq) * plotWidth;
+        CGFloat xNotch = self.notchEnabled ? (startX + (self.notchFreqHz / maxFreq) * plotWidth) : -999.0;
+
+        if (self.filterEnabled && (fabs(pt.x - xLow) <= 7.0 || fabs(pt.x - xHigh) <= 7.0)) {
+            [[NSCursor resizeLeftRightCursor] set];
+            return;
+        }
+        if (self.notchEnabled && fabs(pt.x - xNotch) <= 7.0) {
+            [[NSCursor resizeLeftRightCursor] set];
+            return;
+        }
+        if (self.filterEnabled && pt.x > xLow + 7.0 && pt.x < xHigh - 7.0) {
+            [[NSCursor openHandCursor] set];
+            return;
+        }
+        [[NSCursor crosshairCursor] set];
+        return;
+    }
+    [[NSCursor arrowCursor] set];
+}
+
+- (void)cursorUpdate:(NSEvent *)event {
+    NSPoint pt = [self convertPoint:event.locationInWindow fromView:nil];
+    [self updateCursorForPoint:pt];
+}
+
+- (void)mouseMoved:(NSEvent *)event {
+    NSPoint pt = [self convertPoint:event.locationInWindow fromView:nil];
+    [self updateCursorForPoint:pt];
+}
+
+- (void)mouseDown:(NSEvent *)event {
+    NSPoint pt = [self convertPoint:event.locationInWindow fromView:nil];
+    NSRect specRect = _cachedSpectrumRect;
+    CGFloat startX = specRect.origin.x + 16.0;
+    CGFloat plotWidth = specRect.size.width - 24.0;
+    CGFloat bottomY = specRect.origin.y + 20.0;
+    CGFloat plotHeight = specRect.size.height - 26.0;
+    float maxFreq = self.maxFrequencySpanHz > 0 ? self.maxFrequencySpanHz : DEFAULT_SPECTRUM_MAX_FREQ;
+
+    if (pt.y >= bottomY && pt.y <= bottomY + plotHeight && pt.x >= startX && pt.x <= startX + plotWidth) {
+        CGFloat xLow = startX + (self.lowCutHz / maxFreq) * plotWidth;
+        CGFloat xHigh = startX + (self.highCutHz / maxFreq) * plotWidth;
+        CGFloat xNotch = self.notchEnabled ? (startX + (self.notchFreqHz / maxFreq) * plotWidth) : -999.0;
+
+        _dragStartPoint = pt;
+        _dragInitialLowCut = self.lowCutHz;
+        _dragInitialHighCut = self.highCutHz;
+        _dragInitialNotchFreq = self.notchFreqHz;
+
+        if (self.filterEnabled && fabs(pt.x - xLow) <= 7.0) {
+            _activeDragMode = 1; // Low Cut
+            [[NSCursor resizeLeftRightCursor] set];
+            return;
+        }
+        if (self.filterEnabled && fabs(pt.x - xHigh) <= 7.0) {
+            _activeDragMode = 2; // High Cut
+            [[NSCursor resizeLeftRightCursor] set];
+            return;
+        }
+        if (self.notchEnabled && fabs(pt.x - xNotch) <= 7.0) {
+            _activeDragMode = 4; // Notch
+            [[NSCursor resizeLeftRightCursor] set];
+            return;
+        }
+        if (self.filterEnabled && pt.x > xLow + 7.0 && pt.x < xHigh - 7.0 && !(event.modifierFlags & NSEventModifierFlagOption)) {
+            _activeDragMode = 3; // Passband move
+            [[NSCursor closedHandCursor] set];
+            return;
+        }
+
+        // Click-to-Notch!
+        // When clicking anywhere on the spectrum or with Option key held:
+        float clickedFreq = ((pt.x - startX) / plotWidth) * maxFreq;
+        clickedFreq = fmaxf(100.0f, fminf(maxFreq - 50.0f, clickedFreq));
+        self.notchFreqHz = roundf(clickedFreq);
+        self.notchEnabled = YES;
+        if (self.onNotchFrequencyChanged) {
+            self.onNotchFrequencyChanged(self.notchFreqHz);
+        }
+        [self setNeedsDisplay:YES];
+        return;
+    }
+    [super mouseDown:event];
+}
+
+- (void)mouseDragged:(NSEvent *)event {
+    if (_activeDragMode == 0) {
+        [super mouseDragged:event];
+        return;
+    }
+    NSPoint pt = [self convertPoint:event.locationInWindow fromView:nil];
+    NSRect specRect = _cachedSpectrumRect;
+    CGFloat plotWidth = specRect.size.width - 24.0;
+    float maxFreq = self.maxFrequencySpanHz > 0 ? self.maxFrequencySpanHz : DEFAULT_SPECTRUM_MAX_FREQ;
+    float hzPerPixel = maxFreq / plotWidth;
+    float deltaHz = (pt.x - _dragStartPoint.x) * hzPerPixel;
+
+    if (_activeDragMode == 1) { // Low Cut
+        float newLow = _dragInitialLowCut + deltaHz;
+        newLow = fmaxf(50.0f, fminf(self.highCutHz - 100.0f, newLow));
+        self.lowCutHz = roundf(newLow);
+        if (self.onFilterRangeChanged) {
+            self.onFilterRangeChanged(self.lowCutHz, self.highCutHz);
+        }
+        [self setNeedsDisplay:YES];
+    } else if (_activeDragMode == 2) { // High Cut
+        float newHigh = _dragInitialHighCut + deltaHz;
+        newHigh = fmaxf(self.lowCutHz + 100.0f, fminf(maxFreq, newHigh));
+        self.highCutHz = roundf(newHigh);
+        if (self.onFilterRangeChanged) {
+            self.onFilterRangeChanged(self.lowCutHz, self.highCutHz);
+        }
+        [self setNeedsDisplay:YES];
+    } else if (_activeDragMode == 3) { // Passband Shift
+        float bw = _dragInitialHighCut - _dragInitialLowCut;
+        float newLow = _dragInitialLowCut + deltaHz;
+        if (newLow < 50.0f) newLow = 50.0f;
+        if (newLow + bw > maxFreq) newLow = maxFreq - bw;
+        self.lowCutHz = roundf(newLow);
+        self.highCutHz = roundf(newLow + bw);
+        if (self.onFilterRangeChanged) {
+            self.onFilterRangeChanged(self.lowCutHz, self.highCutHz);
+        }
+        [self setNeedsDisplay:YES];
+    } else if (_activeDragMode == 4) { // Notch Drag
+        float newNotch = _dragInitialNotchFreq + deltaHz;
+        newNotch = fmaxf(100.0f, fminf(maxFreq - 50.0f, newNotch));
+        self.notchFreqHz = roundf(newNotch);
+        if (self.onNotchFrequencyChanged) {
+            self.onNotchFrequencyChanged(self.notchFreqHz);
+        }
+        [self setNeedsDisplay:YES];
+    }
+}
+
+- (void)mouseUp:(NSEvent *)event {
+    _activeDragMode = 0;
+    NSPoint pt = [self convertPoint:event.locationInWindow fromView:nil];
+    [self updateCursorForPoint:pt];
+    [super mouseUp:event];
 }
 
 @end

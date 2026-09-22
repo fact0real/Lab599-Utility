@@ -19,6 +19,12 @@ static void AssertTrue(BOOL condition, NSString *message) {
 }
 
 int main(int argc, const char * argv[]) {
+    char testRootTemplate[] = "/tmp/Lab599CWStationTests.XXXXXX";
+    char *testRoot = mkdtemp(testRootTemplate);
+    if (!testRoot) return 1;
+    setenv("TX500_TEST_MODE", "1", 1);
+    setenv("TX500_TEST_ROOT", testRoot, 1);
+    setenv("CFFIXED_USER_HOME", testRoot, 1);
     @autoreleasepool {
         (void)argc; (void)argv;
         NSLog(@"Running TX-500 CW Station & Audio DSP Tests...");
@@ -38,12 +44,18 @@ int main(int argc, const char * argv[]) {
         AssertTrue(decoder.nominalPitchHz == 650.0, @"Default pitch is 650 Hz");
         [decoder setPitch:700.0];
         AssertTrue(decoder.nominalPitchHz == 700.0, @"Set pitch 700 Hz");
-        [decoder setPitch:200.0]; // Clamped to min 450
-        AssertTrue(decoder.nominalPitchHz == 450.0, @"Clamped min pitch 450 Hz");
-        [decoder setPitch:1200.0]; // Clamped to max 950
-        AssertTrue(decoder.nominalPitchHz == 950.0, @"Clamped max pitch 950 Hz");
+        [decoder setPitch:200.0]; // Clamped to min 300
+        AssertTrue(decoder.nominalPitchHz == 300.0, @"Clamped min pitch 300 Hz");
+        [decoder setPitch:1800.0]; // Clamped to max 1500
+        AssertTrue(decoder.nominalPitchHz == 1500.0, @"Clamped max pitch 1500 Hz");
+        [decoder setPitch:1225.0]; // Valid high pitch
+        AssertTrue(decoder.nominalPitchHz == 1225.0, @"Can set high pitch 1225 Hz");
         [decoder setPitch:650.0];
-        NSLog(@"PASS: Decoder pitch configuration and bounds clamping verified.");
+        [decoder setNominalWPM:5.0];
+        AssertTrue(decoder.estimatedWPM == 5.0, @"Nominal WPM can be set to 5 WPM");
+        [decoder setNominalWPM:3.0];
+        AssertTrue(decoder.estimatedWPM == 3.0, @"Nominal WPM can be set to 3 WPM");
+        NSLog(@"PASS: Decoder pitch & slow WPM (3-5 WPM) configuration verified.");
 
         // 3. Test Audio Devices Discovery
         [decoder refreshAudioDevices];
@@ -53,6 +65,7 @@ int main(int argc, const char * argv[]) {
         // 4. Test Synthetic Morse DSP Feed & Decoding
         // Feed synthetic "CQ" (.-.-. / -.-. --.-) into decoder
         decoder.afcEnabled = NO;
+        [decoder setNominalWPM:25.0];
         [decoder feedSyntheticMorseString:@"CQ" wpm:25.0 pitchHz:650.0];
         // Allow internal buffer to complete character breaks
         for (int i = 0; i < 15; i++) {
@@ -61,7 +74,16 @@ int main(int argc, const char * argv[]) {
 
         AssertTrue([decoder.rawDecodedText containsString:@"C"], @"Decoded C in CQ");
         AssertTrue([decoder.rawDecodedText containsString:@"Q"], @"Decoded Q in CQ");
-        NSLog(@"PASS: Real-Time Goertzel DSP Morse Audio Decoding verified (Decoded: '%@').", decoder.rawDecodedText);
+
+        // Test 5 WPM decoding specifically
+        [decoder clearBuffer];
+        [decoder setNominalWPM:5.0];
+        [decoder feedSyntheticMorseString:@"E" wpm:5.0 pitchHz:650.0];
+        for (int i = 0; i < 30; i++) {
+            [decoder feedSyntheticAudioWithFrequency:650.0 duration:0.05 isMark:NO];
+        }
+        AssertTrue([decoder.rawDecodedText containsString:@"E"], @"Decoded E at 5 WPM");
+        NSLog(@"PASS: Real-Time Goertzel DSP Morse Audio Decoding verified at both standard and slow 5 WPM.");
 
         // 5. Test Keyer Macro Expansion & Cut Numbers
         TX500CWKeyer *keyer = [[TX500CWKeyer alloc] init];
@@ -85,6 +107,10 @@ int main(int argc, const char * argv[]) {
             [sentCommands addObject:catCommand];
             return YES;
         };
+
+        keyer.wpm = 3;
+        [keyer transmitText:@"E" targetCall:@"" rst:@"" name:@"" qth:@""];
+        AssertTrue([sentCommands containsObject:@"KS003;"], @"Sent KS003; speed command for 3 WPM");
 
         keyer.wpm = 24;
         [keyer transmitText:@"CQ CQ DE EP2AES K" targetCall:@"" rst:@"" name:@"" qth:@""];
@@ -155,6 +181,7 @@ int main(int argc, const char * argv[]) {
         NSLog(@"PASS: ADIF 3.1 generation and file export verified.");
 
         NSLog(@"ALL TX-500 CW STATION AND AUDIO DSP TESTS PASSED! ✓");
+        [[NSFileManager defaultManager] removeItemAtPath:[NSString stringWithUTF8String:testRoot] error:nil];
     }
     return 0;
 }

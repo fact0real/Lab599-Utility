@@ -117,6 +117,30 @@
                                   signalDetected:sig];
     };
 
+    self.decoder.onAudioDevicesChanged = ^{
+        typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        [strongSelf updateAudioDeviceMenu];
+    };
+
+    self.decoder.onListeningStateChanged = ^(BOOL listening) {
+        typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        strongSelf.startStopDecoderButton.title = listening ? @"STOP DECODER" : @"START DECODER";
+        strongSelf.startStopDecoderButton.contentTintColor = listening ? NSColor.systemRedColor : NSColor.systemGreenColor;
+        if (strongSelf.decoderStateChangedHandler) strongSelf.decoderStateChangedHandler(listening);
+    };
+    self.decoder.onAudioError = ^(NSString *message) {
+        typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        if (strongSelf.logHandler) strongSelf.logHandler(message);
+        NSAlert *alert = [NSAlert new];
+        alert.messageText = @"Audio input unavailable";
+        alert.informativeText = message;
+        [alert addButtonWithTitle:@"OK"];
+        if (strongSelf.view.window) [alert beginSheetModalForWindow:strongSelf.view.window completionHandler:nil];
+    };
+
     // User click anywhere on Spectrum Waterfall tunes the pitch
     self.spectrumView.onPitchSelected = ^(double pitchHz) {
         typeof(self) strongSelf = weakSelf;
@@ -280,6 +304,7 @@
     [self.startStopDecoderButton.widthAnchor constraintEqualToConstant:130].active = YES;
 
     self.audioDevicePopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+    self.audioDevicePopup.toolTip = @"System Audio (Direct) receives audio playing on this Mac. Microphone and USB inputs receive external audio. macOS may ask for system audio recording permission.";
     self.audioDevicePopup.controlSize = NSControlSizeSmall;
     self.audioDevicePopup.font = [NSFont systemFontOfSize:11];
     self.audioDevicePopup.target = self;
@@ -301,8 +326,8 @@
 
     self.pitchSlider = [[NSSlider alloc] init];
     self.pitchSlider.controlSize = NSControlSizeSmall;
-    self.pitchSlider.minValue = 450.0;
-    self.pitchSlider.maxValue = 950.0;
+    self.pitchSlider.minValue = 300.0;
+    self.pitchSlider.maxValue = 1500.0;
     self.pitchSlider.doubleValue = self.decoder.nominalPitchHz;
     self.pitchSlider.target = self;
     self.pitchSlider.action = @selector(pitchSliderChanged:);
@@ -312,18 +337,18 @@
     self.pitchValueLabel = [NSTextField labelWithString:[NSString stringWithFormat:@"%.0fHz", self.decoder.nominalPitchHz]];
     self.pitchValueLabel.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightMedium];
     self.pitchValueLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.pitchValueLabel.widthAnchor constraintEqualToConstant:46].active = YES;
+    [self.pitchValueLabel.widthAnchor constraintEqualToConstant:54].active = YES;
 
-    pitchTitle.toolTip = @"Listening center pitch (RX Goertzel) & Transmitter sidetone (TX).";
-    self.pitchSlider.toolTip = @"Listening center pitch (RX Goertzel) & Transmitter sidetone (TX).";
-    self.pitchValueLabel.toolTip = @"Listening center pitch (RX Goertzel) & Transmitter sidetone (TX).";
+    pitchTitle.toolTip = @"Listening center pitch (RX Goertzel 300-1500 Hz) & Transmitter sidetone (TX).";
+    self.pitchSlider.toolTip = @"Listening center pitch (RX Goertzel 300-1500 Hz) & Transmitter sidetone (TX).";
+    self.pitchValueLabel.toolTip = @"Listening center pitch (RX Goertzel 300-1500 Hz) & Transmitter sidetone (TX).";
 
     self.afcCheckbox = [NSButton checkboxWithTitle:@"AFC" target:self action:@selector(toggleAFC:)];
     self.afcCheckbox.controlSize = NSControlSizeSmall;
     self.afcCheckbox.font = [NSFont systemFontOfSize:11];
     self.afcCheckbox.state = self.decoder.afcEnabled ? NSControlStateValueOn : NSControlStateValueOff;
     self.afcCheckbox.translatesAutoresizingMaskIntoConstraints = NO;
-    self.afcCheckbox.toolTip = @"Automatic Frequency Control (RX only): Dynamically tracks incoming audio pitch (400-950 Hz).";
+    self.afcCheckbox.toolTip = @"Automatic Frequency Control (RX only): Acquires incoming CW tones from 300 to 1500 Hz and holds the frequency through gaps.";
 
     // Speed group
     NSTextField *wpmTitle = [NSTextField labelWithString:@"Speed:"];
@@ -340,7 +365,7 @@
 
     self.wpmStepper = [[NSStepper alloc] init];
     self.wpmStepper.controlSize = NSControlSizeSmall;
-    self.wpmStepper.minValue = 10;
+    self.wpmStepper.minValue = 3;
     self.wpmStepper.maxValue = 45;
     self.wpmStepper.integerValue = self.keyer.wpm;
     self.wpmStepper.target = self;
@@ -834,9 +859,8 @@
         if (self.logHandler) self.logHandler(@"CW Audio Decoder stopped.");
     } else {
         [self.decoder startListening];
-        self.startStopDecoderButton.title = @"STOP DECODER";
-        self.startStopDecoderButton.contentTintColor = [NSColor systemRedColor];
-        if (self.logHandler) self.logHandler(@"CW Audio Decoder active: listening on selected audio stream.");
+        if (self.decoder.isListening && self.logHandler)
+            self.logHandler(@"CW Audio Decoder active: listening on selected audio stream.");
     }
     // Notify host so it can update the status bar pill (CW Decoding / Radio Ready)
     if (self.decoderStateChangedHandler) self.decoderStateChangedHandler(self.decoder.isListening);
@@ -881,32 +905,61 @@
     [self.audioDevicePopup removeAllItems];
     NSArray<NSDictionary<NSString *, NSString *> *> *devices = self.decoder.availableAudioInputDevices;
     if (devices.count == 0) {
-        [self.audioDevicePopup addItemWithTitle:@"Default Audio Input"];
+        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:@"Default Audio Input" action:nil keyEquivalent:@""];
+        item.representedObject = @"default";
+        [self.audioDevicePopup.menu addItem:item];
+        [self.audioDevicePopup selectItem:item];
         self.audioDevicePopup.enabled = YES;
         return;
     }
     self.audioDevicePopup.enabled = YES;
-    NSInteger selectedIdx = 0;
+    NSMenuItem *selectedItem = nil;
     for (NSInteger i = 0; i < (NSInteger)devices.count; i++) {
         NSDictionary *d = devices[i];
-        NSString *name = d[@"name"] ?: [NSString stringWithFormat:@"Audio Device %ld", (long)i];
-        [self.audioDevicePopup addItemWithTitle:name];
+        NSString *disp = d[@"displayName"] ?: d[@"name"] ?: [NSString stringWithFormat:@"Audio Device %ld", (long)i];
+        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:disp action:@selector(audioDeviceChanged:) keyEquivalent:@""];
+        item.target = self;
+        item.representedObject = d[@"uid"];
+        [self.audioDevicePopup.menu addItem:item];
         if (self.decoder.selectedAudioDeviceUID && [d[@"uid"] isEqualToString:self.decoder.selectedAudioDeviceUID]) {
-            selectedIdx = i;
+            selectedItem = item;
         }
     }
-    if (selectedIdx < self.audioDevicePopup.numberOfItems) {
-        [self.audioDevicePopup selectItemAtIndex:selectedIdx];
+
+    [self.audioDevicePopup.menu addItem:[NSMenuItem separatorItem]];
+    NSMenuItem *refreshItem = [[NSMenuItem alloc] initWithTitle:@"🔄 Refresh Audio Devices..." action:@selector(refreshAudioDevicesClicked:) keyEquivalent:@""];
+    refreshItem.target = self;
+    refreshItem.representedObject = @"__REFRESH__";
+    [self.audioDevicePopup.menu addItem:refreshItem];
+
+    if (selectedItem) {
+        [self.audioDevicePopup selectItem:selectedItem];
+    } else if (self.audioDevicePopup.numberOfItems > 0) {
+        [self.audioDevicePopup selectItemAtIndex:0];
+    }
+}
+
+- (void)refreshAudioDevicesClicked:(id)sender {
+    (void)sender;
+    [self.decoder refreshAudioDevices];
+    [self updateAudioDeviceMenu];
+    if (self.logHandler) {
+        self.logHandler(@"[CW Audio] Audio devices refreshed. USB interfaces re-enumerated.");
     }
 }
 
 - (void)audioDeviceChanged:(NSPopUpButton *)sender {
-    NSInteger idx = sender.indexOfSelectedItem;
-    NSArray *devices = self.decoder.availableAudioInputDevices;
-    if (idx >= 0 && idx < (NSInteger)devices.count) {
-        self.decoder.selectedAudioDeviceUID = devices[idx][@"uid"];
+    NSMenuItem *item = sender.selectedItem;
+    if (!item) return;
+    NSString *uid = item.representedObject;
+    if ([uid isEqualToString:@"__REFRESH__"]) {
+        [self refreshAudioDevicesClicked:sender];
+        return;
+    }
+    if (uid) {
+        self.decoder.selectedAudioDeviceUID = uid;
         if (self.logHandler) {
-            self.logHandler([NSString stringWithFormat:@"Selected audio input device: %@", devices[idx][@"name"]]);
+            self.logHandler([NSString stringWithFormat:@"Selected audio input device: %@", item.title]);
         }
         if (self.decoder.isListening) {
             // Re-open audio stream on the newly selected hardware device

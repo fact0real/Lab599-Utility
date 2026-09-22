@@ -68,6 +68,10 @@ typedef NS_ENUM(NSInteger, TX500FT8HunterCriteria) {
 @property (nonatomic, assign) BOOL resumeAutoCQAfterQSO;
 @property (nonatomic, copy, readonly) NSString *autoCQStatus;
 
+// Auto-Seq & Call 1st Configuration (WSJT-X Standard)
+@property (nonatomic, assign) BOOL autoSeqEnabled;   // default YES: WSJT-X standard automatic QSO sequencing
+@property (nonatomic, assign) BOOL callFirstEnabled; // default YES: Automatically answer callers responding to our CQ
+
 // Algorithm 2: Intelligent Auto-Hunter Configuration & Status
 @property (nonatomic, assign) BOOL isAutoHunterActive;
 @property (nonatomic, assign) TX500FT8HunterCriteria autoHunterCriteria;
@@ -75,6 +79,10 @@ typedef NS_ENUM(NSInteger, TX500FT8HunterCriteria) {
 @property (nonatomic, assign) BOOL autoHunterSkipWorked;    // default YES
 @property (nonatomic, copy) NSString *autoHunterContinent;  // @"ALL", @"EU", @"AS", @"NA", etc.
 @property (nonatomic, copy, readonly) NSString *autoHunterStatus;
+// Maximum number of TX-retry cycles per callsign before giving up (1–9, default 2).
+// Persisted in TX500_MaxReplyAttempts NSUserDefaults key.
+@property (nonatomic, assign) NSInteger maxReplyAttempts;
+
 
 // Session History & ADIF Log
 @property (nonatomic, strong, readonly) NSArray<TX500FT8LoggedQSO *> *sessionLog;
@@ -83,6 +91,7 @@ typedef NS_ENUM(NSInteger, TX500FT8HunterCriteria) {
 
 // Callbacks
 @property (nonatomic, copy, nullable) void (^onQSOStateChanged)(TX500FT8QSOPhase phase, NSString *statusText);
+@property (nonatomic, copy, nullable) void (^onDXStationEngaged)(NSString *dxCall, NSString *dxGrid, NSString *report, TX500FT8QSOPhase phase);
 @property (nonatomic, copy, nullable) void (^onQSOLogged)(TX500FT8LoggedQSO *qso);
 @property (nonatomic, copy, nullable) void (^onAlgorithmStatusUpdated)(NSString *autoCQStatus, NSString *autoHunterStatus);
 @property (nonatomic, copy, nullable) void (^logHandler)(NSString *line);
@@ -90,11 +99,18 @@ typedef NS_ENUM(NSInteger, TX500FT8HunterCriteria) {
 // High-Level Operator Controls
 - (void)startAutoCQWithLimit:(NSInteger)count;
 - (void)stopAutoCQ;
+- (void)setCallingCQState:(BOOL)callingCQ;
 
 - (void)startAutoHunter;
 - (void)stopAutoHunter;
+- (void)evaluateAutoHunterCandidates;
+
+// Last Decoded Slot Messages
+@property (nonatomic, strong, readonly, nullable) NSArray<TX500FT8Message *> *lastDecodedMessages;
+@property (nonatomic, assign, readonly) NSInteger lastDecodedParity;
 
 - (void)engageStation:(TX500FT8Message *)targetMessage;
+- (void)engageCaller:(TX500FT8Message *)caller inReplyToSlotParity:(NSInteger)slotParity;
 - (void)abortQSO;
 - (void)advanceToNextQSOStep;
 

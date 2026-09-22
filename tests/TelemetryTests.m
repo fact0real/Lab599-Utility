@@ -96,10 +96,10 @@ int main(void) {
         Check(rmData.sMeterDots == 30 && !rmData.rfPowerValid,
               @"RM0 retains 30 raw dots and does not fabricate watts");
 
-        BOOL rm1Ok = [TX500TelemetryEngine parseRMReply:@"RM10015;" intoData:rmData];
+        BOOL rm1Ok = [TX500TelemetryEngine parseRMReply:@"RM10002;" intoData:rmData];
         Check(rm1Ok && rmData.swrMeterValid, @"RM1 raw SWR-meter frame parsed");
-        Check(rmData.swrMeterDots == 15 && !rmData.swrValid,
-              @"RM1 retains 15 raw dots and does not fabricate an SWR ratio");
+        Check(rmData.swrMeterDots == 2 && rmData.swrValid, @"RM1 retains 2 dots and calibrates SWR ratio");
+        Check(fabs(rmData.swr - 1.6) < 0.05, @"RM1 2 dots calibrated to 1.6:1 SWR (matching TX-500 LCD)");
 
         // Voltage uses the documented LAB599 VL; command, not an RM meter selector.
         BOOL vlTenthsOK = [TX500TelemetryEngine parseVLReply:@"VL0121;" intoData:rmData];
@@ -160,6 +160,33 @@ int main(void) {
         Check(demoData.swrAverages.avg5m >= 1.0 && demoData.swrAverages.avg5m <= 4.0, @"5m SWR average in valid range");
         Check(demoData.temperatureAverages != nil && demoData.temperatureAverages.hasData, @"Temp averages populated");
         Check(demoData.temperatureAverages.avg5m >= 20.0 && demoData.temperatureAverages.avg5m <= 65.0, @"5m temp average in valid range");
+
+        // 7. Shared CAT transport keeps telemetry compatible with background FT8.
+        TX500TelemetryEngine *sharedEngine = [TX500TelemetryEngine new];
+        __block NSInteger queryCount = 0;
+        __block TXTelemetryData *sharedSnapshot = nil;
+        sharedEngine.catQueryHandler = ^NSString *(NSString *command, NSTimeInterval timeout) {
+            (void)timeout;
+            queryCount++;
+            if ([command isEqualToString:@"FA;"]) return @"FA00014074000;";
+            if ([command isEqualToString:@"MD;"]) return @"MD6;";
+            if ([command isEqualToString:@"PT;"]) return @"PT0;";
+            if ([command isEqualToString:@"SM0;"]) return @"SM00012;";
+            if ([command isEqualToString:@"PC;"]) return @"PC050;";
+            if ([command isEqualToString:@"VL;"]) return @"VL1380;";
+            return nil;
+        };
+        [sharedEngine startWithPort:nil interval:0.10 update:^(TXTelemetryData *data) {
+            sharedSnapshot = data;
+        } status:nil];
+        NSDate *deadline = [NSDate dateWithTimeIntervalSinceNow:1.0];
+        while (!sharedSnapshot && [deadline timeIntervalSinceNow] > 0) {
+            [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.02]];
+        }
+        [sharedEngine stop];
+        Check(queryCount >= 4, @"Telemetry used the serialized shared CAT query transport");
+        Check(sharedSnapshot.frequencyValid && sharedSnapshot.frequencyHz == 14074000,
+              @"Shared CAT transport produced a valid telemetry snapshot");
 
         printf("PASS: Telemetry validity, CAT parser, alarm, demo, and rolling-average checks passed.\n");
     }

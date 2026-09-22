@@ -43,6 +43,18 @@ extern NSString * const TX500LogbookDidChangeNotification;
 @property (nonatomic, copy) NSString *eqslStatus;    // "NONE", "QUEUED", "UPLOADED", "ERROR"
 @property (nonatomic, copy, nullable) NSString *imageURL;
 
+// Field Operations (POTA / SOTA / IOTA)
+@property (nonatomic, copy, nullable) NSString *myPotaRef;     // e.g. "US-0001", ADIF: MY_SIG_INFO (when MY_SIG=POTA)
+@property (nonatomic, copy, nullable) NSString *theirPotaRef;  // e.g. "US-0002", ADIF: SIG_INFO (when SIG=POTA)
+@property (nonatomic, copy, nullable) NSString *mySotaRef;     // e.g. "W6/NC-001", ADIF: MY_SOTA_REF
+@property (nonatomic, copy, nullable) NSString *theirSotaRef;  // e.g. "W6/NC-002", ADIF: SOTA_REF
+@property (nonatomic, copy, nullable) NSString *iotaRef;       // e.g. "NA-065", ADIF: IOTA
+
+// Geographical & Award Metadata
+@property (nonatomic, copy, nullable) NSString *cqZone;        // e.g. "05", ADIF: CQZ
+@property (nonatomic, copy, nullable) NSString *ituZone;       // e.g. "08", ADIF: ITUZ
+@property (nonatomic, copy, nullable) NSString *dxccCode;      // e.g. "291", ADIF: DXCC
+
 @property (nonatomic, assign) NSTimeInterval createdTimestamp;
 @property (nonatomic, assign) NSTimeInterval updatedTimestamp;
 
@@ -79,6 +91,20 @@ extern NSString * const TX500LogbookDidChangeNotification;
                                                   mode:(nullable NSString *)mode;
 - (NSInteger)totalContactCount;
 - (NSInteger)confirmedContactCount;
+
+// Callsign Intelligence & Dupe Checking
+- (NSArray<TX500LogRecord *> *)contactsForCallsign:(NSString *)callsign;
+- (NSDictionary<NSString *, id> *)dupeStatusForCallsign:(NSString *)callsign band:(nullable NSString *)band mode:(nullable NSString *)mode;
+
+// Award Tracking Engine (DXCC, WAS, WAZ, POTA, SOTA)
+- (NSDictionary<NSString *, id> *)awardStatistics;
+
+// Maidenhead Calculations & Great Circle Utilities
++ (BOOL)coordinatesForGrid:(NSString *)grid latitude:(double *)outLat longitude:(double *)outLon;
++ (double)distanceKmFromGrid:(NSString *)fromGrid toGrid:(NSString *)toGrid;
++ (double)bearingDegreesFromGrid:(NSString *)fromGrid toGrid:(NSString *)toGrid;
++ (NSString *)compassCardinalForDegrees:(double)degrees;
++ (NSString *)formattedBearingAndDistanceFromGrid:(NSString *)fromGrid toGrid:(NSString *)toGrid;
 
 // Cloud Status Updates
 - (BOOL)updateCloudStatusForUUID:(NSString *)uuid

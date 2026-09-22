@@ -10,6 +10,11 @@
 
 NSString * const TX500CloudSyncStatusDidChangeNotification = @"TX500CloudSyncStatusDidChangeNotification";
 
+static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
+    NSString *value = NSProcessInfo.processInfo.environment[@"TX500_TEST_MODE"];
+    return value.boolValue;
+}
+
 @implementation TX500CloudUploadItem
 - (instancetype)init {
     self = [super init];
@@ -76,6 +81,7 @@ NSString * const TX500CloudSyncStatusDidChangeNotification = @"TX500CloudSyncSta
 }
 
 + (nullable NSString *)discoverTQSLBinaryPath {
+    if (TX500CloudExternalSideEffectsAreDisabled()) return nil;
     NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
     NSString *custom = [ud stringForKey:@"TX500_LoTW_TQSLPath"];
     if (custom.length > 0 && [[NSFileManager defaultManager] isExecutableFileAtPath:custom]) {
@@ -99,7 +105,8 @@ NSString * const TX500CloudSyncStatusDidChangeNotification = @"TX500CloudSyncSta
 
 + (BOOL)synchronizeTQSLStorage {
     NSFileManager *fm = [NSFileManager defaultManager];
-    NSString *home = NSHomeDirectory();
+    NSString *testRoot = NSProcessInfo.processInfo.environment[@"TX500_TEST_ROOT"];
+    NSString *home = (TX500CloudExternalSideEffectsAreDisabled() && testRoot.length > 0) ? testRoot : NSHomeDirectory();
     NSString *tqslDir = [home stringByAppendingPathComponent:@".tqsl"];
     BOOL isDir = NO;
     if (![fm fileExistsAtPath:tqslDir isDirectory:&isDir]) {
@@ -147,6 +154,13 @@ NSString * const TX500CloudSyncStatusDidChangeNotification = @"TX500CloudSyncSta
                        completion:(nullable void (^)(BOOL overallSuccess, NSString *summary))completion {
     if (!record || record.callsign.length == 0) {
         if (completion) completion(NO, @"Empty record");
+        return;
+    }
+
+    // Automated tests exercise QSO completion and logging. They must never
+    // launch an installed TQSL app or contact a real cloud account.
+    if (TX500CloudExternalSideEffectsAreDisabled()) {
+        if (completion) completion(YES, @"External cloud side effects suppressed in test mode.");
         return;
     }
 
@@ -223,7 +237,9 @@ NSString * const TX500CloudSyncStatusDidChangeNotification = @"TX500CloudSyncSta
         }
 
         // 4. ARRL LoTW via TQSL
-        if (uploadLoTW && tqslPath.length > 0) {
+        // A configured station location is the user's explicit opt-in for LoTW.
+        // Merely having TrustedQSL installed must not launch it after a QSO.
+        if (uploadLoTW && tqslPath.length > 0 && lotwLoc.length > 0) {
             dispatch_group_enter(group);
             [self performLoTWUpload:record binaryPath:tqslPath location:lotwLoc password:lotwPass completion:^(BOOL ok, NSString *msg) {
                 if (ok) {
@@ -532,6 +548,98 @@ NSString * const TX500CloudSyncStatusDidChangeNotification = @"TX500CloudSyncSta
             [[NSFileManager defaultManager] removeItemAtPath:tempFile error:nil];
             dispatch_async(dispatch_get_main_queue(), ^{
                 if (completion) completion(NO, ex.reason ?: @"TQSL process execution failed");
+            });
+        }
+    });
+}
+
+- (void)signAndUploadContactsToLoTW:(NSArray<TX500LogRecord *> *)records completion:(nullable void (^)(BOOL success, NSString *message))completion {
+    if (TX500CloudExternalSideEffectsAreDisabled()) {
+        if (completion) completion(YES, @"TQSL LoTW upload suppressed in test mode.");
+        return;
+    }
+
+    NSString *tqslPath = [TX500CloudSyncEngine discoverTQSLBinaryPath];
+    if (!tqslPath) {
+        if (completion) completion(NO, @"TrustedQSL (tqsl) binary not found on this Mac. Please install TQSL from arrl.org.");
+        return;
+    }
+
+    NSArray<TX500LogRecord *> *targets = records;
+    if (!targets || targets.count == 0) {
+        NSMutableArray<TX500LogRecord *> *pending = [NSMutableArray array];
+        for (TX500LogRecord *r in [[TX500LogbookManager sharedManager] allContacts]) {
+            if (![r.lotwStatus isEqualToString:@"UPLOADED"] && ![r.lotwStatus isEqualToString:@"CONFIRMED"]) {
+                [pending addObject:r];
+            }
+        }
+        targets = pending;
+    }
+
+    if (targets.count == 0) {
+        if (completion) completion(YES, @"No pending contacts to upload to LoTW.");
+        return;
+    }
+
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    NSString *location = [ud stringForKey:@"TX500_LoTW_StationLocation"];
+    NSString *password = [ud stringForKey:@"TX500_LoTW_CertificatePassword"] ?: [ud stringForKey:@"TX500_LoTW_Password"];
+
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSString *tempFile = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"tx500_lotw_batch_%@.adi", [[NSUUID UUID] UUIDString]]];
+        NSMutableString *adif = [NSMutableString stringWithFormat:@"Lab599 TX-500 LoTW Export\n<ADIF_VER:5>3.1.4 <PROGRAMID:14>Lab599 Utility <EOH>\n\n"];
+        for (TX500LogRecord *r in targets) {
+            [adif appendString:[r adifRecordString]];
+        }
+
+        NSError *err = nil;
+        if (![adif writeToFile:tempFile atomically:YES encoding:NSUTF8StringEncoding error:&err]) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (completion) completion(NO, err.localizedDescription ?: @"Failed to write temporary ADIF");
+            });
+            return;
+        }
+
+        NSArray<NSString *> *args = [TX500CloudSyncEngine buildTQSLArgumentsForADIFPath:tempFile location:location password:password];
+
+        @try {
+            NSTask *task = [[NSTask alloc] init];
+            task.launchPath = tqslPath;
+            task.arguments = args;
+
+            NSPipe *pipe = [NSPipe pipe];
+            task.standardOutput = pipe;
+            task.standardError = pipe;
+
+            [task launch];
+            [task waitUntilExit];
+
+            NSData *data = [[pipe fileHandleForReading] readDataToEndOfFile];
+            NSString *outStr = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
+
+            [[NSFileManager defaultManager] removeItemAtPath:tempFile error:nil];
+            NSString *companionTq8 = [[tempFile stringByDeletingPathExtension] stringByAppendingPathExtension:@"tq8"];
+            [[NSFileManager defaultManager] removeItemAtPath:companionTq8 error:nil];
+
+            int code = task.terminationStatus;
+            BOOL ok = (code == 0 || code == 8 || code == 9 || code == 14);
+            NSString *resultMsg = ok ?
+                [NSString stringWithFormat:@"Successfully signed & uploaded %ld QSO(s) to LoTW via TQSL!", (long)targets.count] :
+                [NSString stringWithFormat:@"TQSL exited with code %d: %@", code, [outStr substringToIndex:MIN(100, outStr.length)]];
+
+            if (ok) {
+                for (TX500LogRecord *r in targets) {
+                    [[TX500LogbookManager sharedManager] updateCloudStatusForUUID:r.uuid service:@"LoTW" status:@"UPLOADED" error:nil];
+                }
+            }
+
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (completion) completion(ok, resultMsg);
+            });
+        } @catch (NSException *ex) {
+            [[NSFileManager defaultManager] removeItemAtPath:tempFile error:nil];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (completion) completion(NO, ex.reason ?: @"TQSL process failed to launch");
             });
         }
     });

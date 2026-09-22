@@ -46,6 +46,15 @@ typedef NS_ENUM(NSInteger, TX500WaterfallSpeed) {
 // Visual Theme Mode
 @property (nonatomic, assign) BOOL phosphorAmberTheme; // NO = Cyber Cyan/Green, YES = Classic Amber
 
+// Waterfall Dynamic Range Controls
+@property (nonatomic, assign) float waterfallFloorDb;        // e.g. -100 to -20 dBFS, default -80
+@property (nonatomic, assign) float waterfallDynamicRangeDb; // e.g. 20 to 80 dB, default 50
+
+// Interactive Callbacks (Graphic Filter Dragging & Click-to-Notch)
+@property (nonatomic, copy, nullable) void (^onFilterRangeChanged)(float lowCutHz, float highCutHz);
+@property (nonatomic, copy, nullable) void (^onNotchFrequencyChanged)(float notchFreqHz);
+@property (nonatomic, copy, nullable) void (^onFrequencyTuned)(float audioFreqHz);
+
 // Feed Data Methods
 - (void)updateSpectrumWithMagnitudes:(const float *)magnitudes count:(NSInteger)count sampleRate:(float)sampleRate;
 - (void)updateWaveformWithSamples:(const float *)samples count:(NSInteger)count;

@@ -16,7 +16,7 @@
 
 NS_ASSUME_NONNULL_BEGIN
 
-@interface TX500FT8StationController : NSObject <NSTableViewDataSource, NSTableViewDelegate>
+@interface TX500FT8StationController : NSObject <NSTableViewDataSource, NSTableViewDelegate, NSSplitViewDelegate>
 
 @property (nonatomic, strong, readonly) NSView *view;
 @property (nonatomic, strong, readonly) TX500FT8AudioEngine *audioEngine;
@@ -27,6 +27,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy, nullable) NSString *(^selectedPortProvider)(void);
 @property (nonatomic, copy, nullable) void (^logHandler)(NSString *line);
 @property (nonatomic, copy, nullable) BOOL (^serialCommandSender)(NSString *catCommand);
+@property (nonatomic, copy, nullable) BOOL (^pttControlHandler)(BOOL pttActive);
+@property (nonatomic, copy, nullable) NSString * _Nullable (^catQueryHandler)(NSString *catCommand, NSTimeInterval timeout);
 @property (nonatomic, copy, nullable) void (^stationStateChangedHandler)(BOOL isMonitoring);
 
 // Lifecycle & Protocol
@@ -37,6 +39,10 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)updateFrequencyHz:(uint64_t)freqHz mode:(NSString *)mode;
 - (void)reloadStationPreferences;
 - (void)setSimulationEnabled:(BOOL)enabled;
+- (void)refreshAudioTab;
+- (void)updateAudioDeviceMenus;
+- (void)toggleWideTables:(nullable id)sender;
+- (void)toggleFullHeight:(nullable id)sender;
 
 @end
 

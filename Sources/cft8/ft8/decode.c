@@ -187,6 +187,11 @@ static int ft4_sync_score(const ftx_waterfall_t* wf, const ftx_candidate_t* cand
     return score;
 }
 
+int ftx_candidate_sync_score(const ftx_waterfall_t* wf, const ftx_candidate_t* candidate)
+{
+    return (wf->protocol == FTX_PROTOCOL_FT4) ? ft4_sync_score(wf, candidate) : ft8_sync_score(wf, candidate);
+}
+
 int ftx_find_candidates(const ftx_waterfall_t* wf, int num_candidates, ftx_candidate_t heap[], int min_score)
 {
     int (*sync_fun)(const ftx_waterfall_t*, const ftx_candidate_t*) = (wf->protocol == FTX_PROTOCOL_FT4) ? ft4_sync_score : ft8_sync_score;

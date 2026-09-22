@@ -1,0 +1,98 @@
+{
+  "results" : [
+    {
+      "actual" : "OXIDE",
+      "passed" : true,
+      "expected" : "OXIDE",
+      "file" : "3",
+      "capture" : {
+        "frames" : 506880,
+        "centerHz" : 1223.7194406321853,
+        "wpm" : 13.043478260869557,
+        "text" : "OXIDE ",
+        "sampleRate" : 48000,
+        "buffers" : 990
+      }
+    },
+    {
+      "actual" : "FIELD",
+      "passed" : true,
+      "expected" : "FIELD",
+      "file" : "4",
+      "capture" : {
+        "frames" : 904704,
+        "centerHz" : 1224.2021654098339,
+        "wpm" : 13.043478260869557,
+        "text" : "OXIDE FIELD ",
+        "sampleRate" : 48000,
+        "buffers" : 1767
+      }
+    },
+    {
+      "actual" : "COLOR",
+      "passed" : true,
+      "expected" : "COLOR",
+      "file" : "5",
+      "capture" : {
+        "frames" : 1412608,
+        "centerHz" : 1223.9738023938655,
+        "wpm" : 13.043478260869557,
+        "text" : "OXIDE FIELD COLOR ",
+        "sampleRate" : 48000,
+        "buffers" : 2759
+      }
+    },
+    {
+      "actual" : "RELAY",
+      "passed" : true,
+      "expected" : "RELAY",
+      "file" : "6",
+      "capture" : {
+        "frames" : 1822720,
+        "centerHz" : 1223.6507112638369,
+        "wpm" : 13.043478260869557,
+        "text" : "OXIDE FIELD COLOR RELAY ",
+        "sampleRate" : 48000,
+        "buffers" : 3560
+      }
+    },
+    {
+      "actual" : "JAMMER",
+      "passed" : true,
+      "expected" : "JAMMER",
+      "file" : "7",
+      "capture" : {
+        "frames" : 2354176,
+        "centerHz" : 1223.7069915931709,
+        "wpm" : 13.043478260869557,
+        "text" : "OXIDE FIELD COLOR RELAY JAMMER ",
+        "sampleRate" : 48000,
+        "buffers" : 4598
+      }
+    },
+    {
+      "actual" : "S E EEEE COLD",
+      "passed" : false,
+      "expected" : "COLD",
+      "file" : "9",
+      "capture" : {
+        "frames" : 3800064,
+        "centerHz" : 1225.2380921222439,
+        "wpm" : 13.043478260869557,
+        "text" : "OXIDE FIELD COLOR RELAY JAMMER S E EEEE COLD ",
+        "sampleRate" : 48000,
+        "buffers" : 7422
+      }
+    }
+  ],
+  "passed" : false,
+  "capture" : {
+    "frames" : 3800576,
+    "centerHz" : 1225.2380921222439,
+    "wpm" : 13.043478260869557,
+    "text" : "OXIDE FIELD COLOR RELAY JAMMER S E EEEE COLD ",
+    "sampleRate" : 48000,
+    "buffers" : 7423
+  },
+  "version" : "2.170"
+}

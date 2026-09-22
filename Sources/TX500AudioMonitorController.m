@@ -10,6 +10,24 @@
 
 #define TX500_BOOKMARKS_KEY @"TX500AudioMonitorBookmarks_v2"
 
+@interface TX500VFOTextField : NSTextField
+@property (nonatomic, copy, nullable) void (^onScrolled)(NSInteger deltaUnits);
+@end
+
+@implementation TX500VFOTextField
+- (void)scrollWheel:(NSEvent *)event {
+    if (self.onScrolled) {
+        CGFloat dy = event.scrollingDeltaY;
+        if (fabs(dy) > 0.1) {
+            NSInteger step = (dy > 0) ? 1 : -1;
+            self.onScrolled(step);
+            return;
+        }
+    }
+    [super scrollWheel:event];
+}
+@end
+
 @interface TX500AudioMonitorController ()
 
 @property (nonatomic, strong, readwrite) NSView *view;
@@ -28,26 +46,33 @@
 @property (nonatomic, strong) NSTextField *recordTimerLabel;
 @property (nonatomic, strong) NSButton *revealRecordingsButton;
 @property (nonatomic, strong) NSButton *simulationButton;
+@property (nonatomic, strong) NSButton *instantReplayButton;
 
 // Visualizer Controls
 @property (nonatomic, strong) NSSegmentedControl *visualizerModeControl;
 @property (nonatomic, strong) NSSegmentedControl *waterfallSpeedControl;
 @property (nonatomic, strong) NSSegmentedControl *frequencySpanControl;
 @property (nonatomic, strong) NSSegmentedControl *visualThemeControl;
+@property (nonatomic, strong) NSSlider *waterfallFloorSlider;
+@property (nonatomic, strong) NSTextField *waterfallFloorLabel;
+@property (nonatomic, strong) NSSlider *waterfallDynRangeSlider;
+@property (nonatomic, strong) NSTextField *waterfallDynRangeLabel;
 
 // Transceiver VFO & Mode Controls
 @property (nonatomic, assign, readwrite) uint64_t currentFrequencyHz;
 @property (nonatomic, copy, readwrite) NSString *currentMode;
 @property (nonatomic, assign, readwrite) NSInteger currentSMeter;
-@property (nonatomic, strong) NSTextField *vfoFreqLabel;
+@property (nonatomic, strong) TX500VFOTextField *vfoFreqLabel;
 @property (nonatomic, strong) NSTextField *vfoBandLabel;
 @property (nonatomic, strong) NSTextField *sMeterLabel;
 @property (nonatomic, strong) NSSegmentedControl *modeSegmentControl;
+@property (nonatomic, strong) NSSegmentedControl *vfoStepSegmentControl;
+@property (nonatomic, assign) NSInteger currentTuningStepHz;
 @property (nonatomic, strong) NSTimer *catPollTimer;
 @property (nonatomic, assign) BOOL isCATPolling;
 
 // Quick Memory Bank Controls
-@property (nonatomic, strong) NSMutableArray<NSDictionary *> *bookmarks;
+@property (nonatomic, strong) NSMutableArray<NSDictionary *> *mutableBookmarks;
 @property (nonatomic, strong) NSPopUpButton *memoryPopup;
 @property (nonatomic, strong) NSButton *addBookmarkButton;
 @property (nonatomic, strong) NSButton *renameBookmarkButton;
@@ -66,10 +91,27 @@
 @property (nonatomic, strong) NSSlider *highCutSlider;
 @property (nonatomic, strong) NSTextField *highCutValueLabel;
 
-// Notch Filter Controls
+// Notch & Auto-Notch Filter Controls
 @property (nonatomic, strong) NSButton *notchCheckbox;
 @property (nonatomic, strong) NSSlider *notchFreqSlider;
 @property (nonatomic, strong) NSTextField *notchFreqValueLabel;
+@property (nonatomic, strong) NSButton *autoNotchCheckbox;
+@property (nonatomic, strong) NSTextField *autoNotchStatusLabel;
+
+// Spectral Noise Reduction (NR) Controls
+@property (nonatomic, strong) NSButton *nrCheckbox;
+@property (nonatomic, strong) NSSlider *nrDepthSlider;
+@property (nonatomic, strong) NSTextField *nrValueLabel;
+@property (nonatomic, strong) NSTextField *nrDepthValueLabel;
+
+// 3-Band Speech EQ Controls
+@property (nonatomic, strong) NSButton *eqCheckbox;
+@property (nonatomic, strong) NSSlider *eqLowSlider;
+@property (nonatomic, strong) NSSlider *eqMidSlider;
+@property (nonatomic, strong) NSSlider *eqHighSlider;
+@property (nonatomic, strong) NSTextField *eqLowLabel;
+@property (nonatomic, strong) NSTextField *eqMidLabel;
+@property (nonatomic, strong) NSTextField *eqHighLabel;
 
 // Squelch & Limiter Controls
 @property (nonatomic, strong) NSButton *squelchCheckbox;
@@ -84,6 +126,11 @@
 @property (nonatomic, strong) NSSlider *balanceSlider;
 @property (nonatomic, strong) NSTextField *balanceValueLabel;
 
+// Cable Guide Collapsible Card
+@property (nonatomic, strong) NSButton *guideDisclosureButton;
+@property (nonatomic, strong) NSTextField *guideContentLabel;
+@property (nonatomic, assign) BOOL isGuideCollapsed;
+
 @end
 
 @implementation TX500AudioMonitorController
@@ -95,7 +142,9 @@
         _currentFrequencyHz = 14074000; // Default 20m FT8
         _currentMode = @"USB";
         _currentSMeter = 7;
+        _currentTuningStepHz = 100;
         _isCATPolling = NO;
+        _isGuideCollapsed = [[NSUserDefaults standardUserDefaults] boolForKey:@"TX500_AudioCableGuideCollapsed"];
 
         [self loadBookmarksStorage];
         [self setupBindings];
@@ -120,15 +169,43 @@
     return v;
 }
 
+- (NSArray<NSDictionary *> *)bookmarks {
+    return [self.mutableBookmarks copy] ?: @[];
+}
+
 #pragma mark - Memory Bookmarks Storage
 
 - (void)loadBookmarksStorage {
     NSArray *saved = [[NSUserDefaults standardUserDefaults] arrayForKey:TX500_BOOKMARKS_KEY];
     if (saved && saved.count > 0) {
-        self.bookmarks = [saved mutableCopy];
+        self.mutableBookmarks = [saved mutableCopy];
+        BOOL modified = NO;
+        BOOL has30m = NO;
+        for (NSUInteger i = 0; i < self.mutableBookmarks.count; i++) {
+            NSMutableDictionary *d = [self.mutableBookmarks[i] mutableCopy];
+            uint64_t freq = [d[@"freq"] unsignedLongLongValue];
+            NSString *label = d[@"label"] ?: @"";
+            // Correct mislabeled 30m on 14.074 MHz -> 20m FT8
+            if (freq == 14074000 && [label containsString:@"30m"]) {
+                d[@"label"] = @"20m FT8";
+                self.mutableBookmarks[i] = d;
+                modified = YES;
+            }
+            if (freq == 10136000) {
+                has30m = YES;
+            }
+        }
+        if (!has30m) {
+            [self.mutableBookmarks insertObject:@{@"label": @"30m FT8", @"freq": @10136000, @"mode": @"DIG"} atIndex:1];
+            modified = YES;
+        }
+        if (modified) {
+            [self saveBookmarksStorage];
+        }
     } else {
-        self.bookmarks = [NSMutableArray arrayWithArray:@[
+        self.mutableBookmarks = [NSMutableArray arrayWithArray:@[
             @{@"label": @"20m FT8",           @"freq": @14074000, @"mode": @"DIG"},
+            @{@"label": @"30m FT8",           @"freq": @10136000, @"mode": @"DIG"},
             @{@"label": @"40m FT8",           @"freq": @7074000,  @"mode": @"DIG"},
             @{@"label": @"20m SSB Calling",   @"freq": @14200000, @"mode": @"USB"},
             @{@"label": @"40m SSB Calling",   @"freq": @7100000,  @"mode": @"LSB"},
@@ -144,7 +221,7 @@
 }
 
 - (void)saveBookmarksStorage {
-    [[NSUserDefaults standardUserDefaults] setObject:self.bookmarks forKey:TX500_BOOKMARKS_KEY];
+    [[NSUserDefaults standardUserDefaults] setObject:self.mutableBookmarks forKey:TX500_BOOKMARKS_KEY];
     [[NSUserDefaults standardUserDefaults] synchronize];
 }
 
@@ -152,6 +229,55 @@
 
 - (void)setupBindings {
     __weak typeof(self) weakSelf = self;
+
+    // Interactive Filter Dragging Callback
+    self.visualizerView.onFilterRangeChanged = ^(float lowCutHz, float highCutHz) {
+        typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        strongSelf.engine.lowCutHz = lowCutHz;
+        strongSelf.engine.highCutHz = highCutHz;
+        strongSelf.lowCutSlider.floatValue = lowCutHz;
+        strongSelf.lowCutValueLabel.stringValue = [NSString stringWithFormat:@"%.0f Hz", lowCutHz];
+        strongSelf.highCutSlider.floatValue = highCutHz;
+        strongSelf.highCutValueLabel.stringValue = [NSString stringWithFormat:@"%.0f Hz", highCutHz];
+    };
+
+    // Click-to-Notch Callback from Spectrum
+    self.visualizerView.onNotchFrequencyChanged = ^(float notchFreqHz) {
+        typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        strongSelf.engine.notchFreqHz = notchFreqHz;
+        strongSelf.engine.notchEnabled = YES;
+        strongSelf.visualizerView.notchFreqHz = notchFreqHz;
+        strongSelf.visualizerView.notchEnabled = YES;
+        strongSelf.notchCheckbox.state = NSControlStateValueOn;
+        strongSelf.notchFreqSlider.enabled = YES;
+        strongSelf.notchFreqSlider.floatValue = notchFreqHz;
+        strongSelf.notchFreqValueLabel.stringValue = [NSString stringWithFormat:@"%.0f Hz", notchFreqHz];
+        if (strongSelf.logHandler) {
+            strongSelf.logHandler([NSString stringWithFormat:@"Notch Filter set to %.0f Hz via Spectrum Click.", notchFreqHz]);
+        }
+    };
+
+    // Visualizer Frequency Tuning Callback
+    self.visualizerView.onFrequencyTuned = ^(float deltaHz) {
+        typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        [strongSelf tuneStep:(NSInteger)roundf(deltaHz)];
+    };
+
+    // Instant Replay Progress Callback
+    self.engine.onReplayProgressChanged = ^(BOOL isReplaying, float progress) {
+        typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        if (isReplaying) {
+            strongSelf.instantReplayButton.title = [NSString stringWithFormat:@"■ Stop 15s (%d%%)", (int)(progress * 100.0f)];
+            strongSelf.instantReplayButton.contentTintColor = [NSColor systemOrangeColor];
+        } else {
+            strongSelf.instantReplayButton.title = @"↺ Replay 15s";
+            strongSelf.instantReplayButton.contentTintColor = nil;
+        }
+    };
 
     self.engine.onMetricsUpdated = ^(float leftRmsDb, float rightRmsDb, float peakDb, BOOL clipping, BOOL squelchOpen) {
         typeof(weakSelf) strongSelf = weakSelf;
@@ -398,6 +524,14 @@
     topRow1.alignment = NSLayoutAttributeCenterY;
     topRow1.spacing = 8.0;
 
+    // Instant Replay 15s Button
+    self.instantReplayButton = [NSButton buttonWithTitle:@"↺ Replay 15s" target:self action:@selector(toggleInstantReplay:)];
+    self.instantReplayButton.bezelStyle = NSBezelStyleRounded;
+    self.instantReplayButton.controlSize = NSControlSizeSmall;
+    self.instantReplayButton.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
+    self.instantReplayButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.instantReplayButton.widthAnchor constraintEqualToConstant:105].active = YES;
+
     NSView *spacer2 = [NSView new];
     spacer2.translatesAutoresizingMaskIntoConstraints = NO;
     [spacer2 setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
@@ -405,6 +539,7 @@
     NSStackView *topRow2 = [NSStackView stackViewWithViews:@[
         self.recordDurationBox,
         self.recordButton,
+        self.instantReplayButton,
         self.dimButton,
         self.muteButton,
         spacer2,
@@ -441,7 +576,7 @@
     // Visualizer View
     self.visualizerView = [[TX500AudioVisualizerView alloc] initWithFrame:NSZeroRect];
     self.visualizerView.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.visualizerView.heightAnchor constraintEqualToConstant:170].active = YES;
+    [self.visualizerView.heightAnchor constraintEqualToConstant:185].active = YES;
 
     // Bottom Controls Bar: View Mode, Speed, Span, Palette
     NSTextField *modeLbl = [NSTextField labelWithString:@"Display:"];
@@ -477,6 +612,32 @@
     self.frequencySpanControl.controlSize = NSControlSizeSmall;
     self.frequencySpanControl.selectedSegment = 1; // 4 kHz
 
+    // Waterfall Floor Slider & Label
+    NSTextField *floorLbl = [NSTextField labelWithString:@"WF Floor:"];
+    floorLbl.font = [NSFont systemFontOfSize:10 weight:NSFontWeightMedium];
+    floorLbl.textColor = [NSColor secondaryLabelColor];
+
+    self.waterfallFloorSlider = [NSSlider sliderWithValue:-80.0 minValue:-110.0 maxValue:-30.0 target:self action:@selector(waterfallFloorChanged:)];
+    self.waterfallFloorSlider.controlSize = NSControlSizeSmall;
+    self.waterfallFloorSlider.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.waterfallFloorSlider.widthAnchor constraintEqualToConstant:65].active = YES;
+
+    self.waterfallFloorLabel = [NSTextField labelWithString:@"-80dB"];
+    self.waterfallFloorLabel.font = [NSFont monospacedSystemFontOfSize:9.5 weight:NSFontWeightBold];
+
+    // Waterfall Contrast / Dynamic Range Slider & Label
+    NSTextField *dynLbl = [NSTextField labelWithString:@"Contrast:"];
+    dynLbl.font = [NSFont systemFontOfSize:10 weight:NSFontWeightMedium];
+    dynLbl.textColor = [NSColor secondaryLabelColor];
+
+    self.waterfallDynRangeSlider = [NSSlider sliderWithValue:50.0 minValue:15.0 maxValue:90.0 target:self action:@selector(waterfallDynRangeChanged:)];
+    self.waterfallDynRangeSlider.controlSize = NSControlSizeSmall;
+    self.waterfallDynRangeSlider.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.waterfallDynRangeSlider.widthAnchor constraintEqualToConstant:65].active = YES;
+
+    self.waterfallDynRangeLabel = [NSTextField labelWithString:@"50dB"];
+    self.waterfallDynRangeLabel.font = [NSFont monospacedSystemFontOfSize:9.5 weight:NSFontWeightBold];
+
     NSTextField *themeLabel = [NSTextField labelWithString:@"Palette:"];
     themeLabel.font = [NSFont systemFontOfSize:10 weight:NSFontWeightMedium];
     themeLabel.textColor = [NSColor secondaryLabelColor];
@@ -503,7 +664,9 @@
 
     NSStackView *bRow2 = [NSStackView stackViewWithViews:@[
         speedLbl, self.waterfallSpeedControl,
-        spanLbl, self.frequencySpanControl
+        spanLbl, self.frequencySpanControl,
+        floorLbl, self.waterfallFloorSlider, self.waterfallFloorLabel,
+        dynLbl, self.waterfallDynRangeSlider, self.waterfallDynRangeLabel
     ]];
     bRow2.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     bRow2.alignment = NSLayoutAttributeCenterY;
@@ -555,11 +718,23 @@
     title.font = [NSFont systemFontOfSize:10.5 weight:NSFontWeightBold];
     title.textColor = [NSColor secondaryLabelColor];
 
-    // Digital Frequency Readout
-    self.vfoFreqLabel = [NSTextField labelWithString:@"14.074.000 MHz"];
-    self.vfoFreqLabel.font = [NSFont monospacedSystemFontOfSize:17 weight:NSFontWeightHeavy];
-    self.vfoFreqLabel.textColor = [NSColor colorWithCalibratedRed:0.2 green:0.85 blue:0.95 alpha:1.0];
-    self.vfoFreqLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    // Digital Frequency Readout with Scroll Wheel Tuning
+    TX500VFOTextField *vfoField = [TX500VFOTextField labelWithString:@"14.074.000 MHz"];
+    vfoField.font = [NSFont monospacedSystemFontOfSize:17 weight:NSFontWeightHeavy];
+    vfoField.textColor = [NSColor colorWithCalibratedRed:0.2 green:0.85 blue:0.95 alpha:1.0];
+    vfoField.toolTip = @"Scroll with mouse wheel or trackpad to fine-tune VFO frequency";
+    vfoField.translatesAutoresizingMaskIntoConstraints = NO;
+    __weak typeof(self) weakSelf = self;
+    vfoField.onScrolled = ^(NSInteger delta) {
+        typeof(weakSelf) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        if (delta > 0) {
+            [strongSelf tuneStep:(NSInteger)[strongSelf currentVfoStepHz]];
+        } else if (delta < 0) {
+            [strongSelf tuneStep:-(NSInteger)[strongSelf currentVfoStepHz]];
+        }
+    };
+    self.vfoFreqLabel = vfoField;
 
     self.vfoBandLabel = [NSTextField labelWithString:@"20m Band"];
     self.vfoBandLabel.font = [NSFont systemFontOfSize:10.5 weight:NSFontWeightBold];
@@ -574,19 +749,24 @@
     freqHeaderStack.alignment = NSLayoutAttributeBaseline;
     freqHeaderStack.spacing = 8.0;
 
-    // Step Tuning Buttons
-    NSButton *m5k = [NSButton buttonWithTitle:@"◄ -5k" target:self action:@selector(stepDown5k:)];
-    NSButton *m1k = [NSButton buttonWithTitle:@"◄ -1k" target:self action:@selector(stepDown1k:)];
-    NSButton *p1k = [NSButton buttonWithTitle:@"+1k ►" target:self action:@selector(stepUp1k:)];
-    NSButton *p5k = [NSButton buttonWithTitle:@"+5k ►" target:self action:@selector(stepUp5k:)];
+    // Finer VFO Step Tuning Controls (10 Hz, 100 Hz, 500 Hz, 1 kHz, 5 kHz)
+    self.vfoStepSegmentControl = [NSSegmentedControl segmentedControlWithLabels:@[@"10 Hz", @"100 Hz", @"500 Hz", @"1 kHz", @"5 kHz"]
+                                                                  trackingMode:NSSegmentSwitchTrackingSelectOne
+                                                                        target:self
+                                                                        action:@selector(vfoStepChanged:)];
+    self.vfoStepSegmentControl.controlSize = NSControlSizeSmall;
+    self.vfoStepSegmentControl.selectedSegment = 3; // Default 1 kHz
+    self.vfoStepSegmentControl.translatesAutoresizingMaskIntoConstraints = NO;
 
-    for (NSButton *btn in @[m5k, m1k, p1k, p5k]) {
+    NSButton *stepDownBtn = [NSButton buttonWithTitle:@"◄ Step" target:self action:@selector(stepDownActive:)];
+    NSButton *stepUpBtn = [NSButton buttonWithTitle:@"Step ►" target:self action:@selector(stepUpActive:)];
+    for (NSButton *btn in @[stepDownBtn, stepUpBtn]) {
         btn.bezelStyle = NSBezelStyleRounded;
         btn.controlSize = NSControlSizeSmall;
-        btn.font = [NSFont monospacedSystemFontOfSize:10 weight:NSFontWeightMedium];
+        btn.font = [NSFont systemFontOfSize:10.5 weight:NSFontWeightMedium];
     }
 
-    NSStackView *stepStack = [NSStackView stackViewWithViews:@[m5k, m1k, p1k, p5k]];
+    NSStackView *stepStack = [NSStackView stackViewWithViews:@[stepDownBtn, self.vfoStepSegmentControl, stepUpBtn]];
     stepStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     stepStack.spacing = 4.0;
 
@@ -667,6 +847,7 @@
 
     NSArray<NSDictionary *> *quickChips = @[
         @{@"label": @"14.074 DIG", @"freq": @14074000, @"mode": @"DIG"},
+        @{@"label": @"10.136 DIG", @"freq": @10136000, @"mode": @"DIG"},
         @{@"label": @"7.074 DIG",  @"freq": @7074000,  @"mode": @"DIG"},
         @{@"label": @"14.200 USB", @"freq": @14200000, @"mode": @"USB"},
         @{@"label": @"7.100 LSB",  @"freq": @7100000,  @"mode": @"LSB"},
@@ -910,10 +1091,14 @@
     cutRow.spacing = 16.0;
     cutRow.translatesAutoresizingMaskIntoConstraints = NO;
 
-    // Notch & Squelch Row
-    self.notchCheckbox = [NSButton checkboxWithTitle:@"Notch Filter" target:self action:@selector(notchToggled:)];
+    // Notch & Auto-Notch Column
+    self.notchCheckbox = [NSButton checkboxWithTitle:@"Notch" target:self action:@selector(notchToggled:)];
     self.notchCheckbox.controlSize = NSControlSizeSmall;
     self.notchCheckbox.font = [NSFont systemFontOfSize:10 weight:NSFontWeightMedium];
+
+    self.autoNotchCheckbox = [NSButton checkboxWithTitle:@"Auto-Notch (ANF)" target:self action:@selector(autoNotchToggled:)];
+    self.autoNotchCheckbox.controlSize = NSControlSizeSmall;
+    self.autoNotchCheckbox.font = [NSFont systemFontOfSize:10 weight:NSFontWeightMedium];
 
     self.notchFreqValueLabel = [NSTextField labelWithString:@"1000 Hz"];
     self.notchFreqValueLabel.font = [NSFont monospacedSystemFontOfSize:10 weight:NSFontWeightBold];
@@ -923,14 +1108,17 @@
     self.notchFreqSlider.enabled = NO;
     self.notchFreqSlider.translatesAutoresizingMaskIntoConstraints = NO;
 
-    NSStackView *notchHeader = [NSStackView stackViewWithViews:@[self.notchCheckbox, [NSView new], self.notchFreqValueLabel]];
+    NSStackView *notchHeader = [NSStackView stackViewWithViews:@[self.notchCheckbox, self.autoNotchCheckbox, [NSView new], self.notchFreqValueLabel]];
     notchHeader.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    [notchHeader.subviews[1] setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+    notchHeader.alignment = NSLayoutAttributeCenterY;
+    notchHeader.spacing = 6.0;
+    [notchHeader.subviews[2] setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
 
     NSStackView *notchCol = [NSStackView stackViewWithViews:@[notchHeader, self.notchFreqSlider]];
     notchCol.orientation = NSUserInterfaceLayoutOrientationVertical;
     notchCol.translatesAutoresizingMaskIntoConstraints = NO;
 
+    // Squelch Column
     self.squelchLED = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 7, 7)];
     self.squelchLED.wantsLayer = YES;
     self.squelchLED.layer.cornerRadius = 3.5;
@@ -967,32 +1155,140 @@
     notchSqRow.spacing = 16.0;
     notchSqRow.translatesAutoresizingMaskIntoConstraints = NO;
 
-    // Limiter Checkbox
-    self.limiterCheckbox = [NSButton checkboxWithTitle:@"Ear Protection Peak Limiter (AGC Soft Knee)" target:self action:@selector(limiterToggled:)];
+    // LMS Noise Reduction & AGC Limiter Row
+    self.nrCheckbox = [NSButton checkboxWithTitle:@"LMS Noise Reduction (NR)" target:self action:@selector(nrToggled:)];
+    self.nrCheckbox.controlSize = NSControlSizeSmall;
+    self.nrCheckbox.font = [NSFont systemFontOfSize:10 weight:NSFontWeightMedium];
+
+    self.nrDepthValueLabel = [NSTextField labelWithString:@"Depth: 5"];
+    self.nrDepthValueLabel.font = [NSFont monospacedSystemFontOfSize:10 weight:NSFontWeightBold];
+
+    self.nrDepthSlider = [NSSlider sliderWithValue:5 minValue:1 maxValue:10 target:self action:@selector(nrDepthChanged:)];
+    self.nrDepthSlider.controlSize = NSControlSizeSmall;
+    self.nrDepthSlider.enabled = NO;
+    self.nrDepthSlider.translatesAutoresizingMaskIntoConstraints = NO;
+
+    NSStackView *nrHeader = [NSStackView stackViewWithViews:@[self.nrCheckbox, [NSView new], self.nrDepthValueLabel]];
+    nrHeader.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    nrHeader.alignment = NSLayoutAttributeCenterY;
+    [nrHeader.subviews[1] setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    NSStackView *nrCol = [NSStackView stackViewWithViews:@[nrHeader, self.nrDepthSlider]];
+    nrCol.orientation = NSUserInterfaceLayoutOrientationVertical;
+    nrCol.translatesAutoresizingMaskIntoConstraints = NO;
+
+    self.limiterCheckbox = [NSButton checkboxWithTitle:@"Ear Protection Limiter (AGC Knee)" target:self action:@selector(limiterToggled:)];
     self.limiterCheckbox.controlSize = NSControlSizeSmall;
     self.limiterCheckbox.font = [NSFont systemFontOfSize:10 weight:NSFontWeightMedium];
     self.limiterCheckbox.state = NSControlStateValueOn;
+
+    NSTextField *limiterHint = [NSTextField labelWithString:@"Soft-knee clipping & fast attack limiter"];
+    limiterHint.font = [NSFont systemFontOfSize:9.5 weight:NSFontWeightRegular];
+    limiterHint.textColor = [NSColor secondaryLabelColor];
+
+    NSStackView *limiterCol = [NSStackView stackViewWithViews:@[self.limiterCheckbox, limiterHint]];
+    limiterCol.orientation = NSUserInterfaceLayoutOrientationVertical;
+    limiterCol.alignment = NSLayoutAttributeLeading;
+    limiterCol.spacing = 3.0;
+    limiterCol.translatesAutoresizingMaskIntoConstraints = NO;
+
+    NSStackView *nrLimiterRow = [NSStackView stackViewWithViews:@[nrCol, limiterCol]];
+    nrLimiterRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    nrLimiterRow.distribution = NSStackViewDistributionFillEqually;
+    nrLimiterRow.spacing = 16.0;
+    nrLimiterRow.translatesAutoresizingMaskIntoConstraints = NO;
+
+    // 3-Band Speech EQ Row
+    self.eqCheckbox = [NSButton checkboxWithTitle:@"3-Band Speech Equalizer" target:self action:@selector(eqToggled:)];
+    self.eqCheckbox.controlSize = NSControlSizeSmall;
+    self.eqCheckbox.font = [NSFont systemFontOfSize:10 weight:NSFontWeightMedium];
+
+    NSTextField *eqHint = [NSTextField labelWithString:@"(Low 250 Hz • Mid 1.8 kHz • High 3.2 kHz)"];
+    eqHint.font = [NSFont systemFontOfSize:9.5 weight:NSFontWeightRegular];
+    eqHint.textColor = [NSColor secondaryLabelColor];
+
+    NSStackView *eqTitleRow = [NSStackView stackViewWithViews:@[self.eqCheckbox, eqHint]];
+    eqTitleRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    eqTitleRow.spacing = 6.0;
+
+    // Low EQ (250 Hz)
+    NSTextField *lowEqTitle = [NSTextField labelWithString:@"Low 250Hz:"];
+    lowEqTitle.font = [NSFont systemFontOfSize:9.5 weight:NSFontWeightMedium];
+    self.eqLowLabel = [NSTextField labelWithString:@"0.0 dB"];
+    self.eqLowLabel.font = [NSFont monospacedSystemFontOfSize:9.5 weight:NSFontWeightBold];
+    NSStackView *lowEqHdr = [NSStackView stackViewWithViews:@[lowEqTitle, [NSView new], self.eqLowLabel]];
+    lowEqHdr.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    [lowEqHdr.subviews[1] setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    self.eqLowSlider = [NSSlider sliderWithValue:0.0 minValue:-12.0 maxValue:12.0 target:self action:@selector(eqLowChanged:)];
+    self.eqLowSlider.controlSize = NSControlSizeSmall;
+    self.eqLowSlider.enabled = NO;
+    self.eqLowSlider.translatesAutoresizingMaskIntoConstraints = NO;
+    NSStackView *eqLowCol = [NSStackView stackViewWithViews:@[lowEqHdr, self.eqLowSlider]];
+    eqLowCol.orientation = NSUserInterfaceLayoutOrientationVertical;
+
+    // Mid EQ (1.8 kHz)
+    NSTextField *midEqTitle = [NSTextField labelWithString:@"Mid 1.8kHz:"];
+    midEqTitle.font = [NSFont systemFontOfSize:9.5 weight:NSFontWeightMedium];
+    self.eqMidLabel = [NSTextField labelWithString:@"0.0 dB"];
+    self.eqMidLabel.font = [NSFont monospacedSystemFontOfSize:9.5 weight:NSFontWeightBold];
+    NSStackView *midEqHdr = [NSStackView stackViewWithViews:@[midEqTitle, [NSView new], self.eqMidLabel]];
+    midEqHdr.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    [midEqHdr.subviews[1] setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    self.eqMidSlider = [NSSlider sliderWithValue:0.0 minValue:-12.0 maxValue:12.0 target:self action:@selector(eqMidChanged:)];
+    self.eqMidSlider.controlSize = NSControlSizeSmall;
+    self.eqMidSlider.enabled = NO;
+    self.eqMidSlider.translatesAutoresizingMaskIntoConstraints = NO;
+    NSStackView *eqMidCol = [NSStackView stackViewWithViews:@[midEqHdr, self.eqMidSlider]];
+    eqMidCol.orientation = NSUserInterfaceLayoutOrientationVertical;
+
+    // High EQ (3.2 kHz)
+    NSTextField *highEqTitle = [NSTextField labelWithString:@"High 3.2kHz:"];
+    highEqTitle.font = [NSFont systemFontOfSize:9.5 weight:NSFontWeightMedium];
+    self.eqHighLabel = [NSTextField labelWithString:@"0.0 dB"];
+    self.eqHighLabel.font = [NSFont monospacedSystemFontOfSize:9.5 weight:NSFontWeightBold];
+    NSStackView *highEqHdr = [NSStackView stackViewWithViews:@[highEqTitle, [NSView new], self.eqHighLabel]];
+    highEqHdr.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    [highEqHdr.subviews[1] setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    self.eqHighSlider = [NSSlider sliderWithValue:0.0 minValue:-12.0 maxValue:12.0 target:self action:@selector(eqHighChanged:)];
+    self.eqHighSlider.controlSize = NSControlSizeSmall;
+    self.eqHighSlider.enabled = NO;
+    self.eqHighSlider.translatesAutoresizingMaskIntoConstraints = NO;
+    NSStackView *eqHighCol = [NSStackView stackViewWithViews:@[highEqHdr, self.eqHighSlider]];
+    eqHighCol.orientation = NSUserInterfaceLayoutOrientationVertical;
+
+    NSStackView *eqSlidersRow = [NSStackView stackViewWithViews:@[eqLowCol, eqMidCol, eqHighCol]];
+    eqSlidersRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    eqSlidersRow.distribution = NSStackViewDistributionFillEqually;
+    eqSlidersRow.spacing = 12.0;
+    eqSlidersRow.translatesAutoresizingMaskIntoConstraints = NO;
 
     NSStackView *vStack = [NSStackView stackViewWithViews:@[
         title,
         presetRow,
         cutRow,
         notchSqRow,
-        self.limiterCheckbox
+        nrLimiterRow,
+        eqTitleRow,
+        eqSlidersRow
     ]];
     vStack.orientation = NSUserInterfaceLayoutOrientationVertical;
     vStack.alignment = NSLayoutAttributeLeading;
-    vStack.spacing = 6.0;
+    vStack.spacing = 5.0;
     vStack.translatesAutoresizingMaskIntoConstraints = NO;
     [container addSubview:vStack];
 
     [NSLayoutConstraint activateConstraints:@[
-        [vStack.topAnchor constraintEqualToAnchor:container.topAnchor constant:8],
+        [vStack.topAnchor constraintEqualToAnchor:container.topAnchor constant:7],
         [vStack.leadingAnchor constraintEqualToAnchor:container.leadingAnchor constant:10],
         [vStack.trailingAnchor constraintEqualToAnchor:container.trailingAnchor constant:-10],
-        [vStack.bottomAnchor constraintEqualToAnchor:container.bottomAnchor constant:-8],
+        [vStack.bottomAnchor constraintEqualToAnchor:container.bottomAnchor constant:-7],
         [cutRow.widthAnchor constraintEqualToAnchor:vStack.widthAnchor],
-        [notchSqRow.widthAnchor constraintEqualToAnchor:vStack.widthAnchor]
+        [notchSqRow.widthAnchor constraintEqualToAnchor:vStack.widthAnchor],
+        [nrLimiterRow.widthAnchor constraintEqualToAnchor:vStack.widthAnchor],
+        [eqSlidersRow.widthAnchor constraintEqualToAnchor:vStack.widthAnchor]
     ]];
 
     return container;
@@ -1003,20 +1299,24 @@
 - (NSView *)buildCableGuideCard {
     NSView *container = [self createCardView];
 
-    NSTextField *title = [NSTextField labelWithString:@"AD-508 HARDWARE CABLING & OPERATION GUIDE"];
-    title.font = [NSFont systemFontOfSize:10.5 weight:NSFontWeightBold];
-    title.textColor = [NSColor secondaryLabelColor];
+    self.guideDisclosureButton = [NSButton buttonWithTitle:(_isGuideCollapsed ? @"▶ AD-508 HARDWARE CABLING & OPERATION GUIDE" : @"▼ AD-508 HARDWARE CABLING & OPERATION GUIDE")
+                                                    target:self
+                                                    action:@selector(toggleCableGuide:)];
+    self.guideDisclosureButton.bezelStyle = NSBezelStyleInline;
+    self.guideDisclosureButton.font = [NSFont systemFontOfSize:10.5 weight:NSFontWeightBold];
+    self.guideDisclosureButton.contentTintColor = [NSColor secondaryLabelColor];
 
-    NSTextField *guide = [NSTextField wrappingLabelWithString:
+    self.guideContentLabel = [NSTextField wrappingLabelWithString:
         @"• Hardware Connection: Connect the 7-pin GX12 connector of your official Lab599 AD-508 cable to the TX-500 REM/DATA port. Connect the USB-C end directly to your Mac. macOS natively recognizes the built-in USB Audio Class codec without third-party drivers.\n"
         @"• Transceiver Settings: For cleanest audio, adjust the radio's AF Gain knob or set DIG Audio Level (Menu 27/28) to nominal. Click 'LISTEN LIVE' to monitor radio audio with ultra-low latency directly on your laptop speakers or headphones."
     ];
-    guide.translatesAutoresizingMaskIntoConstraints = NO;
-    [guide setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
-    guide.font = [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
-    guide.textColor = [NSColor secondaryLabelColor];
+    self.guideContentLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.guideContentLabel setContentCompressionResistancePriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+    self.guideContentLabel.font = [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
+    self.guideContentLabel.textColor = [NSColor secondaryLabelColor];
+    self.guideContentLabel.hidden = _isGuideCollapsed;
 
-    NSStackView *vStack = [NSStackView stackViewWithViews:@[title, guide]];
+    NSStackView *vStack = [NSStackView stackViewWithViews:@[self.guideDisclosureButton, self.guideContentLabel]];
     vStack.orientation = NSUserInterfaceLayoutOrientationVertical;
     vStack.alignment = NSLayoutAttributeLeading;
     vStack.spacing = 4.0;
@@ -1024,11 +1324,11 @@
     [container addSubview:vStack];
 
     [NSLayoutConstraint activateConstraints:@[
-        [vStack.topAnchor constraintEqualToAnchor:container.topAnchor constant:8],
+        [vStack.topAnchor constraintEqualToAnchor:container.topAnchor constant:6],
         [vStack.leadingAnchor constraintEqualToAnchor:container.leadingAnchor constant:10],
         [vStack.trailingAnchor constraintEqualToAnchor:container.trailingAnchor constant:-10],
-        [vStack.bottomAnchor constraintEqualToAnchor:container.bottomAnchor constant:-8],
-        [guide.widthAnchor constraintEqualToAnchor:vStack.widthAnchor]
+        [vStack.bottomAnchor constraintEqualToAnchor:container.bottomAnchor constant:-6],
+        [self.guideContentLabel.widthAnchor constraintEqualToAnchor:vStack.widthAnchor]
     ]];
 
     return container;
@@ -1039,22 +1339,54 @@
 - (void)updateDeviceMenus {
     [self.inputDevicePopup removeAllItems];
     for (TX500AudioDeviceItem *item in self.engine.inputDevices) {
-        NSString *disp = item.isAD508 ? [NSString stringWithFormat:@"★ %@ (AD-508 USB-C)", item.name] : item.name;
+        NSString *disp = item.name;
+        if (item.isAD508) {
+            disp = [NSString stringWithFormat:@"★ %@ (AD-508 USB-C)", item.name];
+        } else if (item.isUSB) {
+            disp = [NSString stringWithFormat:@"★ %@ (Radio USB Audio)", item.name];
+        } else if (item.isVirtual) {
+            disp = [NSString stringWithFormat:@"%@ (Virtual)", item.name];
+        }
         [self.inputDevicePopup addItemWithTitle:disp];
         self.inputDevicePopup.lastItem.representedObject = item.uid;
         if ([item.uid isEqualToString:self.engine.selectedInputDeviceUID]) {
             [self.inputDevicePopup selectItem:self.inputDevicePopup.lastItem];
         }
     }
+    [self.inputDevicePopup.menu addItem:[NSMenuItem separatorItem]];
+    NSMenuItem *refreshIn = [[NSMenuItem alloc] initWithTitle:@"🔄 Refresh Audio Devices..." action:@selector(refreshAudioDevicesAction:) keyEquivalent:@""];
+    refreshIn.target = self;
+    refreshIn.representedObject = @"__REFRESH__";
+    [self.inputDevicePopup.menu addItem:refreshIn];
 
     [self.outputDevicePopup removeAllItems];
     for (TX500AudioDeviceItem *item in self.engine.outputDevices) {
-        [self.outputDevicePopup addItemWithTitle:item.name];
+        NSString *disp = item.name;
+        if (item.isAD508) {
+            disp = [NSString stringWithFormat:@"★ %@ (AD-508 USB-C)", item.name];
+        } else if (item.isUSB) {
+            disp = [NSString stringWithFormat:@"★ %@ (Radio USB Audio)", item.name];
+        } else if (item.isVirtual) {
+            disp = [NSString stringWithFormat:@"%@ (Virtual)", item.name];
+        }
+        [self.outputDevicePopup addItemWithTitle:disp];
         self.outputDevicePopup.lastItem.representedObject = item.uid;
         if ([item.uid isEqualToString:self.engine.selectedOutputDeviceUID]) {
             [self.outputDevicePopup selectItem:self.outputDevicePopup.lastItem];
         }
     }
+    [self.outputDevicePopup.menu addItem:[NSMenuItem separatorItem]];
+    NSMenuItem *refreshOut = [[NSMenuItem alloc] initWithTitle:@"🔄 Refresh Audio Devices..." action:@selector(refreshAudioDevicesAction:) keyEquivalent:@""];
+    refreshOut.target = self;
+    refreshOut.representedObject = @"__REFRESH__";
+    [self.outputDevicePopup.menu addItem:refreshOut];
+}
+
+- (void)refreshAudioDevicesAction:(id)sender {
+    (void)sender;
+    [self.engine refreshDevices];
+    [self updateDeviceMenus];
+    [self updateHardwareStatusPill];
 }
 
 - (void)updateHardwareStatusPill {
@@ -1133,7 +1465,7 @@
 
 - (void)reloadMemoryPopup {
     [self.memoryPopup removeAllItems];
-    for (NSDictionary *d in self.bookmarks) {
+    for (NSDictionary *d in self.mutableBookmarks) {
         double mhz = [d[@"freq"] doubleValue] / 1000000.0;
         NSString *title = [NSString stringWithFormat:@"%@ • %.3f MHz (%@)", d[@"label"], mhz, d[@"mode"]];
         [self.memoryPopup addItemWithTitle:title];
@@ -1141,6 +1473,32 @@
 }
 
 #pragma mark - VFO & CAT Actions
+
+- (uint64_t)currentVfoStepHz {
+    switch (self.vfoStepSegmentControl.selectedSegment) {
+        case 0: return 10;
+        case 1: return 100;
+        case 2: return 500;
+        case 3: return 1000;
+        case 4: return 5000;
+        default: return 1000;
+    }
+}
+
+- (void)vfoStepChanged:(NSSegmentedControl *)sender {
+    (void)sender;
+    _currentTuningStepHz = [self currentVfoStepHz];
+}
+
+- (void)stepDownActive:(id)sender {
+    (void)sender;
+    [self tuneStep:-(NSInteger)[self currentVfoStepHz]];
+}
+
+- (void)stepUpActive:(id)sender {
+    (void)sender;
+    [self tuneStep:(NSInteger)[self currentVfoStepHz]];
+}
 
 - (void)stepDown5k:(id)sender { [self tuneStep:-5000]; }
 - (void)stepDown1k:(id)sender { [self tuneStep:-1000]; }
@@ -1218,8 +1576,8 @@
 
 - (void)memoryPopupSelected:(NSPopUpButton *)sender {
     NSInteger idx = sender.indexOfSelectedItem;
-    if (idx >= 0 && idx < (NSInteger)self.bookmarks.count) {
-        NSDictionary *item = self.bookmarks[idx];
+    if (idx >= 0 && idx < (NSInteger)self.mutableBookmarks.count) {
+        NSDictionary *item = self.mutableBookmarks[idx];
         uint64_t freq = [item[@"freq"] unsignedLongLongValue];
         NSString *mode = item[@"mode"];
         if (freq > 0) [self tuneRadioToFrequencyHz:freq];
@@ -1267,9 +1625,9 @@
 - (void)renameBookmarkClicked:(id)sender {
     (void)sender;
     NSInteger idx = self.memoryPopup.indexOfSelectedItem;
-    if (idx < 0 || idx >= (NSInteger)self.bookmarks.count) return;
+    if (idx < 0 || idx >= (NSInteger)self.mutableBookmarks.count) return;
 
-    NSDictionary *current = self.bookmarks[idx];
+    NSDictionary *current = self.mutableBookmarks[idx];
     NSString *currentLabel = current[@"label"] ?: @"";
 
     NSAlert *alert = [NSAlert new];
@@ -1289,7 +1647,7 @@
         if (newName.length > 0) {
             NSMutableDictionary *mut = [current mutableCopy];
             mut[@"label"] = newName;
-            self.bookmarks[idx] = [mut copy];
+            self.mutableBookmarks[idx] = [mut copy];
             [self saveBookmarksStorage];
             [self reloadMemoryPopup];
             [self.memoryPopup selectItemAtIndex:idx];
@@ -1307,10 +1665,10 @@
         @"freq": @(self.currentFrequencyHz),
         @"mode": self.currentMode ?: @"USB"
     };
-    [self.bookmarks addObject:entry];
+    [self.mutableBookmarks addObject:entry];
     [self saveBookmarksStorage];
     [self reloadMemoryPopup];
-    [self.memoryPopup selectItemAtIndex:self.bookmarks.count - 1];
+    [self.memoryPopup selectItemAtIndex:self.mutableBookmarks.count - 1];
 
     if (self.logHandler) {
         self.logHandler([NSString stringWithFormat:@"Saved frequency bookmark: %@ (%.3f MHz %@)", finalLabel, (double)self.currentFrequencyHz / 1e6, self.currentMode]);
@@ -1320,15 +1678,15 @@
 - (void)deleteBookmarkClicked:(id)sender {
     (void)sender;
     NSInteger idx = self.memoryPopup.indexOfSelectedItem;
-    if (idx >= 0 && idx < (NSInteger)self.bookmarks.count) {
-        if (self.bookmarks.count <= 1) {
+    if (idx >= 0 && idx < (NSInteger)self.mutableBookmarks.count) {
+        if (self.mutableBookmarks.count <= 1) {
             NSAlert *alert = [NSAlert new];
             alert.messageText = @"Cannot Delete";
             alert.informativeText = @"At least one frequency bookmark must remain in the memory bank.";
             [alert runModal];
             return;
         }
-        [self.bookmarks removeObjectAtIndex:idx];
+        [self.mutableBookmarks removeObjectAtIndex:idx];
         [self saveBookmarksStorage];
         [self reloadMemoryPopup];
         if (self.logHandler) self.logHandler(@"Deleted selected frequency bookmark.");
@@ -1445,7 +1803,43 @@
     self.visualizerView.phosphorAmberTheme = (sender.selectedSegment == 1);
 }
 
+- (void)waterfallFloorChanged:(NSSlider *)sender {
+    float val = sender.floatValue;
+    self.visualizerView.waterfallFloorDb = val;
+    self.waterfallFloorLabel.stringValue = [NSString stringWithFormat:@"%.0f dB", val];
+}
+
+- (void)waterfallDynRangeChanged:(NSSlider *)sender {
+    float val = sender.floatValue;
+    self.visualizerView.waterfallDynamicRangeDb = val;
+    self.waterfallDynRangeLabel.stringValue = [NSString stringWithFormat:@"%.0f dB", val];
+}
+
 #pragma mark - Actions
+
+- (void)toggleInstantReplay:(id)sender {
+    (void)sender;
+    if (self.engine.isReplaying) {
+        [self.engine stopInstantReplay];
+        self.instantReplayButton.title = @"↺ Replay 15s";
+        self.instantReplayButton.contentTintColor = nil;
+    } else {
+        [self.engine startInstantReplay];
+        self.instantReplayButton.title = @"⏹ Stop Replay";
+        self.instantReplayButton.contentTintColor = [NSColor systemOrangeColor];
+        if (self.logHandler) {
+            self.logHandler(@"Playing back last 15 seconds of monitored audio...");
+        }
+    }
+}
+
+- (void)toggleCableGuide:(id)sender {
+    (void)sender;
+    _isGuideCollapsed = !_isGuideCollapsed;
+    [[NSUserDefaults standardUserDefaults] setBool:_isGuideCollapsed forKey:@"TX500_AudioCableGuideCollapsed"];
+    self.guideDisclosureButton.title = _isGuideCollapsed ? @"▶ AD-508 HARDWARE CABLING & OPERATION GUIDE" : @"▼ AD-508 HARDWARE CABLING & OPERATION GUIDE";
+    self.guideContentLabel.hidden = _isGuideCollapsed;
+}
 
 - (void)quickLogClicked:(id)sender {
     (void)sender;
@@ -1521,6 +1915,10 @@
 
 - (void)inputDeviceSelected:(NSPopUpButton *)sender {
     NSString *uid = sender.selectedItem.representedObject;
+    if ([uid isEqualToString:@"__REFRESH__"]) {
+        [self refreshAudioDevicesAction:sender];
+        return;
+    }
     if (uid) {
         self.engine.selectedInputDeviceUID = uid;
         if (self.engine.isMonitoring) {
@@ -1532,6 +1930,10 @@
 
 - (void)outputDeviceSelected:(NSPopUpButton *)sender {
     NSString *uid = sender.selectedItem.representedObject;
+    if ([uid isEqualToString:@"__REFRESH__"]) {
+        [self refreshAudioDevicesAction:sender];
+        return;
+    }
     if (uid) {
         self.engine.selectedOutputDeviceUID = uid;
         if (self.engine.isMonitoring) {
@@ -1631,6 +2033,48 @@
 
 - (void)limiterToggled:(NSButton *)sender {
     self.engine.limiterEnabled = (sender.state == NSControlStateValueOn);
+}
+
+- (void)autoNotchToggled:(NSButton *)sender {
+    self.engine.autoNotchEnabled = (sender.state == NSControlStateValueOn);
+}
+
+- (void)nrToggled:(NSButton *)sender {
+    BOOL on = (sender.state == NSControlStateValueOn);
+    self.engine.nrEnabled = on;
+    self.nrDepthSlider.enabled = on;
+}
+
+- (void)nrDepthChanged:(NSSlider *)sender {
+    float val = sender.floatValue;
+    self.engine.nrLevel = val / 10.0f;
+    self.nrDepthValueLabel.stringValue = [NSString stringWithFormat:@"Depth: %.0f", val];
+}
+
+- (void)eqToggled:(NSButton *)sender {
+    BOOL on = (sender.state == NSControlStateValueOn);
+    self.engine.eqEnabled = on;
+    self.eqLowSlider.enabled = on;
+    self.eqMidSlider.enabled = on;
+    self.eqHighSlider.enabled = on;
+}
+
+- (void)eqLowChanged:(NSSlider *)sender {
+    float val = sender.floatValue;
+    self.engine.eqLowGainDb = val;
+    self.eqLowLabel.stringValue = [NSString stringWithFormat:@"%+.1f dB", val];
+}
+
+- (void)eqMidChanged:(NSSlider *)sender {
+    float val = sender.floatValue;
+    self.engine.eqMidGainDb = val;
+    self.eqMidLabel.stringValue = [NSString stringWithFormat:@"%+.1f dB", val];
+}
+
+- (void)eqHighChanged:(NSSlider *)sender {
+    float val = sender.floatValue;
+    self.engine.eqHighGainDb = val;
+    self.eqHighLabel.stringValue = [NSString stringWithFormat:@"%+.1f dB", val];
 }
 
 #pragma mark - Lifecycle

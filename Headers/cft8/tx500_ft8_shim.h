@@ -21,6 +21,7 @@ typedef struct {
     char  text[35];  // decoded message, null-terminated (FTX_MAX_MESSAGE_LENGTH)
     float freq_hz;   // audio frequency offset within the passband
     float time_sec;  // time offset of the message start within the slot
+    float time_uncertainty_sec; // one-sigma timing estimate after Costas peak refinement
     int   score;     // Costas sync score (higher = stronger candidate)
     float snr_db;    // Estimated SNR in dB, 2500 Hz reference (WSJT-X-comparable)
 } ft8808_decoded_t;

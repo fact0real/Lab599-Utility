@@ -27,6 +27,12 @@ static void AssertTrue(BOOL condition, NSString *message) {
 }
 
 int main(int argc, const char * argv[]) {
+    char testRootTemplate[] = "/tmp/Lab599LogbookTests.XXXXXX";
+    char *testRoot = mkdtemp(testRootTemplate);
+    if (!testRoot) return 1;
+    setenv("TX500_TEST_MODE", "1", 1);
+    setenv("TX500_TEST_ROOT", testRoot, 1);
+    setenv("CFFIXED_USER_HOME", testRoot, 1);
     @autoreleasepool {
         (void)argc; (void)argv;
         NSLog(@"Running TX-500 Logbook & Cloud Ecosystem Tests...");
@@ -221,8 +227,15 @@ int main(int argc, const char * argv[]) {
         AssertTrue([singleADIF containsString:@"<CALL:4>W1AW"], @"Single record ADIF call");
 
         NSArray<NSString *> *tqslArgs = [TX500CloudSyncEngine buildTQSLArgumentsForADIFPath:@"/tmp/test.adi"
-                                                                                   location:@"Home Station"
-                                                                                   password:@"Pass123"];
+                                                                                  location:@"Home Station"
+                                                                                  password:@"Pass123"];
+        AssertTrue([TX500CloudSyncEngine discoverTQSLBinaryPath] == nil,
+                   @"TQSL discovery is disabled in isolated test mode");
+        __block BOOL cloudSideEffectSuppressed = NO;
+        [[TX500CloudSyncEngine sharedEngine] uploadContactImmediately:rec1 completion:^(BOOL success, NSString *summary) {
+            cloudSideEffectSuppressed = success && [summary containsString:@"suppressed"];
+        }];
+        AssertTrue(cloudSideEffectSuppressed, @"Cloud uploads are synchronously suppressed in test mode");
         AssertTrue([tqslArgs containsObject:@"-d"], @"TQSL arg -d (no date range modal)");
         AssertTrue([tqslArgs containsObject:@"-u"], @"TQSL arg -u (direct internet upload)");
         AssertTrue([tqslArgs containsObject:@"-x"], @"TQSL arg -x (batch mode exit)");
@@ -235,10 +248,10 @@ int main(int argc, const char * argv[]) {
         // 11. TQSL Storage Synchronization (~/.tqsl)
         BOOL tqslSync = [TX500CloudSyncEngine synchronizeTQSLStorage];
         AssertTrue(tqslSync == YES, @"TQSL directory synchronized");
-        NSString *tqslDir = [@"~/.tqsl" stringByExpandingTildeInPath];
+        NSString *tqslDir = [[NSString stringWithUTF8String:testRoot] stringByAppendingPathComponent:@".tqsl"];
         BOOL isDir = NO;
         AssertTrue([[NSFileManager defaultManager] fileExistsAtPath:tqslDir isDirectory:&isDir] && isDir, @"~/.tqsl directory exists");
-        NSLog(@"PASS: TQSL storage directory (~/.tqsl) verification and creation passed.");
+        NSLog(@"PASS: isolated TQSL storage directory verification and creation passed.");
 
         // 12. WebKit 2FA Session Persistence Helpers
         [TX500WebAuthenticatorController clearSessionForService:TX500AuthServiceQRZ];
@@ -273,6 +286,106 @@ int main(int argc, const char * argv[]) {
         [ud synchronize];
         NSLog(@"PASS: TQSL CLI arguments fallback to saved .p12/station preferences passed.");
 
+        // 14. Maidenhead Grid Conversion & Great Circle Telemetry Math
+        double lat = 0.0, lon = 0.0;
+        BOOL gridValid = [TX500LogbookManager coordinatesForGrid:@"FN31pr" latitude:&lat longitude:&lon];
+        AssertTrue(gridValid, @"FN31pr is a valid Maidenhead grid");
+        AssertTrue(lat >= 41.0 && lat <= 42.5, @"FN31pr latitude in expected range ~41.7");
+        AssertTrue(lon >= -73.5 && lon <= -72.0, @"FN31pr longitude in expected range ~-72.7");
+
+        double distKm = [TX500LogbookManager distanceKmFromGrid:@"KM35" toGrid:@"FN31pr"];
+        AssertTrue(distKm > 8000.0 && distKm < 11000.0, @"Haversine distance Tehran to Connecticut ~9,500 km");
+
+        double bearing = [TX500LogbookManager bearingDegreesFromGrid:@"KM35" toGrid:@"FN31pr"];
+        AssertTrue(bearing >= 300.0 && bearing <= 340.0, @"Initial azimuth forward bearing ~315-325 degrees (NW)");
+
+        NSString *telemetry = [TX500LogbookManager formattedBearingAndDistanceFromGrid:@"KM35" toGrid:@"FN31pr"];
+        AssertTrue([telemetry containsString:@"km"] || [telemetry containsString:@"mi"], @"Telemetry string contains distance unit");
+        AssertTrue([telemetry containsString:@"°"], @"Telemetry string contains degrees symbol");
+        NSLog(@"PASS: Maidenhead Great Circle math (Haversine & Forward Azimuth) verified.");
+
+        // 15. Dupe Detection & Worked Before Intelligence
+        NSDictionary<NSString *, id> *dupeSame = [mgr dupeStatusForCallsign:@"W1AW" band:@"20m" mode:@"USB"];
+        AssertTrue([dupeSame[@"status"] isEqualToString:@"DUPE"], @"Detected DUPE on 20m USB");
+        AssertTrue([dupeSame[@"isDupe"] boolValue] == YES, @"isDupe flag is YES");
+
+        NSDictionary<NSString *, id> *dupeOther = [mgr dupeStatusForCallsign:@"W1AW" band:@"40m" mode:@"CW"];
+        AssertTrue([dupeOther[@"status"] isEqualToString:@"WORKED"], @"Detected WORKED BEFORE on different band/mode");
+        AssertTrue([dupeOther[@"isWorkedBefore"] boolValue] == YES, @"isWorkedBefore flag is YES");
+        AssertTrue([dupeOther[@"isDupe"] boolValue] == NO, @"isDupe flag is NO on different band");
+
+        NSDictionary<NSString *, id> *dupeNew = [mgr dupeStatusForCallsign:@"K3LR" band:@"20m" mode:@"USB"];
+        AssertTrue([dupeNew[@"status"] isEqualToString:@"NEW"], @"New callsign returns NEW for dupe status");
+        AssertTrue([dupeNew[@"isWorkedBefore"] boolValue] == NO, @"isWorkedBefore is NO for new callsign");
+
+        NSArray<TX500LogRecord *> *w1awContacts = [mgr contactsForCallsign:@"W1AW"];
+        AssertTrue(w1awContacts.count == 1, @"Found 1 past QSO with W1AW");
+        NSLog(@"PASS: Dupe check & worked-before intelligence verified.");
+
+        // 16. Field Ops (POTA, SOTA, IOTA) Tags, Parsing & SQLite Migration
+        TX500LogRecord *fieldRec = [[TX500LogRecord alloc] init];
+        fieldRec.callsign = @"W6/K6ARK";
+        fieldRec.qsoDate = @"20260921";
+        fieldRec.timeOn = @"140000";
+        fieldRec.band = @"20m";
+        fieldRec.mode = @"CW";
+        fieldRec.theirPotaRef = @"K-5678";
+        fieldRec.myPotaRef = @"K-1234";
+        fieldRec.theirSotaRef = @"W6/SC-001";
+        fieldRec.mySotaRef = @"W6/NC-002";
+        fieldRec.iotaRef = @"NA-001";
+        fieldRec.cqZone = @"03";
+        fieldRec.ituZone = @"06";
+        fieldRec.dxccCode = @"291";
+        fieldRec.state = @"CA";
+        fieldRec.country = @"United States";
+
+        BOOL fieldSaved = [mgr saveContact:fieldRec error:&err];
+        AssertTrue(fieldSaved, @"Saved field ops contact to SQLite");
+
+        TX500LogRecord *fetchedField = [mgr contactWithUUID:fieldRec.uuid];
+        AssertTrue([fetchedField.theirPotaRef isEqualToString:@"K-5678"], @"theirPotaRef matches");
+        AssertTrue([fetchedField.myPotaRef isEqualToString:@"K-1234"], @"myPotaRef matches");
+        AssertTrue([fetchedField.theirSotaRef isEqualToString:@"W6/SC-001"], @"theirSotaRef matches");
+        AssertTrue([fetchedField.iotaRef isEqualToString:@"NA-001"], @"iotaRef matches");
+        AssertTrue([fetchedField.cqZone isEqualToString:@"03"], @"cqZone matches");
+
+        NSString *fieldADIF = [fieldRec adifRecordString];
+        AssertTrue([fieldADIF containsString:@"<SIG:4>POTA"], @"ADIF contains SIG POTA");
+        AssertTrue([fieldADIF containsString:@"<SIG_INFO:6>K-5678"], @"ADIF contains SIG_INFO K-5678");
+        AssertTrue([fieldADIF containsString:@"<MY_SIG_INFO:6>K-1234"], @"ADIF contains MY_SIG_INFO K-1234");
+        AssertTrue([fieldADIF containsString:@"<SOTA_REF:9>W6/SC-001"], @"ADIF contains SOTA_REF");
+        AssertTrue([fieldADIF containsString:@"<IOTA:6>NA-001"], @"ADIF contains IOTA");
+        AssertTrue([fieldADIF containsString:@"<CQZ:2>03"], @"ADIF contains CQZ");
+
+        TX500LogRecord *parsedField = [TX500LogRecord recordFromADIFRecordText:fieldADIF];
+        AssertTrue([parsedField.theirPotaRef isEqualToString:@"K-5678"], @"Parsed theirPotaRef");
+        AssertTrue([parsedField.myPotaRef isEqualToString:@"K-1234"], @"Parsed myPotaRef");
+        AssertTrue([parsedField.theirSotaRef isEqualToString:@"W6/SC-001"], @"Parsed theirSotaRef");
+        AssertTrue([parsedField.iotaRef isEqualToString:@"NA-001"], @"Parsed iotaRef");
+        NSLog(@"PASS: Field Ops (POTA, SOTA, IOTA) ADIF 3.1 & SQLite persistence verified.");
+
+        // 17. Award Tracking Engine (DXCC, WAS, WAZ, POTA, SOTA, IOTA)
+        NSDictionary<NSString *, NSNumber *> *awardStats = [mgr awardStatistics];
+        AssertTrue(awardStats[@"dxcc_worked"] != nil, @"dxcc_worked metric present");
+        AssertTrue([awardStats[@"dxcc_worked"] integerValue] >= 1, @"At least 1 DXCC worked");
+        AssertTrue([awardStats[@"was_worked"] integerValue] >= 2, @"At least 2 US States worked (CT and CA)");
+        AssertTrue([awardStats[@"pota_qsos"] integerValue] >= 1, @"At least 1 POTA QSO logged");
+        AssertTrue([awardStats[@"sota_qsos"] integerValue] >= 1, @"At least 1 SOTA QSO logged");
+        AssertTrue([awardStats[@"iota_qsos"] integerValue] >= 1, @"At least 1 IOTA QSO logged");
+        NSLog(@"PASS: Award Tracking Engine statistics verified.");
+
+        // 18. LoTW TQSL Direct Invocation Method
+        __block BOOL lotwCalled = NO;
+        __block NSString *lotwMsg = nil;
+        [[TX500CloudSyncEngine sharedEngine] signAndUploadContactsToLoTW:@[fieldRec] completion:^(BOOL success, NSString *message) {
+            lotwCalled = YES;
+            lotwMsg = message;
+        }];
+        AssertTrue(lotwCalled, @"signAndUploadContactsToLoTW completion called");
+        AssertTrue(lotwMsg.length > 0, @"signAndUploadContactsToLoTW returned message");
+        NSLog(@"PASS: Direct TQSL LoTW signing invocation tested successfully.");
+
         // Cleanup temporary test SQLite database
         [mgr closeDatabase];
         [[NSFileManager defaultManager] removeItemAtURL:dbURL error:nil];
@@ -280,8 +393,9 @@ int main(int argc, const char * argv[]) {
         NSString *shmPath = [tempDBPath stringByAppendingString:@"-shm"];
         [[NSFileManager defaultManager] removeItemAtPath:walPath error:nil];
         [[NSFileManager defaultManager] removeItemAtPath:shmPath error:nil];
+        [[NSFileManager defaultManager] removeItemAtPath:[NSString stringWithUTF8String:testRoot] error:nil];
 
-        NSLog(@"ALL 13 LOGBOOK & CLOUD ECOSYSTEM TESTS PASSED SUCCESSFULLY!");
+        NSLog(@"ALL 18 LOGBOOK & CLOUD ECOSYSTEM TESTS PASSED SUCCESSFULLY!");
     }
     return 0;
 }

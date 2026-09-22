@@ -1,0 +1,25 @@
+2026-09-22 13:54:17.309 Benchmark200NoisyCW[90812:1678604] === Running TX-500 CW Audio Decoder 200-Word Noisy Benchmark ===
+[001/200] PASS | Exp: YCO     | Dec: YCO     | WPM: 17.1 | Pitch:   700 | Noise: 0.022
+[002/200] PASS | Exp: MNX     | Dec: MNX     | WPM: 20.2 | Pitch:   700 | Noise: 0.032
+[003/200] PASS | Exp: CEN     | Dec: CEN     | WPM:  9.8 | Pitch:   800 | Noise: 0.022
+[004/200] PASS | Exp: CQP     | Dec: CQP     | WPM: 28.9 | Pitch:   750 | Noise: 0.022
+[005/200] PASS | Exp: LQL     | Dec: LQL     | WPM: 23.1 | Pitch:   800 | Noise: 0.012
+[006/200] PASS | Exp: PJX     | Dec: PJX     | WPM: 14.6 | Pitch:   800 | Noise: 0.022
+[007/200] PASS | Exp: VWF     | Dec: VWF     | WPM: 21.9 | Pitch:   600 | Noise: 0.022
+[008/200] PASS | Exp: ODF     | Dec: ODF     | WPM: 25.7 | Pitch:   750 | Noise: 0.032
+[009/200] PASS | Exp: GZX     | Dec: GZX     | WPM: 18.7 | Pitch:   550 | Noise: 0.022
+[010/200] PASS | Exp: JTE     | Dec: JTE     | WPM: 30.5 | Pitch:   800 | Noise: 0.012
+[011/200] PASS | Exp: LAT     | Dec: LAT     | WPM: 27.4 | Pitch:   800 | Noise: 0.022
+[012/200] PASS | Exp: ITR     | Dec: ITR     | WPM: 24.5 | Pitch:   550 | Noise: 0.032
+[013/200] PASS | Exp: SLJ     | Dec: SLJ     | WPM: 15.8 | Pitch:   700 | Noise: 0.022
+[014/200] PASS | Exp: ATI     | Dec: ATI     | WPM: 11.3 | Pitch:   650 | Noise: 0.012
+[015/200] PASS | Exp: MJN     | Dec: MJN     | WPM:  9.6 | Pitch:   600 | Noise: 0.012
+
+=======================================================
+BLIND BENCHMARK RESULTS (200 NOISY WORDS):
+Exact Word Accuracy:   200 / 200 (100.0%)
+Character Accuracy:   1000 / 1000 (100.0%)
+  - Light Noise   (sigma=0.012): 80 / 80 (100.0%)
+  - Moderate Noise(sigma=0.022): 82 / 82 (100.0%)
+  - Heavy Noise   (sigma=0.032): 38 / 38 (100.0%)
+=======================================================

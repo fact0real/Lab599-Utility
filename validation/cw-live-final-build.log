@@ -1,0 +1,6 @@
+==> Auto-incrementing version: 2.172 (Build 178) -> 2.173 (Build 179)
+Compiling universal binary for Lab599 Utility 2.173 (179) (arm64 & x86_64)...
+Lab599 Utility.app: replacing existing signature
+Lab599 Utility.app/Contents/Info.plist: OK
+Built Lab599 Utility.app successfully with architectures:
+x86_64 arm64

@@ -1,0 +1,11 @@
+2026-09-22 13:51:01.866 CWStationTests[90169:1672902] Running TX-500 CW Station & Audio DSP Tests...
+2026-09-22 13:51:01.866 CWStationTests[90169:1672902] PASS: Reverse Morse Alphabet & Prosigns verified.
+2026-09-22 13:51:01.870 CWStationTests[90169:1672902] PASS: Decoder pitch & slow WPM (3-5 WPM) configuration verified.
+2026-09-22 13:51:01.870 CWStationTests[90169:1672902] PASS: Audio devices enumerated (1 found).
+2026-09-22 13:51:01.895 CWStationTests[90169:1672902] PASS: Real-Time Goertzel DSP Morse Audio Decoding verified at both standard and slow 5 WPM.
+2026-09-22 13:51:01.895 CWStationTests[90169:1672902] PASS: Keyer macro expansion and cut-numbers verified.
+2026-09-22 13:51:01.896 CWStationTests[90169:1672902] PASS: Keyer Kenwood KS and KY chunking verified.
+2026-09-22 13:51:01.896 CWStationTests[90169:1672902] PASS: QSO Assistant CQ pattern parsing and callsign extraction verified.
+2026-09-22 13:51:01.910 CWStationTests[90169:1672902] PASS: Semi-automated QSO state machine flow and automatic logging verified.
+2026-09-22 13:51:01.914 CWStationTests[90169:1672902] PASS: ADIF 3.1 generation and file export verified.
+2026-09-22 13:51:01.914 CWStationTests[90169:1672902] ALL TX-500 CW STATION AND AUDIO DSP TESTS PASSED! ✓

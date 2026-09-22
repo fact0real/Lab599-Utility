@@ -1,0 +1,100 @@
+{
+  "results" : [
+    {
+      "actual" : "OXIDE",
+      "passed" : true,
+      "expected" : "OXIDE",
+      "file" : "3",
+      "capture" : {
+        "frames" : 506368,
+        "centerHz" : 1224.0166808215881,
+        "wpm" : 13.043478260869557,
+        "text" : "OXIDE ",
+        "sampleRate" : 48000,
+        "buffers" : 989
+      }
+    },
+    {
+      "actual" : "FIELD",
+      "passed" : true,
+      "expected" : "FIELD",
+      "file" : "4",
+      "capture" : {
+        "frames" : 905216,
+        "centerHz" : 1223.9584537394128,
+        "wpm" : 12.903225806451605,
+        "text" : "OXIDE FIELD ",
+        "sampleRate" : 48000,
+        "buffers" : 1768
+      }
+    },
+    {
+      "actual" : "COLOR",
+      "passed" : true,
+      "expected" : "COLOR",
+      "file" : "5",
+      "capture" : {
+        "frames" : 1412608,
+        "centerHz" : 1223.7897652400402,
+        "wpm" : 13.043478260869557,
+        "text" : "OXIDE FIELD COLOR ",
+        "sampleRate" : 48000,
+        "buffers" : 2759
+      }
+    },
+    {
+      "actual" : "RELAY",
+      "passed" : true,
+      "expected" : "RELAY",
+      "file" : "6",
+      "capture" : {
+        "frames" : 1858560,
+        "centerHz" : 1223.60134912115,
+        "wpm" : 13.043478260869557,
+        "text" : "OXIDE FIELD COLOR RELAY ",
+        "sampleRate" : 48000,
+        "buffers" : 3630
+      }
+    },
+    {
+      "actual" : "JAMMER",
+      "passed" : true,
+      "expected" : "JAMMER",
+      "file" : "7",
+      "capture" : {
+        "frames" : 2389504,
+        "centerHz" : 1223.8397812881585,
+        "wpm" : 13.043478260869557,
+        "text" : "OXIDE FIELD COLOR RELAY JAMMER ",
+        "sampleRate" : 48000,
+        "buffers" : 4667
+      }
+    },
+    {
+      "actual" : "COLD",
+      "passed" : true,
+      "expected" : "COLD",
+      "file" : "9",
+      "capture" : {
+        "frames" : 3836416,
+        "centerHz" : 1227.953828408818,
+        "wpm" : 12.903225806451605,
+        "text" : "OXIDE FIELD COLOR RELAY JAMMER COLD ",
+        "sampleRate" : 48000,
+        "buffers" : 7493
+      }
+    }
+  ],
+  "passed" : true,
+  "pcmFile" : "\/Users\/factoreal\/Downloads\/TX-500\/Updater\/validation\/cw-system-audio-2.173-originals.f32",
+  "capture" : {
+    "frames" : 3836416,
+    "centerHz" : 1227.953828408818,
+    "wpm" : 12.903225806451605,
+    "text" : "OXIDE FIELD COLOR RELAY JAMMER COLD ",
+    "sampleRate" : 48000,
+    "buffers" : 7493
+  },
+  "pcmFormat" : "Float32 mono, native sample rate from capture.sampleRate",
+  "version" : "2.173"
+}

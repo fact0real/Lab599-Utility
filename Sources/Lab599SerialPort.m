@@ -82,6 +82,12 @@ static BOOL Cancelled(Lab599Cancellation *token, NSError **error) {
     int bits = TIOCM_DTR | TIOCM_RTS;
     return ioctl(_fd, TIOCMBIS, &bits) == 0 ? YES : SystemError(error, @"Setting Memory utility DTR/RTS signals");
 }
+- (BOOL)setPTTLinesActive:(BOOL)active error:(NSError **)error {
+    if (_fd < 0) return Error(error, Lab599SerialIOError, @"Serial port is not open.");
+    int bits = TIOCM_RTS | TIOCM_DTR;
+    int op = active ? TIOCMBIS : TIOCMBIC;
+    return ioctl(_fd, op, &bits) == 0 ? YES : SystemError(error, active ? @"Asserting PTT (RTS/DTR)" : @"Releasing PTT (RTS/DTR)");
+}
 - (BOOL)writeData:(NSData *)data timeout:(double)timeout cancellation:(Lab599Cancellation *)token error:(NSError **)error {
     if (!isfinite(timeout) || timeout <= 0) return Error(error, Lab599SerialIOError, @"Invalid write timeout.");
     double deadline = Lab599MonotonicTime() + timeout;

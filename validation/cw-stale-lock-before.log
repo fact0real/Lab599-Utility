@@ -1,0 +1,8 @@
+FAIL recover stale 327 Hz lock expected [CQ TEST] got [ST]
+Fixture 3 completed
+Fixture 4 completed
+Fixture 5 completed
+Fixture 6 completed
+Fixture 7 completed
+Fixture 9 completed
+CW regression: 191 checks, 1 failures

@@ -1039,24 +1039,28 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
     _txBufferReadIndex = 0;
     [_txBufferLock unlock];
 
-    _isTransmitting = YES;
     _lastSWRReading = 0.0;
     _lastSWRMeterDots = 0;
     _swrMeterValid = NO;
 
-    // Assert PTT: hardware RTS/DTR line + CAT PTT commands (TX1; for rear DATA/REM, TX; for general key)
+    // Request confirmed PTT from the shared station transport before exposing audio.
     // Note: Do NOT send MD6; here. The radio is already in DIG mode; sending MD6; at TX trigger
     // disrupts microcontroller timing and causes dropped PTT commands.
     if (!self.isSimulationMode) {
-        if (self.pttControlHandler) {
-            self.pttControlHandler(YES);
-        } else if (self.serialCommandSender) {
-            self.serialCommandSender(@"TX1;TX;");
+        BOOL keyed=self.pttControlHandler ? self.pttControlHandler(YES) : (self.serialCommandSender ? self.serialCommandSender(@"TX;") : NO);
+        if(!keyed) {
+            _isTransmitting=NO; _isTuning=NO; self.isTransmitArmed=NO;
+            if(self.pttControlHandler) self.pttControlHandler(NO);
+            else if(self.serialCommandSender) self.serialCommandSender(@"RX;");
+            if(self.logHandler) self.logHandler(@"[TX blocked] PTT was not confirmed; audio transmission cancelled.");
+            if(self.onTransmitStateChanged) self.onTransmitStateChanged(NO,@"");
+            return;
         }
     }
 
+    _isTransmitting=YES;
     if (self.logHandler) {
-        NSString *pttMethod = self.isSimulationMode ? @"[Simulation - No RF]" : @"[Hardware RTS + CAT TX1;TX;]";
+        NSString *pttMethod = self.isSimulationMode ? @"[Simulation - No RF]" : @"[CAT TX confirmed]";
         self.logHandler([NSString stringWithFormat:@"[FT8 TX ON] Sending '%@' at %.0f Hz %@",
                          msgText, synthAudioFreq, pttMethod]);
     }
@@ -1101,7 +1105,7 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
     }
 
     if (self.logHandler) {
-        self.logHandler(@"[FT8 TX OFF] Transmission complete. Returned to RX (CAT: RX; RTS Released)");
+        self.logHandler(@"[FT8 TX OFF] Transmission complete. Requested RX through the station transport");
     }
 
     if (self.onTransmitStateChanged) {
@@ -1216,17 +1220,22 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
 #pragma mark - Carrier Tune Mode
 
 - (void)startTuneCarrier {
-    _isTuning = YES;
+    _isTuning = NO;
     _carrierPhase = 0.0;
     if (!self.isSimulationMode) {
-        if (self.pttControlHandler) {
-            self.pttControlHandler(YES);
-        } else if (self.serialCommandSender) {
-            self.serialCommandSender(@"TX1;TX;");
+        BOOL keyed=self.pttControlHandler ? self.pttControlHandler(YES) : (self.serialCommandSender ? self.serialCommandSender(@"TX;") : NO);
+        if(!keyed) {
+            _isTransmitting=NO; _isTuning=NO; self.isTransmitArmed=NO;
+            if(self.pttControlHandler) self.pttControlHandler(NO);
+            else if(self.serialCommandSender) self.serialCommandSender(@"RX;");
+            if(self.logHandler) self.logHandler(@"[TX blocked] PTT was not confirmed; audio transmission cancelled.");
+            if(self.onTransmitStateChanged) self.onTransmitStateChanged(NO,@"");
+            return;
         }
     }
+    _isTuning=YES;
     if (self.logHandler) {
-        NSString *pttMethod = self.isSimulationMode ? @"[Simulation - No RF]" : @"[Hardware RTS + CAT TX1;TX;]";
+        NSString *pttMethod = self.isSimulationMode ? @"[Simulation - No RF]" : @"[CAT TX confirmed]";
         self.logHandler([NSString stringWithFormat:@"[Tune Carrier] Tone at %.0f Hz started %@", self.txAudioFrequencyHz, pttMethod]);
     }
     [self startSWRPolling];
@@ -1244,7 +1253,7 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
         }
     }
     if (self.logHandler) {
-        self.logHandler(@"[Tune Carrier] Tone stopped (CAT: RX; RTS Released)");
+        self.logHandler(@"[Tune Carrier] Tone stopped; RX requested through the station transport");
     }
 }
 

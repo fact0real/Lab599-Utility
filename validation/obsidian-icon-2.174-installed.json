@@ -1,0 +1,12 @@
+{
+  "version": "2.174",
+  "build": "180",
+  "installed": "/Applications/Lab599 Utility.app",
+  "previous_app": "/Applications/.Lab599 Utility-before-2.174.app",
+  "old_artwork": "/Users/factoreal/Downloads/TX-500/Updater/assets/branding/legacy-firmware-updater-2.173",
+  "verified_sha256": {
+    "Contents/MacOS/Lab599 Utility": "c9c3ae63337ecd3b4c20eac078c4c1e1bb73716fc3866cb84d26b00d58d83459",
+    "Contents/Resources/AppIcon.icns": "22e5330d3c3fec725d637e44cfc88ddcc2f73cf2c0484757a984701e14a6732d",
+    "Contents/Info.plist": "ba18970ed6afa443eaede4d9c39aabef2488b025c139d03bd8c52d53fb353b91"
+  }
+}

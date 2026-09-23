@@ -72,6 +72,15 @@
 		1000006F /* TX500CloudSettingsController.m in Sources */ = {isa = PBXBuildFile; fileRef = 2000006F /* TX500CloudSettingsController.m */; };
 		100000A0 /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 200000A0 /* WebKit.framework */; };
 		100000A1 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 200000A1 /* Security.framework */; };
+		100000E0 /* TX500VoiceCATRadio.m in Sources */ = {isa = PBXBuildFile; fileRef = 200000E0 /* TX500VoiceCATRadio.m */; };
+		100000E1 /* TX500VoiceAudio.m in Sources */ = {isa = PBXBuildFile; fileRef = 200000E1 /* TX500VoiceAudio.m */; };
+		100000E2 /* TX500VoiceLibrary.m in Sources */ = {isa = PBXBuildFile; fileRef = 200000E2 /* TX500VoiceLibrary.m */; };
+		100000E3 /* TX500VoiceKeyer.m in Sources */ = {isa = PBXBuildFile; fileRef = 200000E3 /* TX500VoiceKeyer.m */; };
+		100000E4 /* TX500VoiceKeyerController.m in Sources */ = {isa = PBXBuildFile; fileRef = 200000E4 /* TX500VoiceKeyerController.m */; };
+		100001D0 /* TX500StationCore.m in Sources */ = {isa = PBXBuildFile; fileRef = 200001D0 /* TX500StationCore.m */; };
+		100001D1 /* TX500StationStore.m in Sources */ = {isa = PBXBuildFile; fileRef = 200001D1 /* TX500StationStore.m */; };
+		100001D2 /* TX500PSKReporter.m in Sources */ = {isa = PBXBuildFile; fileRef = 200001D2 /* TX500PSKReporter.m */; };
+		100001D3 /* TX500StationController.m in Sources */ = {isa = PBXBuildFile; fileRef = 200001D3 /* TX500StationController.m */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -181,6 +190,21 @@
 		2000008F /* TX500CallsignLookupService.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "TX500CallsignLookupService.h"; sourceTree = "<group>"; };
 		20000090 /* TX500CloudSyncEngine.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "TX500CloudSyncEngine.h"; sourceTree = "<group>"; };
 		20000091 /* TX500LogbookController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "TX500LogbookController.h"; sourceTree = "<group>"; };
+		200000E0 /* TX500VoiceCATRadio.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TX500VoiceCATRadio.m; sourceTree = "<group>"; };
+		200000E1 /* TX500VoiceAudio.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TX500VoiceAudio.m; sourceTree = "<group>"; };
+		200000E2 /* TX500VoiceLibrary.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TX500VoiceLibrary.m; sourceTree = "<group>"; };
+		200000E3 /* TX500VoiceKeyer.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TX500VoiceKeyer.m; sourceTree = "<group>"; };
+		200000E4 /* TX500VoiceKeyerController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TX500VoiceKeyerController.m; sourceTree = "<group>"; };
+		200000F0 /* TX500VoiceKeyer.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TX500VoiceKeyer.h; sourceTree = "<group>"; };
+		200000F1 /* TX500VoiceKeyerController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TX500VoiceKeyerController.h; sourceTree = "<group>"; };
+		200001D0 /* TX500StationCore.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TX500StationCore.m; sourceTree = "<group>"; };
+		200002D0 /* TX500StationCore.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TX500StationCore.h; sourceTree = "<group>"; };
+		200001D1 /* TX500StationStore.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TX500StationStore.m; sourceTree = "<group>"; };
+		200002D1 /* TX500StationStore.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TX500StationStore.h; sourceTree = "<group>"; };
+		200001D2 /* TX500PSKReporter.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TX500PSKReporter.m; sourceTree = "<group>"; };
+		200002D2 /* TX500PSKReporter.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TX500PSKReporter.h; sourceTree = "<group>"; };
+		200001D3 /* TX500StationController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TX500StationController.m; sourceTree = "<group>"; };
+		200002D3 /* TX500StationController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TX500StationController.h; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -216,6 +240,15 @@
 		40000002 /* Sources */ = {
 			isa = PBXGroup;
 			children = (
+				200001D0 /* TX500StationCore.m */,
+				200001D1 /* TX500StationStore.m */,
+				200001D2 /* TX500PSKReporter.m */,
+				200001D3 /* TX500StationController.m */,
+				200000E4 /* TX500VoiceKeyerController.m */,
+				200000E3 /* TX500VoiceKeyer.m */,
+				200000E2 /* TX500VoiceLibrary.m */,
+				200000E1 /* TX500VoiceAudio.m */,
+				200000E0 /* TX500VoiceCATRadio.m */,
 				20000001 /* Lab599Utility.m */,
 				20000002 /* Lab599FirmwareCatalog.m */,
 				20000003 /* TX500Transfer.m */,
@@ -274,6 +307,12 @@
 		40000003 /* Headers */ = {
 			isa = PBXGroup;
 			children = (
+				200002D0 /* TX500StationCore.h */,
+				200002D1 /* TX500StationStore.h */,
+				200002D2 /* TX500PSKReporter.h */,
+				200002D3 /* TX500StationController.h */,
+				200000F1 /* TX500VoiceKeyerController.h */,
+				200000F0 /* TX500VoiceKeyer.h */,
 				20000011 /* Lab599FirmwareCatalog.h */,
 				20000012 /* TX500Transfer.h */,
 				20000013 /* TX500TimeSync.h */,
@@ -427,6 +466,15 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				100001D0 /* TX500StationCore.m in Sources */,
+				100001D1 /* TX500StationStore.m in Sources */,
+				100001D2 /* TX500PSKReporter.m in Sources */,
+				100001D3 /* TX500StationController.m in Sources */,
+				100000E4 /* TX500VoiceKeyerController.m in Sources */,
+				100000E3 /* TX500VoiceKeyer.m in Sources */,
+				100000E2 /* TX500VoiceLibrary.m in Sources */,
+				100000E1 /* TX500VoiceAudio.m in Sources */,
+				100000E0 /* TX500VoiceCATRadio.m in Sources */,
 				10000001 /* Lab599Utility.m in Sources */,
 				10000002 /* Lab599FirmwareCatalog.m in Sources */,
 				10000003 /* TX500Transfer.m in Sources */,
@@ -636,7 +684,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 179;
+				CURRENT_PROJECT_VERSION = 185;
 				DEAD_CODE_STRIPPING = YES;
 				INFOPLIST_FILE = Resources/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Lab599 Utility";
@@ -645,7 +693,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
-				MARKETING_VERSION = 2.173;
+				MARKETING_VERSION = 2.179;
 				PRODUCT_BUNDLE_IDENTIFIER = local.lab599.utility;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 			};
@@ -658,7 +706,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 179;
+				CURRENT_PROJECT_VERSION = 185;
 				DEAD_CODE_STRIPPING = YES;
 				INFOPLIST_FILE = Resources/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Lab599 Utility";
@@ -667,7 +715,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
-				MARKETING_VERSION = 2.173;
+				MARKETING_VERSION = 2.179;
 				PRODUCT_BUNDLE_IDENTIFIER = local.lab599.utility;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 			};

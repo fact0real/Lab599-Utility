@@ -33,6 +33,7 @@ extern NSString * const TX500LogbookDidChangeNotification;
 @property (nonatomic, copy, nullable) NSString *grid;
 @property (nonatomic, copy, nullable) NSString *notes;
 @property (nonatomic, assign) NSInteger powerWatts;
+@property (nonatomic, copy, nullable) NSDictionary *stationProfile;
 @property (nonatomic, copy, nullable) NSString *myCall;
 @property (nonatomic, copy, nullable) NSString *myGrid;
 

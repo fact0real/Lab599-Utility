@@ -1,0 +1,94 @@
+Running Driver and Documentation tests...
+PASS: All 4 radio hardware models verified (Discovery: 2400x1340, MP: 934x1534, PRO: 1539x657, ALTAI: 1539x657)
+PASS: Documentation fallback catalog verified (60 items across 4 categories, includes PRO and RU)
+PASS: Documentation live HTML parser verified with com and ru formats
+PASS: Firmware catalog verified for Discovery, MP, PRO, and PRO ALTAI models (6 items)
+All Driver and Documentation tests passed.
+Running Telemetry Engine & CAT Protocol tests...
+PASS: Telemetry validity, CAT parser, alarm, demo, and rolling-average checks passed.
+Running Feedback and GitHub Issues integration tests...
+PASS: Controller and all subviews instantiated successfully.
+PASS: Diagnostics snapshot generation verified.
+PASS: Markdown report generation verified.
+PASS: GitHub new issue URL generation verified (1091 chars).
+PASS: Category to GitHub label mapping verified.
+PASS: Diagnostics checkbox toggle verified.
+PASS: Form reset verified.
+All Feedback tests passed successfully.
+Running TX-500 Screen Rendering & Capture Unit Tests (V2)...
+ALL TX-500 SCREEN CAPTURE AND RENDERING TESTS PASSED SUCCESSFULLY! ✓
+2026-09-23 06:20:53.033 CWStationTests[65499:2871132] Running TX-500 CW Station & Audio DSP Tests...
+2026-09-23 06:20:53.034 CWStationTests[65499:2871132] PASS: Reverse Morse Alphabet & Prosigns verified.
+2026-09-23 06:20:53.040 CWStationTests[65499:2871132] PASS: Decoder pitch & slow WPM (3-5 WPM) configuration verified.
+2026-09-23 06:20:53.040 CWStationTests[65499:2871132] PASS: Audio devices enumerated (2 found).
+2026-09-23 06:20:53.079 CWStationTests[65499:2871132] PASS: Real-Time Goertzel DSP Morse Audio Decoding verified at both standard and slow 5 WPM.
+2026-09-23 06:20:53.079 CWStationTests[65499:2871132] PASS: Keyer macro expansion and cut-numbers verified.
+2026-09-23 06:20:53.079 CWStationTests[65499:2871132] PASS: Keyer Kenwood KS and KY chunking verified.
+2026-09-23 06:20:53.079 CWStationTests[65499:2871132] PASS: QSO Assistant CQ pattern parsing and callsign extraction verified.
+2026-09-23 06:20:53.097 CWStationTests[65499:2871132] PASS: Semi-automated QSO state machine flow and automatic logging verified.
+2026-09-23 06:20:53.101 CWStationTests[65499:2871132] PASS: ADIF 3.1 generation and file export verified.
+2026-09-23 06:20:53.101 CWStationTests[65499:2871132] ALL TX-500 CW STATION AND AUDIO DSP TESTS PASSED! ✓
+SKIP external M4A fixtures (pass their directory as first argument)
+CW regression: 133 checks, 0 failures
+2026-09-23 06:21:04.322 AudioMonitorTests[65523:2871328] Running TX-500 AD-508 Live Audio Monitor Tests...
+2026-09-23 06:21:04.329 AudioMonitorTests[65523:2871328] PASS: Engine initial state and parameters verified.
+2026-09-23 06:21:04.329 AudioMonitorTests[65523:2871328] PASS: Device enumeration found 1 input(s) and 1 output(s).
+2026-09-23 06:21:04.329 AudioMonitorTests[65523:2871328] INFO: Running in standalone / test-bench audio mode.
+2026-09-23 06:21:04.329 AudioMonitorTests[65523:2871328] PASS: Filter presets applied and parameter ranges verified.
+2026-09-23 06:21:04.329 AudioMonitorTests[65523:2871328] PASS: Notch and squelch configuration verified.
+2026-09-23 06:21:04.329 AudioMonitorTests[65523:2871328] PASS: Volume boost, mute, and dim controls verified.
+2026-09-23 06:21:04.337 AudioMonitorTests[65523:2871328] PASS: Studio WAV recording pipeline and RIFF header verified.
+2026-09-23 06:21:04.337 AudioMonitorTests[65523:2871328] PASS: Audio simulation generator verified.
+2026-09-23 06:21:04.353 AudioMonitorTests[65523:2871328] PASS: Visualizer view, waterfall mode, rhythm speed, and bandwidth span verified.
+2026-09-23 06:21:04.432 AudioMonitorTests[65523:2871328] PASS: VFO tuning, step adjustments, and bookmark sanitization verified.
+2026-09-23 06:21:04.432 AudioMonitorTests[65523:2871328] PASS: LMS Adaptive Noise Reduction (NR) verified.
+2026-09-23 06:21:04.432 AudioMonitorTests[65523:2871328] PASS: Auto-Notch (ANF) tone suppression verified.
+2026-09-23 06:21:04.432 AudioMonitorTests[65523:2871328] PASS: 3-Band Speech Equalizer verified.
+2026-09-23 06:21:04.432 AudioMonitorTests[65523:2871328] PASS: Instant Replay 15-second rolling buffer verified.
+2026-09-23 06:21:04.432 AudioMonitorTests[65523:2871328] PASS: Waterfall Floor and Dynamic Range controls verified.
+2026-09-23 06:21:04.432 AudioMonitorTests[65523:2871328] ALL AUDIO MONITOR TESTS PASSED SUCCESSFULLY! (14/14)
+2026-09-23 06:21:09.087 FT8StationTests[65553:2871471] Running Lab599 Discovery TX-500 FT8 Digital Suite Tests...
+2026-09-23 06:21:09.088 FT8StationTests[65553:2871471] PASS: FT8 message encoding & 79 8-FSK tones verified.
+2026-09-23 06:21:09.088 FT8StationTests[65553:2871471] PASS: Continuous-phase GFSK audio synthesis verified (151680 samples, peak 1.00).
+2026-09-23 06:21:09.108 FT8StationTests[65553:2871471] PASS: Deep LDPC loopback decode verified (Decoded: CQ EP2AES KM35, Freq: 1500.0 Hz, SNR: -6.4 dB).
+2026-09-23 06:21:09.108 FT8StationTests[65553:2871471] PASS: Maidenhead grid parsing & Great Circle Haversine distance math verified.
+2026-09-23 06:21:09.109 FT8StationTests[65553:2871471] PASS: DXCC prefix & flag database verified (including China, Italy, Netherlands, Northern Ireland, Asiatic & European Russia).
+2026-09-23 06:21:09.109 FT8StationTests[65553:2871471] PASS: Semantic message parsing verified.
+2026-09-23 06:21:09.113 FT8StationTests[65553:2871471] PASS: Algorithm 1 (Auto-CQ loop & instant caller engagement with Tx 2) verified.
+2026-09-23 06:21:09.114 FT8StationTests[65553:2871471] PASS: Algorithm 2 (Intelligent Auto-Hunter multi-criteria selection) verified.
+2026-09-23 06:21:09.115 FT8StationTests[65553:2871471] PASS: Complete QSO state machine progression & ADIF generator verified.
+2026-09-23 06:21:09.115 FT8StationTests[65553:2871471] PASS: Full FT8 CQ caller response progression (ER3PM -> EP2AES) verified.
+2026-09-23 06:21:09.115 FT8StationTests[65553:2871471] PASS: 15-second slot quantization (:00, :15, :30, :45) verified.
+2026-09-23 06:21:09.630 FT8StationTests[65553:2871471] PASS: Continuous ADIF logging (All-Decodes & QSO Logbook) in UTC verified.
+2026-09-23 06:21:09.630 FT8StationTests[65553:2871471] PASS: Arm Transmit & logHandler invocation (ENABLE TX crash regression) verified.
+2026-09-23 06:21:09.630 FT8StationTests[65553:2871471] PASS: FT4 message encoding & 105 4-FSK tones verified.
+2026-09-23 06:21:09.631 FT8StationTests[65553:2871471] PASS: Continuous-phase FT4 GFSK audio synthesis verified (60480 samples, peak 1.00).
+2026-09-23 06:21:09.653 FT8StationTests[65553:2871471] PASS: Deep FT4 LDPC loopback decode verified (Decoded: CQ EP2AES KM35, Freq: 1500.0 Hz, SNR: -0.8 dB).
+2026-09-23 06:21:09.654 FT8StationTests[65553:2871471] PASS: FT4 ADIF logging (<MODE:4>MFSK <SUBMODE:3>FT4) & Audio Engine timing quantization verified.
+2026-09-23 06:21:09.654 FT8StationTests[65553:2871471] PASS: SWR meter dot-to-ratio transfer function verified (0->1.0, 2->1.6, 5->2.8, 8->5.5).
+2026-09-23 06:21:09.654 FT8StationTests[65553:2871471] PASS: Auto-CQ parity alternation (Even -> Odd -> Even) verified.
+2026-09-23 06:21:09.654 FT8StationTests[65553:2871471] PASS: Auto-Hunter immediate cycle evaluation verified.
+2026-09-23 06:21:09.654 FT8StationTests[65553:2871471] PASS: Auto-Hunter collision detection & candidate rotation verified.
+2026-09-23 06:21:09.655 FT8StationTests[65553:2871471] PASS: Transmit history frame formatting & listening parity math verified.
+2026-09-23 06:21:09.655 FT8StationTests[65553:2871471] PASS: Dual PTT Engine (Hardware RTS + CAT TX1;TX; / RX;) verified.
+2026-09-23 06:21:09.655 FT8StationTests[65553:2871471] ALL FT8 & FT4 DIGITAL SUITE TESTS PASSED SUCCESSFULLY! (100%)
+PASS: FT8 waterfall survived concurrent ingestion, callsign tags overlay, and 1000 render cycles
+2026-09-23 06:21:18.330 LogbookAndCloudTests[65607:2871777] Running TX-500 Logbook & Cloud Ecosystem Tests...
+2026-09-23 06:21:18.340 LogbookAndCloudTests[65607:2871777] PASS: SQLite3 Database initialized at temporary path.
+2026-09-23 06:21:18.347 LogbookAndCloudTests[65607:2871777] PASS: Voice QSO saved and verified from SQLite database.
+2026-09-23 06:21:18.347 LogbookAndCloudTests[65607:2871777] PASS: ADIF 3.1 Record formatted with standard tags.
+2026-09-23 06:21:18.349 LogbookAndCloudTests[65607:2871777] PASS: ADIF Record parsed correctly from raw text.
+2026-09-23 06:21:18.349 LogbookAndCloudTests[65607:2871777] PASS: Cloud status updates & confirmed metrics verified.
+2026-09-23 06:21:18.356 LogbookAndCloudTests[65607:2871777] PASS: ADIF Export/Import and duplicate detection verified.
+2026-09-23 06:21:18.357 LogbookAndCloudTests[65607:2871777] PASS: FT8 & CW subsystem automatic logging bridges verified.
+2026-09-23 06:21:18.358 LogbookAndCloudTests[65607:2871777] PASS: QRZ.com XML Parser extracts all operator metadata & photo URL.
+2026-09-23 06:21:18.358 LogbookAndCloudTests[65607:2871777] PASS: HamQTH.com XML Parser extracts all operator metadata & photo URL.
+2026-09-23 06:21:18.360 LogbookAndCloudTests[65607:2871777] PASS: isolated TQSL storage directory verification and creation passed.
+2026-09-23 06:21:18.442 LogbookAndCloudTests[65607:2871777] PASS: WebKit 2FA session persistence & cookie header generation passed.
+2026-09-23 06:21:18.442 LogbookAndCloudTests[65607:2871777] PASS: TQSL CLI arguments fallback to saved .p12/station preferences passed.
+2026-09-23 06:21:18.442 LogbookAndCloudTests[65607:2871777] PASS: Maidenhead Great Circle math (Haversine & Forward Azimuth) verified.
+2026-09-23 06:21:18.443 LogbookAndCloudTests[65607:2871777] PASS: Dupe check & worked-before intelligence verified.
+2026-09-23 06:21:18.443 LogbookAndCloudTests[65607:2871777] PASS: Field Ops (POTA, SOTA, IOTA) ADIF 3.1 & SQLite persistence verified.
+2026-09-23 06:21:18.443 LogbookAndCloudTests[65607:2871777] PASS: Award Tracking Engine statistics verified.
+2026-09-23 06:21:18.443 LogbookAndCloudTests[65607:2871777] PASS: Direct TQSL LoTW signing invocation tested successfully.
+2026-09-23 06:21:18.448 LogbookAndCloudTests[65607:2871777] ALL 18 LOGBOOK & CLOUD ECOSYSTEM TESTS PASSED SUCCESSFULLY!

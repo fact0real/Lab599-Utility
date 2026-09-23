@@ -19,9 +19,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2.173</string>
+	<string>2.179</string>
 	<key>CFBundleVersion</key>
-	<string>179</string>
+	<string>185</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>12.0</string>
 	<key>NSAudioCaptureUsageDescription</key>
@@ -31,6 +31,6 @@
 	<key>NSHumanReadableCopyright</key>
 	<string>Developed by EP2AES (factoreal)</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Lab599 Utility requires audio input access to decode Morse code (CW) signals from the radio (via AD-508 audio interface), virtual audio devices, or microphone.</string>
+	<string>Lab599 Utility uses audio input to decode radio signals, record your voice messages, monitor received audio, and send live microphone replies when you choose to transmit. Voice recordings remain on this Mac.</string>
 </dict>
 </plist>

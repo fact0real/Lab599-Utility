@@ -36,6 +36,10 @@ Only one radio operation runs at a time. Telemetry and Radio Screen stop automat
 
 Settings is a complete-block backup/restore tool matching the original utility; it does not identify individual setting fields. Memory exposes frequency, mode and preamplifier/attenuator. DIG uses the same stored code as USB. Writing memory replaces all 100 slots, including empty ones.
 
+## Voice Keyer
+
+The **Voice Keyer** sidebar panel records/imports local voice messages, previews them on a separate headphone output, sends one-shot replies, repeats CQ with adjustable receive gaps, and offers hold-to-talk microphone replies. It has exclusive radio ownership while open, verified CAT TX/RX transitions, cancellation of queued work, selected-device audio routing, and an explicit stop on radio changes or connection loss. [Setup, behavior and hardware validation limits](VOICE-KEYER.md).
+
 ## Use
 
 Open **Lab599 Utility.app**, connect the CAT-USB cable and choose the serial port from the port menu. Tap **Refresh** if the port does not appear. Close other applications using the same port.

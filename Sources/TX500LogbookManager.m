@@ -32,6 +32,7 @@ NSString * const TX500LogbookDidChangeNotification = @"TX500LogbookDidChangeNoti
         _timeOn = [dfTime stringFromDate:now];
         _timeOff = _timeOn;
         
+        _stationProfile=[[NSUserDefaults.standardUserDefaults dictionaryForKey:@"TX500_ActiveStationProfile"] copy];
         _band = @"20m";
         _frequencyHz = 14200000;
         _mode = @"USB";
@@ -71,6 +72,7 @@ NSString * const TX500LogbookDidChangeNotification = @"TX500LogbookDidChangeNoti
     copy.grid = [self.grid copy];
     copy.notes = [self.notes copy];
     copy.powerWatts = self.powerWatts;
+    copy.stationProfile=[self.stationProfile copy];
     copy.myCall = [self.myCall copy];
     copy.myGrid = [self.myGrid copy];
     copy.qrzStatus = [self.qrzStatus copy];
@@ -180,8 +182,12 @@ NSString * const TX500LogbookDidChangeNotification = @"TX500LogbookDidChangeNoti
     if (self.powerWatts > 0) {
         addField(@"TX_PWR", [NSString stringWithFormat:@"%ld", (long)self.powerWatts]);
     }
-    addField(@"OPERATOR", self.myCall ?: @"EP2AES");
-    addField(@"MY_CALL", self.myCall ?: @"EP2AES");
+    addField(@"OPERATOR", [self.stationProfile[@"operatorCall"] length] ? self.stationProfile[@"operatorCall"] : self.myCall);
+    addField(@"STATION_CALLSIGN", self.myCall);
+    addField(@"MY_CALL", self.myCall);
+    NSDictionary *stationFields=@{@"operatorName":@"MY_NAME",@"country":@"MY_COUNTRY",@"city":@"MY_CITY",@"state":@"MY_STATE",@"county":@"MY_CNTY",@"cqZone":@"MY_CQ_ZONE",@"ituZone":@"MY_ITU_ZONE",@"iota":@"MY_IOTA",@"rig":@"MY_RIG",@"antenna":@"MY_ANTENNA"};
+    for(NSString *key in stationFields) addField(stationFields[key],self.stationProfile[key]);
+    if(!self.myPotaRef.length && [self.stationProfile[@"sig"] length]) { addField(@"MY_SIG",self.stationProfile[@"sig"]); addField(@"MY_SIG_INFO",self.stationProfile[@"sigInfo"]); }
     if (self.myGrid.length > 0) {
         addField(@"MY_GRIDSQUARE", [self.myGrid uppercaseString]);
     }
@@ -276,6 +282,11 @@ NSString * const TX500LogbookDidChangeNotification = @"TX500LogbookDidChangeNoti
     if (fields[@"GRIDSQUARE"]) rec.grid = [fields[@"GRIDSQUARE"] uppercaseString];
     if (fields[@"COMMENT"]) rec.notes = fields[@"COMMENT"];
     if (fields[@"TX_PWR"]) rec.powerWatts = [fields[@"TX_PWR"] integerValue];
+    NSMutableDictionary *identity=[NSMutableDictionary dictionary];
+    NSDictionary *identityFields=@{@"OPERATOR":@"operatorCall",@"MY_NAME":@"operatorName",@"MY_COUNTRY":@"country",@"MY_CITY":@"city",@"MY_STATE":@"state",@"MY_CNTY":@"county",@"MY_CQ_ZONE":@"cqZone",@"MY_ITU_ZONE":@"ituZone",@"MY_IOTA":@"iota",@"MY_RIG":@"rig",@"MY_ANTENNA":@"antenna",@"MY_SIG":@"sig",@"MY_SIG_INFO":@"sigInfo"};
+    for(NSString *field in identityFields) if(fields[field]) identity[identityFields[field]]=fields[field];
+    rec.stationProfile=identity; // Imported records never inherit the current station.
+    if(fields[@"STATION_CALLSIGN"]) rec.myCall=fields[@"STATION_CALLSIGN"];
     if (fields[@"MY_CALL"]) rec.myCall = fields[@"MY_CALL"];
     if (fields[@"OPERATOR"] && !rec.myCall) rec.myCall = fields[@"OPERATOR"];
     if (fields[@"MY_GRIDSQUARE"]) rec.myGrid = [fields[@"MY_GRIDSQUARE"] uppercaseString];
@@ -398,7 +409,7 @@ NSString * const TX500LogbookDidChangeNotification = @"TX500LogbookDidChangeNoti
         "  iota_ref TEXT,"
         "  cq_zone TEXT,"
         "  itu_zone TEXT,"
-        "  dxcc_code TEXT"
+        "  dxcc_code TEXT, station_profile TEXT"
         ");"
         "CREATE INDEX IF NOT EXISTS idx_qsos_call_date ON qsos(callsign, qso_date, time_on);"
         "CREATE INDEX IF NOT EXISTS idx_qsos_band_mode ON qsos(band, mode);"
@@ -432,7 +443,8 @@ NSString * const TX500LogbookDidChangeNotification = @"TX500LogbookDidChangeNoti
                 @"ALTER TABLE qsos ADD COLUMN iota_ref TEXT;",
                 @"ALTER TABLE qsos ADD COLUMN cq_zone TEXT;",
                 @"ALTER TABLE qsos ADD COLUMN itu_zone TEXT;",
-                @"ALTER TABLE qsos ADD COLUMN dxcc_code TEXT;"
+                @"ALTER TABLE qsos ADD COLUMN dxcc_code TEXT;",
+                @"ALTER TABLE qsos ADD COLUMN station_profile TEXT;"
             ];
             for (NSString *mig in migrations) {
                 sqlite3_exec(self->_db, [mig UTF8String], NULL, NULL, NULL);
@@ -479,8 +491,8 @@ NSString * const TX500LogbookDidChangeNotification = @"TX500LogbookDidChangeNoti
         "  uuid, callsign, qso_date, time_on, time_off, band, frequency_hz, mode, submode,"
         "  rst_sent, rst_rcvd, name, qth, state, country, grid, notes, power_watts, my_call, my_grid,"
         "  qrz_status, lotw_status, clublog_status, eqsl_status, image_url, created_at, updated_at,"
-        "  my_pota_ref, their_pota_ref, my_sota_ref, their_sota_ref, iota_ref, cq_zone, itu_zone, dxcc_code"
-        ") VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35)"
+        "  my_pota_ref, their_pota_ref, my_sota_ref, their_sota_ref, iota_ref, cq_zone, itu_zone, dxcc_code, station_profile"
+        ") VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36)"
         "ON CONFLICT(uuid) DO UPDATE SET "
         "  callsign=excluded.callsign, qso_date=excluded.qso_date, time_on=excluded.time_on, time_off=excluded.time_off,"
         "  band=excluded.band, frequency_hz=excluded.frequency_hz, mode=excluded.mode, submode=excluded.submode,"
@@ -490,7 +502,7 @@ NSString * const TX500LogbookDidChangeNotification = @"TX500LogbookDidChangeNoti
         "  clublog_status=excluded.clublog_status, eqsl_status=excluded.eqsl_status, image_url=excluded.image_url,"
         "  my_pota_ref=excluded.my_pota_ref, their_pota_ref=excluded.their_pota_ref, my_sota_ref=excluded.my_sota_ref,"
         "  their_sota_ref=excluded.their_sota_ref, iota_ref=excluded.iota_ref, cq_zone=excluded.cq_zone,"
-        "  itu_zone=excluded.itu_zone, dxcc_code=excluded.dxcc_code, updated_at=excluded.updated_at;";
+        "  itu_zone=excluded.itu_zone, dxcc_code=excluded.dxcc_code, station_profile=excluded.station_profile, updated_at=excluded.updated_at;";
 
         sqlite3_stmt *stmt = NULL;
         if (sqlite3_prepare_v2(self->_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
@@ -540,6 +552,9 @@ NSString * const TX500LogbookDidChangeNotification = @"TX500LogbookDidChangeNoti
         sqlite3_bind_text(stmt, 33, record.cqZone ? [record.cqZone UTF8String] : NULL, -1, SQLITE_TRANSIENT);
         sqlite3_bind_text(stmt, 34, record.ituZone ? [record.ituZone UTF8String] : NULL, -1, SQLITE_TRANSIENT);
         sqlite3_bind_text(stmt, 35, record.dxccCode ? [record.dxccCode UTF8String] : NULL, -1, SQLITE_TRANSIENT);
+        NSData *identityJSON=record.stationProfile ? [NSJSONSerialization dataWithJSONObject:record.stationProfile options:0 error:nil] : nil;
+        NSString *identityText=identityJSON ? [[NSString alloc] initWithData:identityJSON encoding:NSUTF8StringEncoding] : nil;
+        sqlite3_bind_text(stmt,36,identityText.UTF8String,-1,SQLITE_TRANSIENT);
 
         if (sqlite3_step(stmt) != SQLITE_DONE) {
             localErr = [NSError errorWithDomain:@"TX500LogbookErrorDomain"
@@ -603,7 +618,7 @@ static const char *kQSOSelectColumns =
 "uuid, callsign, qso_date, time_on, time_off, band, frequency_hz, mode, submode,"
 " rst_sent, rst_rcvd, name, qth, state, country, grid, notes, power_watts, my_call, my_grid,"
 " qrz_status, lotw_status, clublog_status, eqsl_status, image_url, created_at, updated_at,"
-" my_pota_ref, their_pota_ref, my_sota_ref, their_sota_ref, iota_ref, cq_zone, itu_zone, dxcc_code";
+" my_pota_ref, their_pota_ref, my_sota_ref, their_sota_ref, iota_ref, cq_zone, itu_zone, dxcc_code, station_profile";
 
 - (nullable TX500LogRecord *)contactWithUUID:(NSString *)uuid {
     if (!uuid || uuid.length == 0) return nil;
@@ -686,6 +701,9 @@ static const char *kQSOSelectColumns =
     if (ituZ) r.ituZone = [NSString stringWithUTF8String:ituZ];
     const char *dxcc = (const char *)sqlite3_column_text(stmt, 34);
     if (dxcc) r.dxccCode = [NSString stringWithUTF8String:dxcc];
+    const char *identity=(const char *)sqlite3_column_text(stmt,35);
+    r.stationProfile=nil;
+    if(identity) { id parsed=[NSJSONSerialization JSONObjectWithData:[[NSString stringWithUTF8String:identity] dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil]; if([parsed isKindOfClass:NSDictionary.class]) r.stationProfile=parsed; }
 
     return r;
 }

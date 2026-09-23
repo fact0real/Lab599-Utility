@@ -1,3 +1,4 @@
+#import "TX500PSKReporter.h"
 //
 //  TX500FT8StationController.m
 //  Lab599 Utility
@@ -1976,9 +1977,12 @@ static struct {
     }
     [[NSUserDefaults standardUserDefaults] synchronize];
     [self updateTransmitMatrixLabels];
+    [NSNotificationCenter.defaultCenter postNotificationName:@"TX500StationSettingsChangedNotification" object:self];
 }
 
 - (void)reloadStationPreferences {
+    self.pskReporterEnabled=[NSUserDefaults.standardUserDefaults boolForKey:@"TX500_FT8_PSKReporterEnabled"];
+    self.pskReporterCheckbox.state=self.pskReporterEnabled?NSControlStateValueOn:NSControlStateValueOff;
     NSString *call = [[NSUserDefaults standardUserDefaults] stringForKey:@"TX500_OperatorCallsign"];
     if (call.length > 0) {
         self.audioEngine.myCallsign = call;
@@ -2063,6 +2067,7 @@ static struct {
 - (void)togglePSKReporter:(id)sender {
     (void)sender;
     self.pskReporterEnabled = (self.pskReporterCheckbox.state == NSControlStateValueOn);
+    TX500PSKReporter.sharedReporter.enabled=self.pskReporterEnabled;
     [[NSUserDefaults standardUserDefaults] setBool:self.pskReporterEnabled forKey:@"TX500_FT8_PSKReporterEnabled"];
     [[NSUserDefaults standardUserDefaults] synchronize];
     [self appendToQSOConsole:[NSString stringWithFormat:@"[PSKReporter] Spotting to pskreporter.info %@",
@@ -2070,44 +2075,15 @@ static struct {
 }
 
 - (void)sendPSKReporterSpots:(NSArray<TX500FT8Message *> *)messages {
-    if (!self.pskReporterEnabled || messages.count == 0) return;
-    NSString *myCall = self.audioEngine.myCallsign;
-    NSString *myGrid = self.audioEngine.myGrid;
-    if (myCall.length == 0 || myGrid.length < 4) return;
-
-    NSString *rig = [[NSUserDefaults standardUserDefaults] stringForKey:@"TX500_StationRig"] ?: @"Lab599 Discovery TX-500";
-    NSString *antenna = [[NSUserDefaults standardUserDefaults] stringForKey:@"TX500_StationAntenna"] ?: @"";
-
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_BACKGROUND, 0), ^{
-        for (TX500FT8Message *m in messages) {
-            if (m.callerCall.length == 0 || [m.callerCall containsString:@"<"]) continue;
-            uint64_t dialHz = self.audioEngine.dialFrequencyHz;
-            uint64_t spotFreqHz = dialHz + (uint64_t)m.freqHz;
-            NSString *mode = (self.protocol == TX500_FT8_PROTOCOL_FT4) ? @"FT4" : @"FT8";
-
-            NSString *urlStr = @"https://report.pskreporter.info/post";
-            NSURL *url = [NSURL URLWithString:urlStr];
-            NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:url];
-            req.HTTPMethod = @"POST";
-            req.timeoutInterval = 10.0;
-
-            NSMutableString *postBody = [NSMutableString stringWithFormat:@"call=%@&locator=%@&sender=%@&freq=%llu&snr=%d&mode=%@&rig=%@",
-                                  [myCall stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]],
-                                  [myGrid stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]],
-                                  [m.callerCall stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]],
-                                  spotFreqHz, (int)roundf(m.snrDb), mode,
-                                  [rig stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]]];
-            if (antenna.length > 0) {
-                [postBody appendFormat:@"&antenna=%@", [antenna stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]]];
-            }
-            req.HTTPBody = [postBody dataUsingEncoding:NSUTF8StringEncoding];
-
-            NSURLSessionDataTask *task = [[NSURLSession sharedSession] dataTaskWithRequest:req completionHandler:^(NSData * _Nullable data, NSURLResponse * _Nullable response, NSError * _Nullable error) {
-                (void)data; (void)response; (void)error;
-            }];
-            [task resume];
-        }
-    });
+    if(!self.pskReporterEnabled || self.audioEngine.isSimulationMode) return;
+    NSDictionary *receiver=@{@"call":self.audioEngine.myCallsign ?: @"",@"grid":self.audioEngine.myGrid ?: @"",@"antenna":[NSUserDefaults.standardUserDefaults stringForKey:@"TX500_StationAntenna"] ?: @""};
+    uint64_t dial=self.audioEngine.dialFrequencyHz;
+    NSString *mode=self.protocol==TX500_FT8_PROTOCOL_FT4 ? @"FT4" : @"FT8";
+    for(TX500FT8Message *m in messages) {
+        if(!isfinite(m.freqHz) || m.freqHz<0 || m.freqHz>12000 || m.isCycleSeparator) continue;
+        NSDictionary *spot=@{@"call":m.callerCall ?: @"",@"grid":m.grid ?: @"",@"hz":@(dial+(uint64_t)llround(m.freqHz)),@"mode":mode,@"time":@((uint32_t)(m.timestamp ?: NSDate.date).timeIntervalSince1970)};
+        [TX500PSKReporter.sharedReporter enqueue:spot receiver:receiver];
+    }
 }
 
 #pragma mark - Keyboard Shortcuts (Space, F1..F6, Esc)
@@ -2116,7 +2092,7 @@ static struct {
     __weak typeof(self) weakSelf = self;
     _keyEventMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^NSEvent *(NSEvent *event) {
         typeof(self) strongSelf = weakSelf;
-        if (!strongSelf || !strongSelf.view.window || !strongSelf.view.window.isKeyWindow) {
+        if (!strongSelf || strongSelf.view.hidden || !strongSelf.view.window || !strongSelf.view.window.isKeyWindow || strongSelf.view.window.attachedSheet) {
             return event;
         }
 

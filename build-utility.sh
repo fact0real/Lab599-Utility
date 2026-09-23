@@ -8,7 +8,9 @@ BIN_NAME="Lab599 Utility"
 mkdir -p build "$APP_NAME/Contents/MacOS" "$APP_NAME/Contents/Resources"
 test -s Resources/AppIcon.icns || test -s assets/AppIcon.icns || { echo "Missing app icon. Run sh build-icon.sh first." >&2; exit 1; }
 
-if [ "${1:-}" = "--test" ]; then
+if [ "${1:-}" = "--test" ] || [ "${1:-}" = "--test-only" ]; then
+    sh tests/run-station-tests.sh
+    sh tests/run-voice-keyer-tests.sh
     FW_PATH="../mtrx1.30.00.fw"
     [ -f "$FW_PATH" ] || FW_PATH="mtrx1.30.00.fw"
     clang -O2 -Wall -Wextra -Wno-unused-parameter -Werror -fobjc-arc \
@@ -88,6 +90,8 @@ if [ "${1:-}" = "--test" ]; then
     ./build/LogbookAndCloudTests
 fi
 
+[ "${1:-}" != "--test-only" ] || exit 0
+
 # Auto-increment version and build number in Resources/Info.plist
 CURRENT_BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" Resources/Info.plist 2>/dev/null || echo "13")
 NEW_BUILD=$((CURRENT_BUILD + 1))
@@ -125,6 +129,8 @@ clang -O2 -Wall -Wextra -Wno-unused-parameter -Werror -fobjc-arc \
     Sources/Lab599Utility.m Sources/Lab599FirmwareCatalog.m Sources/TX500Transfer.m Sources/TX500TimeSync.m Sources/TX500TimeDiscipline.m Sources/Lab599SerialPort.m Sources/TX500CATTest.m Sources/TX500Configuration.m Sources/TX500ProfilesAndBackup.m Sources/TX500SettingsModel.m Sources/TX500ScreenModel.m Sources/TX500ScreenRenderer.m Sources/TX500ScreenCaptureController.m Sources/Lab599ToolsController.m Sources/Lab599DriverController.m Sources/Lab599DocsController.m Sources/TXGaugeView.m Sources/TX500TelemetryEngine.m Sources/Lab599TelemetryController.m Sources/Lab599FeedbackController.m Sources/TX500CWAudioDecoder.m Sources/TX500CWKeyer.m Sources/TX500CWQSOAssistant.m Sources/TX500CWSpectrumView.m Sources/TX500CWStationController.m Sources/TX500AudioEngine.m Sources/TX500AudioVisualizerView.m Sources/TX500AudioMonitorController.m \
     Sources/TX500FT8Message.m Sources/TX500FT8AudioEngine.m Sources/TX500FT8AutoEngine.m Sources/TX500FT8WaterfallView.m Sources/TX500FT8StationController.m \
     Sources/TX500LogbookManager.m Sources/TX500CallsignLookupService.m Sources/TX500CloudSyncEngine.m Sources/TX500WebAuthenticatorController.m Sources/TX500CloudSettingsController.m Sources/TX500LogbookController.m \
+    Sources/TX500StationCore.m Sources/TX500StationStore.m Sources/TX500PSKReporter.m Sources/TX500StationController.m \
+    Sources/TX500VoiceCATRadio.m Sources/TX500VoiceAudio.m Sources/TX500VoiceLibrary.m Sources/TX500VoiceKeyer.m Sources/TX500VoiceKeyerController.m \
     Sources/cft8/ft8/constants.c Sources/cft8/ft8/crc.c Sources/cft8/ft8/encode.c Sources/cft8/ft8/decode.c Sources/cft8/ft8/ldpc.c Sources/cft8/ft8/message.c Sources/cft8/ft8/text.c Sources/cft8/fft/kiss_fft.c Sources/cft8/fft/kiss_fftr.c Sources/cft8/common/wave.c Sources/cft8/common/monitor.c Sources/cft8/shim/tx500_ft8_shim.c \
     -o "build/$BIN_NAME"
 

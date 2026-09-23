@@ -14,6 +14,9 @@
 #import "TX500CWStationController.h"
 #import "TX500AudioMonitorController.h"
 #import "TX500FT8StationController.h"
+#import "TX500VoiceKeyerController.h"
+#import "TX500StationController.h"
+#import "TX500PSKReporter.h"
 #import "TX500FT8AudioEngine.h"
 #import "TX500LogbookController.h"
 #import "TX500LogbookManager.h"
@@ -200,6 +203,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 }
 
 @interface AppDelegate : NSObject <NSApplicationDelegate, NSWindowDelegate>
+@property(nonatomic, copy) NSArray<NSLayoutConstraint *> *featureWidthConstraints;
 @property(nonatomic, strong) NSWindow *window;
 @property(nonatomic, strong) NSPopUpButton *portMenu;
 @property(nonatomic, strong) NSTextField *firmwareName;
@@ -234,7 +238,12 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 @property(nonatomic, strong) TX500AudioMonitorController *audioMonitorController;
 @property(nonatomic, strong) TX500FT8StationController *ft8StationController;
 @property(nonatomic, strong) TX500LogbookController *logbookController;
-@property(nonatomic, strong) Lab599SerialPort *cwSerialPort;
+@property(nonatomic, strong) TX500VoiceKeyerController *voiceKeyerController;
+@property(nonatomic) BOOL voiceOwnsRadio;
+@property(nonatomic, strong) TX500StationCore *stationCore;
+@property(nonatomic, strong) TX500StationController *stationController;
+@property(nonatomic, strong) id stationKeyMonitor;
+@property(nonatomic, copy) NSString *stationPort;
 
 // Modern Sidebar & Card UI Properties
 @property(nonatomic, strong) NSMutableArray<TX500SidebarButton *> *sidebarItems;
@@ -322,98 +331,52 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 @implementation AppDelegate
 
 - (BOOL)setSharedPTT:(BOOL)active {
-    if (!self.hasPorts) return NO;
-    NSString *portPath = self.portMenu.selectedItem.title;
-    if (!portPath || ![portPath hasPrefix:@"/dev/cu."]) return NO;
-
-    @synchronized (self) {
-        if (!self.cwSerialPort) {
-            NSError *openError = nil;
-            self.cwSerialPort = [Lab599SerialPort openPath:portPath speed:B9600 error:&openError];
-            if (!self.cwSerialPort) {
-                [self appendLog:[NSString stringWithFormat:@"[PTT] Failed to open serial port: %@",
-                                 openError.localizedDescription ?: @"unknown error"]];
-                return NO;
-            }
-        }
-
-        // 1. Control hardware RTS and DTR lines (essential for Digirig / AD-502 / standard interfaces)
-        [self.cwSerialPort setPTTLinesActive:active error:nil];
-
-        // 2. Send Kenwood TS-2000 / TS-480 CAT commands:
-        // TX1; routes audio from rear REM/DATA connector (AD-508 / Digirig)
-        // TX; keys transmitter
-        // RX; returns to receive mode
-        NSString *cmd = active ? @"TX1;TX;" : @"RX;";
-        NSError *writeError = nil;
-        BOOL ok = [self.cwSerialPort writeData:[cmd dataUsingEncoding:NSASCIIStringEncoding]
-                                      timeout:0.5 cancellation:nil error:&writeError];
-        if (!ok) {
-            [self appendLog:[NSString stringWithFormat:@"[PTT] Write error: %@",
-                             writeError.localizedDescription ?: @"unknown error"]];
-            [self.cwSerialPort close];
-            self.cwSerialPort = nil;
-        }
-        return ok;
-    }
+    return [self.stationCore transmit:active owner:@"Digital" error:nil];
 }
-
-- (BOOL)sendSharedCATCommand:(NSString *)catCommand {
-    if (!self.hasPorts || catCommand.length == 0) return NO;
-    NSString *portPath = self.portMenu.selectedItem.title;
-    if (!portPath || ![portPath hasPrefix:@"/dev/cu."]) return NO;
-
-    @synchronized (self) {
-        if (!self.cwSerialPort) {
-            NSError *openError = nil;
-            self.cwSerialPort = [Lab599SerialPort openPath:portPath speed:B9600 error:&openError];
-            if (!self.cwSerialPort) {
-                [self appendLog:[NSString stringWithFormat:@"[CAT] Failed to open serial port: %@",
-                                 openError.localizedDescription ?: @"unknown error"]];
-                return NO;
-            }
-        }
-        NSError *writeError = nil;
-        BOOL ok = [self.cwSerialPort writeData:[catCommand dataUsingEncoding:NSASCIIStringEncoding]
-                                      timeout:0.5 cancellation:nil error:&writeError];
-        if (!ok) {
-            [self appendLog:[NSString stringWithFormat:@"[CAT] Write error: %@",
-                             writeError.localizedDescription ?: @"unknown error"]];
-            [self.cwSerialPort close];
-            self.cwSerialPort = nil;
-        }
-        return ok;
-    }
+- (BOOL)sendSharedCATCommand:(NSString *)command {
+    return [self.stationCore send:command owner:@"Station" error:nil];
 }
-
-- (nullable NSString *)querySharedCATCommand:(NSString *)catCommand timeout:(NSTimeInterval)timeout {
-    if (!self.hasPorts || catCommand.length == 0) return nil;
-    NSString *portPath = self.portMenu.selectedItem.title;
-    if (!portPath || ![portPath hasPrefix:@"/dev/cu."]) return nil;
-
-    @synchronized (self) {
-        if (!self.cwSerialPort) {
-            NSError *openError = nil;
-            self.cwSerialPort = [Lab599SerialPort openPath:portPath speed:B9600 error:&openError];
-            if (!self.cwSerialPort) return nil;
-        }
-        NSError *queryError = nil;
-        NSString *reply = Lab599ReadCATFrame(self.cwSerialPort, catCommand,
-                                              timeout > 0 ? timeout : 0.35, &queryError);
-        if (!reply && queryError.code != Lab599SerialTimeout) {
-            // Only close port on non-timeout (fatal I/O error). Simple timeouts
-            // occur normally during heavy RF transmission when MCU is busy.
-            BOOL isEngaged = self.ft8StationController.audioEngine.isTransmitting ||
-                             self.ft8StationController.audioEngine.isTuning ||
-                             self.ft8StationController.audioEngine.isTransmitArmed ||
-                             self.ft8StationController.audioEngine.isMonitoring;
-            if (!isEngaged) {
-                [self.cwSerialPort close];
-                self.cwSerialPort = nil;
-            }
-        }
-        return reply;
+- (NSString *)querySharedCATCommand:(NSString *)command timeout:(NSTimeInterval)timeout {
+    (void)timeout; return [self.stationCore query:command error:nil];
+}
+- (void)stationPortChanged:(id)sender {
+    (void)sender;
+    if(![self stationCanEdit]) { if(self.stationPort.length) [self.portMenu selectItemWithTitle:self.stationPort]; [self appendLog:@"Stop station activity before changing the CAT port."]; return; }
+    self.stationPort=[self currentStationPort];
+    if(self.stationCore.owner.length) [self.stationCore selectOwner:self.stationCore.owner port:self.stationPort error:nil];
+}
+- (NSString *)currentStationPort { return self.hasPorts ? self.portMenu.selectedItem.title : @""; }
+- (BOOL)stationCanEdit {
+    return !self.busy && !self.stationCore.ownsTX && !self.voiceKeyerController.keyer.active &&
+        !self.ft8StationController.audioEngine.isMonitoring && !self.ft8StationController.audioEngine.isTransmitArmed &&
+        !self.cwStationController.decoder.isListening && !self.cwStationController.keyer.isAutoCQActive &&
+        !self.audioMonitorController.engine.isMonitoring;
+}
+- (void)stationSettingsChanged:(NSNotification *)notification {
+    (void)notification;
+    [TX500StationStore.sharedStore captureLegacySettings];
+    NSDictionary *profile=TX500StationStore.sharedStore.activeProfile;
+    self.cwStationController.keyer.myCallsign=profile[@"call"] ?: @"";
+    self.cwStationController.assistant.myCallsign=profile[@"call"] ?: @"";
+    if([profile[@"radioInput"] length] && !self.cwStationController.decoder.isListening) self.cwStationController.decoder.selectedAudioDeviceUID=profile[@"radioInput"];
+    // Engines retain their DSP implementations but share a station-level route configuration.
+    if ([self stationCanEdit]) {
+        NSString *input=profile[@"radioInput"], *output=profile[@"radioOutput"];
+        if(input.length) { self.ft8StationController.audioEngine.selectedInputDeviceUID=input; self.audioMonitorController.engine.selectedInputDeviceUID=input; }
+        if(output.length) self.ft8StationController.audioEngine.selectedOutputDeviceUID=output;
     }
+    TX500PSKReporter.sharedReporter.enabled=[NSUserDefaults.standardUserDefaults boolForKey:@"TX500_FT8_PSKReporterEnabled"];
+}
+- (void)stationCommand:(NSString *)command {
+    if ([command isEqual:@"stop"]) {
+        [self.ft8StationController stopStation]; [self.cwStationController stopStation];
+        [self.audioMonitorController stopController]; [self.voiceKeyerController.keyer stop];
+        NSError *error=nil; if(![self.stationCore releaseOwnedTX:&error]) [self appendLog:error.localizedDescription];
+        return;
+    }
+    NSDictionary *tabs=@{@"station":@15,@"voice":@14,@"cw":@10,@"digital":@12,@"logbook":@13};
+    if(tabs[command]) { self.operationPicker.selectedSegment=[tabs[command] integerValue]; [self operationChanged:nil]; }
+    else { self.operationPicker.selectedSegment=15; [self operationChanged:nil]; [self.stationController runCommand:command]; }
 }
 
 - (NSTextField *)label:(NSString *)text {
@@ -431,7 +394,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 }
 
 - (void)appendLog:(NSString *)message {
-    NSAssert([NSThread isMainThread], @"UI logging must run on the main thread.");
+    if(!NSThread.isMainThread) { dispatch_async(dispatch_get_main_queue(), ^{ [self appendLog:message]; }); return; }
     NSDateFormatter *df = [NSDateFormatter new];
     df.dateFormat = @"HH:mm:ss";
     NSString *entry = [NSString stringWithFormat:@"[%@] %@\n", [df stringFromDate:[NSDate date]], message];
@@ -577,7 +540,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 
     // Setup legacy operation picker for CLI arguments and underlying state
     self.operationPicker = [NSSegmentedControl segmentedControlWithLabels:@[
-        @"Firmware Update", @"Time Sync", @"Telemetry", @"Radio Screen", @"CAT Test", @"Settings", @"Memory", @"Driver Install", @"Documentation", @"Feedback & Suggestion", @"CW Station", @"Live Audio (AD-508)", @"FT8 / FT4 Digital", @"Logbook & Cloud"
+        @"Firmware Update", @"Time Sync", @"Telemetry", @"Radio Screen", @"CAT Test", @"Settings", @"Memory", @"Driver Install", @"Documentation", @"Feedback & Suggestion", @"CW Station", @"Live Audio (AD-508)", @"FT8 / FT4 Digital", @"Logbook & Cloud", @"Voice Keyer", @"Station"
     ] trackingMode:NSSegmentSwitchTrackingSelectOne target:self action:@selector(operationChanged:)];
     self.operationPicker.selectedSegment = 0;
     self.operationPicker.hidden = YES;
@@ -675,8 +638,11 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     TX500SidebarButton *btnFT8 = [[TX500SidebarButton alloc] initWithTitle:@"FT8 / FT4 Digital" iconName:@"dot.radiowaves.left.and.right" tag:12 target:self action:@selector(sidebarItemClicked:)];
     TX500SidebarButton *btnLogbook = [[TX500SidebarButton alloc] initWithTitle:@"Logbook & Cloud" iconName:@"books.vertical" tag:13 target:self action:@selector(sidebarItemClicked:)];
 
+    TX500SidebarButton *btnStation = [[TX500SidebarButton alloc] initWithTitle:@"Station" iconName:@"slider.horizontal.3" tag:15 target:self action:@selector(sidebarItemClicked:)];
+    TX500SidebarButton *btnVoice = [[TX500SidebarButton alloc] initWithTitle:@"Voice Keyer" iconName:@"mic.badge.plus" tag:14 target:self action:@selector(sidebarItemClicked:)];
+
     [self.sidebarItems addObjectsFromArray:@[
-        btnFw, btnTime, btnTelemetry, btnScreen, btnCat, btnSettings, btnMemory, btnDriver, btnDocs, btnFeedback, btnCW, btnAudio, btnFT8, btnLogbook
+        btnFw, btnTime, btnTelemetry, btnScreen, btnCat, btnSettings, btnMemory, btnDriver, btnDocs, btnFeedback, btnCW, btnAudio, btnFT8, btnLogbook, btnVoice, btnStation
     ]];
 
     for (TX500SidebarButton *b in self.sidebarItems) {
@@ -701,7 +667,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     NSStackView *sidebarStack = [NSStackView stackViewWithViews:@[
         brandHeaderStack,
         makeSectionHeader(@"RADIO & LIVE"),
-        btnFT8, btnCW, btnAudio, btnLogbook, btnScreen, btnTelemetry, btnCat,
+        btnStation, btnFT8, btnCW, btnVoice, btnAudio, btnLogbook, btnScreen, btnTelemetry, btnCat,
         makeSectionHeader(@"CONFIGURATION"),
         btnTime, btnSettings, btnMemory,
         makeSectionHeader(@"FIRMWARE & DRIVER"),
@@ -828,6 +794,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 
     self.portMenu = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
     self.portMenu.translatesAutoresizingMaskIntoConstraints = NO;
+    self.portMenu.target=self; self.portMenu.action=@selector(stationPortChanged:);
     self.portMenu.controlSize = NSControlSizeSmall;
     self.portMenu.font = [NSFont systemFontOfSize:11];
     self.portMenu.bordered = NO;
@@ -946,6 +913,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     instructions.textColor = NSColor.secondaryLabelColor;
     instructions.font = [NSFont systemFontOfSize:11.5];
     instructions.preferredMaxLayoutWidth = 720.0;
+    [instructions setContentCompressionResistancePriority:1 forOrientation:NSLayoutConstraintOrientationHorizontal];
     self.instructions = instructions;
 
     NSStackView *headerStack = [NSStackView stackViewWithViews:@[self.sectionTitleLabel, self.instructions]];
@@ -1025,6 +993,17 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     self.actionRow.translatesAutoresizingMaskIntoConstraints = NO;
 
     __weak AppDelegate *weakSelf = self;
+    self.stationCore=[TX500StationCore new];
+    (void)TX500StationStore.sharedStore;
+    self.stationController=[TX500StationController new]; self.stationController.core=self.stationCore;
+    self.stationController.prepareControl=^BOOL {
+        if(weakSelf.stationCore.ownsTX || weakSelf.ft8StationController.audioEngine.isMonitoring || weakSelf.voiceKeyerController.keyer.active) return NO;
+        return [weakSelf.stationCore selectOwner:@"Station" port:[weakSelf currentStationPort] error:nil];
+    };
+    self.stationController.canEditStation=^BOOL { return [weakSelf stationCanEdit]; };
+    self.stationController.commandHandler=^(NSString *command) { [weakSelf stationCommand:command]; };
+    self.stationController.view.hidden=YES;
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(stationSettingsChanged:) name:@"TX500StationSettingsChangedNotification" object:nil];
 
     // Telemetry Controller
     self.telemetryController = [Lab599TelemetryController new];
@@ -1101,7 +1080,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     self.cwStationController.selectedPortProvider = ^NSString * { return weakSelf.hasPorts ? weakSelf.portMenu.selectedItem.title : nil; };
     self.cwStationController.logHandler = ^(NSString *message) { [weakSelf appendLog:message]; };
     self.cwStationController.serialCommandSender = ^BOOL(NSString *catCommand) {
-        return [weakSelf sendSharedCATCommand:catCommand];
+        return [weakSelf.stationCore send:catCommand owner:@"CW" error:nil];
     };
     self.cwStationController.decoderStateChangedHandler = ^(BOOL isListening) {
         (void)isListening; // state is read directly via decoder.isListening in updateConnectionStatusBar
@@ -1123,7 +1102,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         return portPath;
     };
     self.audioMonitorController.serialCommandSender = ^BOOL(NSString *catCommand) {
-        return [weakSelf sendSharedCATCommand:catCommand];
+        return [weakSelf.stationCore send:catCommand owner:@"Audio" error:nil];
     };
     self.audioMonitorController.catQueryHandler = ^NSString *(NSString *catCommand, NSTimeInterval timeout) {
         return [weakSelf querySharedCATCommand:catCommand timeout:timeout];
@@ -1135,7 +1114,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     self.ft8StationController.selectedPortProvider = ^NSString * { return weakSelf.hasPorts ? weakSelf.portMenu.selectedItem.title : nil; };
     self.ft8StationController.logHandler = ^(NSString *message) { [weakSelf appendLog:message]; };
     self.ft8StationController.serialCommandSender = ^BOOL(NSString *catCommand) {
-        return [weakSelf sendSharedCATCommand:catCommand];
+        return [weakSelf.stationCore send:catCommand owner:@"Digital" error:nil];
     };
     self.ft8StationController.pttControlHandler = ^BOOL(BOOL pttActive) {
         return [weakSelf setSharedPTT:pttActive];
@@ -1149,14 +1128,36 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     };
     self.ft8StationController.view.hidden = YES;
 
+    self.voiceKeyerController = [TX500VoiceKeyerController new];
+    self.voiceKeyerController.radioProvider = ^id<TX500VoiceRadio>(NSString *port) { (void)port; return [weakSelf.stationCore voiceAdapter]; };
+    self.voiceKeyerController.selectedPortProvider = ^NSString * { return weakSelf.hasPorts ? weakSelf.portMenu.selectedItem.title : nil; };
+    self.voiceKeyerController.logHandler = ^(NSString *message) { [weakSelf appendLog:message]; };
+    self.voiceKeyerController.stateChanged = ^{
+        [weakSelf updateConnectionStatusBar];
+        weakSelf.portMenu.enabled = weakSelf.hasPorts && !weakSelf.busy && !weakSelf.voiceKeyerController.keyer.active;
+        weakSelf.refreshButton.enabled = !weakSelf.busy && !weakSelf.voiceKeyerController.keyer.active;
+    };
+    self.voiceKeyerController.view.hidden = YES;
+
     // Comprehensive Logbook & Cloud Ecosystem Controller
     self.logbookController = [TX500LogbookController new];
     self.logbookController.selectedPortProvider = ^NSString * { return weakSelf.hasPorts ? weakSelf.portMenu.selectedItem.title : nil; };
     self.logbookController.logHandler = ^(NSString *message) { [weakSelf appendLog:message]; };
     self.logbookController.serialCommandSender = ^BOOL(NSString *catCommand) {
-        return [weakSelf sendSharedCATCommand:catCommand];
+        return [weakSelf.stationCore send:catCommand owner:@"Station" error:nil];
     };
     self.logbookController.view.hidden = YES;
+    [self stationSettingsChanged:nil];
+    [TX500StationStore.sharedStore activateProfile:TX500StationStore.sharedStore.activeProfile[@"id"] error:nil];
+    self.stationKeyMonitor=[NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^NSEvent *(NSEvent *event) {
+        if(!weakSelf.window.isKeyWindow || weakSelf.window.attachedSheet || event.isARepeat) return event;
+        if(event.keyCode==53) { [weakSelf stationCommand:@"stop"]; return nil; }
+        NSEventModifierFlags flags=event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
+        if(flags!=(NSEventModifierFlagCommand|NSEventModifierFlagOption)) return event;
+        NSString *key=event.charactersIgnoringModifiers.lowercaseString;
+        for(NSString *command in TX500StationStore.sharedStore.shortcuts) if(key.length && [TX500StationStore.sharedStore.shortcuts[command] isEqual:key]) { [weakSelf stationCommand:command]; return nil; }
+        return event;
+    }];
 
     // Connect Audio Monitor quick log button to switch to Logbook and prefill VFO
     self.audioMonitorController.onQuickLogRequested = ^(uint64_t freqHz, NSString *mode) {
@@ -1192,7 +1193,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 
     NSStackView *featureStack = [NSStackView stackViewWithViews:@[
         fileRow, self.radioPreviewBox, self.powerSafetyBox, timeRow,
-        self.audioMonitorController.view, self.cwStationController.view, self.ft8StationController.view, self.logbookController.view, self.telemetryController.view, self.screenController.view,
+        self.audioMonitorController.view, self.cwStationController.view, self.ft8StationController.view, self.voiceKeyerController.view, self.stationController.view, self.logbookController.view, self.telemetryController.view, self.screenController.view,
         self.tools.view,
         self.driverController.view, self.docsController.view, self.feedbackController.view,
         self.progressBar, self.statusLabel,
@@ -1219,6 +1220,8 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         self.audioMonitorController.view,
         self.cwStationController.view,
         self.ft8StationController.view,
+        self.voiceKeyerController.view,
+        self.stationController.view,
         self.logbookController.view,
         self.telemetryController.view,
         self.screenController.view,
@@ -1229,11 +1232,14 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         self.progressBar,
         self.statusLabel
     ];
+    NSMutableArray<NSLayoutConstraint *> *featureWidths = [NSMutableArray array];
     for (NSView *child in featureChildViews) {
         NSLayoutConstraint *wc = [child.widthAnchor constraintEqualToAnchor:featureStack.widthAnchor];
         wc.priority = 999;
-        wc.active = YES;
+        wc.active = !child.hidden;
+        [featureWidths addObject:wc];
     }
+    self.featureWidthConstraints = featureWidths;
 
     // --- Diagnostic Console Card (Collapsible) ---
     self.logCardBox = [NSBox new];
@@ -1530,6 +1536,11 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     if ([[NSProcessInfo processInfo].arguments containsObject:@"--ft8"]) {
         [self selectFT8StationTab:nil];
     }
+    if ([NSProcessInfo.processInfo.arguments containsObject:@"--station"]) { self.operationPicker.selectedSegment=15; [self operationChanged:nil]; }
+    if ([NSProcessInfo.processInfo.arguments containsObject:@"--voice-keyer"]) {
+        self.operationPicker.selectedSegment = 14;
+        [self operationChanged:nil];
+    }
     for (NSUInteger i = 0; i < [NSProcessInfo processInfo].arguments.count; i++) {
         if ([[NSProcessInfo processInfo].arguments[i] isEqualToString:@"--resize-test"] && i + 2 < [NSProcessInfo processInfo].arguments.count) {
             CGFloat w = [[NSProcessInfo processInfo].arguments[i + 1] doubleValue];
@@ -1590,6 +1601,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
             @"Select the serial port connected to your Lab599 transceiver." :
             @"Connect the CAT-USB adapter and click Refresh. A working serial driver (FTDI/Prolific) is required.";
     }
+    if(!self.stationCore.ownsTX && self.stationCore.owner.length) [self.stationCore selectOwner:self.stationCore.owner port:[self currentStationPort] error:nil];
     [self updateConnectionStatusBar];
 }
 
@@ -1715,7 +1727,16 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     BOOL telemetryLive = self.telemetryController.engine.isRunning;
     BOOL cwListening   = self.cwStationController.decoder.isListening;
 
-    if (ft8Live) {
+    if (self.voiceOwnsRadio && self.voiceKeyerController.keyer.connected) {
+        TX500VoiceState state = self.voiceKeyerController.keyer.state;
+        BOOL onAir = state == TXVoicePlaying || state == TXVoiceLive || state == TXVoiceLead || state == TXVoiceTail;
+        NSColor *color = onAir ? NSColor.systemOrangeColor : NSColor.systemTealColor;
+        self.statusLEDView.layer.backgroundColor = color.CGColor;
+        self.connectionStatusLabel.stringValue = onAir ? @"Voice · TX" : @"Voice · Ready";
+        self.connectionStatusLabel.textColor = color;
+        self.statusPillBox.fillColor = [color colorWithAlphaComponent:0.14];
+        self.statusPillBox.borderColor = [color colorWithAlphaComponent:0.4];
+    } else if (ft8Live) {
         // FT8 Digital Mode active — vivid purple/magenta
         self.statusLEDView.layer.backgroundColor = [NSColor colorWithSRGBRed:0.75 green:0.25 blue:0.95 alpha:1.0].CGColor;
         self.connectionStatusLabel.stringValue = self.ft8StationController.audioEngine.isTransmitting ? @"FT8 Transmitting" : @"FT8 Monitoring";
@@ -1783,6 +1804,31 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     BOOL isAudio = (operation == 11);
     BOOL isFT8 = (operation == 12);
     BOOL isLogbook = (operation == 13);
+    BOOL isVoice = (operation == 14);
+    BOOL isStation=(operation==15);
+    BOOL leavingVoice=!isVoice && self.voiceOwnsRadio;
+    BOOL exclusive=isFW || isSync || isScreen || isTools;
+    NSString *desired=isVoice?@"Voice":isCWStation?@"CW":isFT8?@"Digital":isAudio?@"Audio":@"Station";
+    // Station / logbook / telemetry may inspect a running digital station, but
+    // cannot retune it. Switching operating modes explicitly stops the old one.
+    BOOL passive=isStation || isLogbook || isTelemetry || isDocs || isFeedback || isDriver;
+    if(leavingVoice && ![self.voiceKeyerController deactivate]) { self.operationPicker.selectedSegment=14; return; }
+    if(exclusive || (!passive && ![self.stationCore.owner isEqual:desired])) {
+        [self.ft8StationController stopStation]; [self.cwStationController stopStation];
+        [self.audioMonitorController stopController];
+        NSError *releaseError=nil;
+        if(![self.stationCore releaseOwnedTX:&releaseError]) { [self appendLog:releaseError.localizedDescription]; return; }
+    }
+    if(exclusive) {
+        if(![self.stationCore suspend:nil]) return;
+    } else if(!passive || !self.stationCore.owner.length || (![self.ft8StationController.audioEngine isMonitoring] && !self.stationCore.ownsTX)) {
+        if(![self.stationCore selectOwner:desired port:[self currentStationPort] error:nil]) return;
+    }
+    self.voiceOwnsRadio=isVoice;
+    self.voiceKeyerController.view.hidden=!isVoice;
+    self.stationController.view.hidden=!isStation;
+    if(isVoice) [self.voiceKeyerController activate];
+    if(isStation) [self.stationController activate];
 
     for (TX500SidebarButton *btn in self.sidebarItems) {
         btn.isSelected = (btn.operationTag == operation);
@@ -1805,7 +1851,9 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
             @10: @"CW Station & Semi-Automated QSO Studio (AD-508 & CAT)",
             @11: @"AD-508 Live Audio Monitor & DSP Studio",
             @12: @"FT8 / FT4 Digital Mode Studio & Autonomous Operating Co-Pilot",
-            @13: @"Logbook & Cloud Ecosystem (SQLite, Callsign Intelligence & LoTW/QRZ)"
+            @13: @"Logbook & Cloud Ecosystem (SQLite, Callsign Intelligence & LoTW/QRZ)",
+            @14: @"Voice Keyer · Auto-CQ & Live Replies",
+            @15: @"Station · Frequencies, Profiles & Controls"
         };
     });
     self.sectionTitleLabel.stringValue = titles[@(operation)] ?: @"Lab599 Utility";
@@ -1816,7 +1864,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     if (!isScreen && self.screenController.liveSyncActive) {
         [self.screenController stopLiveSync];
     }
-    if (!isCWStation) {
+    if (!isCWStation && !leavingVoice) {
         [self.cwStationController stopStation];
     }
     if (!isAudio) {
@@ -1828,15 +1876,10 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
                      self.ft8StationController.audioEngine.isTransmitting ||
                      self.ft8StationController.audioEngine.isTuning ||
                      self.ft8StationController.audioEngine.isTransmitArmed;
-    if (!isCWStation && !isAudio && !isFT8 && !ft8Active) {
-        if (self.cwSerialPort) {
-            [self.cwSerialPort close];
-            self.cwSerialPort = nil;
-        }
-    }
+    (void)ft8Active;
     [self updateConnectionStatusBar];
 
-    self.cardSpacer.hidden = isFT8 || isCWStation || isAudio || isLogbook || isTelemetry || isScreen;
+    self.cardSpacer.hidden = isStation || isVoice || isFT8 || isCWStation || isAudio || isLogbook || isTelemetry || isScreen;
 
     self.telemetryController.view.hidden = !isTelemetry;
     self.screenController.view.hidden = !isScreen;
@@ -1965,7 +2008,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     self.syncButton.keyEquivalent = isSync ? @"\r" : @"";
     self.progressBar.doubleValue = 0;
     self.progressBar.hidden = (isTelemetry || isScreen || isFeedback || isCWStation || isAudio || isFT8 || isLogbook);
-    self.statusLabel.hidden = (isTelemetry || isScreen || isFeedback || isCWStation || isAudio || isFT8 || isLogbook);
+    self.statusLabel.hidden = (isStation || isVoice || isTelemetry || isScreen || isFeedback || isCWStation || isAudio || isFT8 || isLogbook);
 
     CGFloat availW = self.mainScrollView.contentView.bounds.size.width;
     self.instructions.preferredMaxLayoutWidth = (availW > 300.0) ? (availW - 4.0) : 720.0;
@@ -2009,9 +2052,18 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     } else if (isFT8) {
         self.instructions.stringValue = @"Real-time thermal audio waterfall, dual Band/Rx decodes, FSK decoding/encoding via AD-508, automated CAT sequencing, and live contact logging for TX-500.";
         self.statusLabel.stringValue = @"Ready. Select AD-508 audio input/output and CAT serial port, or test using internal simulated signals.";
+    } else if (isStation) {
+        self.instructions.stringValue = @"A shared station profile, software frequency library, band reference and quick controls. Applying a frequency never starts TX.";
+    } else if (isVoice) {
+        self.instructions.stringValue = @"Your recorded voice, repeat CQ and live microphone replies. Select the audio routes, verify the radio, and use Esc to stop or hold Space to talk.";
+        self.statusLabel.stringValue = @"Voice Keyer has exclusive radio control while this panel is open.";
     } else if (isLogbook) {
         self.instructions.stringValue = @"Integrated SQLite database, real-time QRZ/HamQTH callsign intelligence, and automated LoTW / eQSL / ClubLog synchronization.";
         self.statusLabel.stringValue = @"Ready: Enter callsign to lookup operator details, or log contacts with 'Log QSO ↵' (Enter).";
+    }
+    // Hidden station panels must not impose their minimum width on the active panel.
+    for (NSLayoutConstraint *width in self.featureWidthConstraints) {
+        width.active = !((NSView *)width.firstItem).hidden;
     }
     [self.instructions invalidateIntrinsicContentSize];
     [self updateClockPreview:nil];
@@ -3558,7 +3610,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 
 - (void)windowDidResize:(NSNotification *)notification {
     (void)notification;
-    CGFloat availW = self.mainScrollView.contentView.bounds.size.width;
+    CGFloat availW = self.window.contentView.bounds.size.width - 244.0;
     if (availW > 300.0) {
         self.instructions.preferredMaxLayoutWidth = availW - 4.0;
         [self.instructions invalidateIntrinsicContentSize];
@@ -3574,14 +3626,13 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 
 - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender {
     (void)sender;
+    if (![self.voiceKeyerController deactivate]) return NSTerminateCancel;
     [self.telemetryController stopMonitoring];
     [self.cwStationController stopStation];
     [self.ft8StationController stopStation];
     [self.audioMonitorController stopController];
-    if (self.cwSerialPort) {
-        [self.cwSerialPort close];
-        self.cwSerialPort = nil;
-    }
+    if(![self.stationCore suspend:nil]) return NSTerminateCancel;
+    if(self.stationKeyMonitor) [NSEvent removeMonitor:self.stationKeyMonitor];
     if (!self.busy) return [self.tools confirmDiscard] ? NSTerminateNow : NSTerminateCancel;
     NSBeep();
     return NSTerminateCancel;

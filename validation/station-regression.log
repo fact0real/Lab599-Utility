@@ -1,25 +1,25 @@
-PASS: 74 Station checks; no hardware or network transmissions.
-2026-09-23 09:34:00.898 VoiceKeyerTests[76347:3033760] Audio files cannot be non-interleaved. Ignoring setting AVLinearPCMIsNonInterleaved YES.
-2026-09-23 09:34:00.900 VoiceKeyerTests[76347:3033760] Audio files cannot be non-interleaved. Ignoring setting AVLinearPCMIsNonInterleaved YES.
-2026-09-23 09:34:00.934 VoiceKeyerTests[76347:3033760] IOPMScheduleUserActivityLevelNotification returned 0
-2026-09-23 09:34:01.392 VoiceKeyerTests[76347:3033760] IOPMScheduleUserActivityLevelNotification returned 0
-2026-09-23 09:34:01.562 VoiceKeyerTests[76347:3033760] IOPMScheduleUserActivityLevelNotification returned 0
-2026-09-23 09:34:01.733 VoiceKeyerTests[76347:3033760] IOPMScheduleUserActivityLevelNotification returned 0
-2026-09-23 09:34:02.104 VoiceKeyerTests[76347:3033760] IOPMScheduleUserActivityLevelNotification returned 0
-2026-09-23 09:34:05.671 VoiceKeyerTests[76347:3033760] IOPMScheduleUserActivityLevelNotification returned 0
-2026-09-23 09:34:09.192 VoiceKeyerTests[76347:3033760] IOPMScheduleUserActivityLevelNotification returned 0
-2026-09-23 09:34:09.216 VoiceKeyerTests[76347:3033760] IOPMScheduleUserActivityLevelNotification returned 0
-2026-09-23 09:34:09.243 VoiceKeyerTests[76347:3033760] IOPMScheduleUserActivityLevelNotification returned 0
-2026-09-23 09:34:09.269 VoiceKeyerTests[76347:3033760] IOPMScheduleUserActivityLevelNotification returned 0
-2026-09-23 09:34:09.294 VoiceKeyerTests[76347:3033760] IOPMScheduleUserActivityLevelNotification returned 0
-2026-09-23 09:34:09.321 VoiceKeyerTests[76347:3033760] IOPMScheduleUserActivityLevelNotification returned 0
-2026-09-23 09:34:09.345 VoiceKeyerTests[76347:3033760] IOPMScheduleUserActivityLevelNotification returned 0
-2026-09-23 09:34:09.369 VoiceKeyerTests[76347:3033760] IOPMScheduleUserActivityLevelNotification returned 0
-2026-09-23 09:34:09.394 VoiceKeyerTests[76347:3033760] IOPMScheduleUserActivityLevelNotification returned 0
-2026-09-23 09:34:09.419 VoiceKeyerTests[76347:3033760] IOPMScheduleUserActivityLevelNotification returned 0
-2026-09-23 09:34:09.579 VoiceKeyerTests[76347:3033760] IOPMScheduleUserActivityLevelNotification returned 0
-2026-09-23 09:34:09.795 VoiceKeyerTests[76347:3033760] IOPMScheduleUserActivityLevelNotification returned 0
-2026-09-23 09:34:10.121 VoiceKeyerTests[76347:3033760] IOPMScheduleUserActivityLevelNotification returned 0
+PASS: 85 Station checks; no hardware or network transmissions.
+2026-09-23 14:06:42.267 VoiceKeyerTests[99916:3412635] Audio files cannot be non-interleaved. Ignoring setting AVLinearPCMIsNonInterleaved YES.
+2026-09-23 14:06:42.270 VoiceKeyerTests[99916:3412635] Audio files cannot be non-interleaved. Ignoring setting AVLinearPCMIsNonInterleaved YES.
+2026-09-23 14:06:42.308 VoiceKeyerTests[99916:3412635] IOPMScheduleUserActivityLevelNotification returned 0
+2026-09-23 14:06:42.764 VoiceKeyerTests[99916:3412635] IOPMScheduleUserActivityLevelNotification returned 0
+2026-09-23 14:06:42.939 VoiceKeyerTests[99916:3412635] IOPMScheduleUserActivityLevelNotification returned 0
+2026-09-23 14:06:43.115 VoiceKeyerTests[99916:3412635] IOPMScheduleUserActivityLevelNotification returned 0
+2026-09-23 14:06:43.489 VoiceKeyerTests[99916:3412635] IOPMScheduleUserActivityLevelNotification returned 0
+2026-09-23 14:06:47.052 VoiceKeyerTests[99916:3412635] IOPMScheduleUserActivityLevelNotification returned 0
+2026-09-23 14:06:50.579 VoiceKeyerTests[99916:3412635] IOPMScheduleUserActivityLevelNotification returned 0
+2026-09-23 14:06:50.604 VoiceKeyerTests[99916:3412635] IOPMScheduleUserActivityLevelNotification returned 0
+2026-09-23 14:06:50.629 VoiceKeyerTests[99916:3412635] IOPMScheduleUserActivityLevelNotification returned 0
+2026-09-23 14:06:50.653 VoiceKeyerTests[99916:3412635] IOPMScheduleUserActivityLevelNotification returned 0
+2026-09-23 14:06:50.678 VoiceKeyerTests[99916:3412635] IOPMScheduleUserActivityLevelNotification returned 0
+2026-09-23 14:06:50.703 VoiceKeyerTests[99916:3412635] IOPMScheduleUserActivityLevelNotification returned 0
+2026-09-23 14:06:50.728 VoiceKeyerTests[99916:3412635] IOPMScheduleUserActivityLevelNotification returned 0
+2026-09-23 14:06:50.753 VoiceKeyerTests[99916:3412635] IOPMScheduleUserActivityLevelNotification returned 0
+2026-09-23 14:06:50.779 VoiceKeyerTests[99916:3412635] IOPMScheduleUserActivityLevelNotification returned 0
+2026-09-23 14:06:50.805 VoiceKeyerTests[99916:3412635] IOPMScheduleUserActivityLevelNotification returned 0
+2026-09-23 14:06:50.964 VoiceKeyerTests[99916:3412635] IOPMScheduleUserActivityLevelNotification returned 0
+2026-09-23 14:06:51.179 VoiceKeyerTests[99916:3412635] IOPMScheduleUserActivityLevelNotification returned 0
+2026-09-23 14:06:51.509 VoiceKeyerTests[99916:3412635] IOPMScheduleUserActivityLevelNotification returned 0
 PASS: 129 Voice Keyer checks; no physical radio or PTT used.
 Running simulated transfer tests with ../mtrx1.30.00.fw...
 PASS: Complete real firmware with only two OK replies (submitted=246384, captured=246384, phase=Complete)
@@ -102,57 +102,78 @@ PASS: Form reset verified.
 All Feedback tests passed successfully.
 Running TX-500 Screen Rendering & Capture Unit Tests (V2)...
 ALL TX-500 SCREEN CAPTURE AND RENDERING TESTS PASSED SUCCESSFULLY! ✓
-2026-09-23 09:36:01.261 CWStationTests[76606:3037146] Running TX-500 CW Station & Audio DSP Tests...
-2026-09-23 09:36:01.261 CWStationTests[76606:3037146] PASS: Reverse Morse Alphabet & Prosigns verified.
-2026-09-23 09:36:01.265 CWStationTests[76606:3037146] PASS: Decoder pitch & slow WPM (3-5 WPM) configuration verified.
-2026-09-23 09:36:01.266 CWStationTests[76606:3037146] PASS: Audio devices enumerated (2 found).
-2026-09-23 09:36:01.301 CWStationTests[76606:3037146] PASS: Real-Time Goertzel DSP Morse Audio Decoding verified at both standard and slow 5 WPM.
-2026-09-23 09:36:01.301 CWStationTests[76606:3037146] PASS: Keyer macro expansion and cut-numbers verified.
-2026-09-23 09:36:01.302 CWStationTests[76606:3037146] PASS: Keyer Kenwood KS and KY chunking verified.
-2026-09-23 09:36:01.302 CWStationTests[76606:3037146] PASS: QSO Assistant CQ pattern parsing and callsign extraction verified.
-2026-09-23 09:36:01.310 CWStationTests[76606:3037146] PASS: Semi-automated QSO state machine flow and automatic logging verified.
-2026-09-23 09:36:01.314 CWStationTests[76606:3037146] PASS: ADIF 3.1 generation and file export verified.
-2026-09-23 09:36:01.315 CWStationTests[76606:3037146] ALL TX-500 CW STATION AND AUDIO DSP TESTS PASSED! ✓
+2026-09-23 14:08:17.675 CWStationTests[393:3416471] Running TX-500 CW Station & Audio DSP Tests...
+2026-09-23 14:08:17.675 CWStationTests[393:3416471] PASS: Reverse Morse Alphabet & Prosigns verified.
+2026-09-23 14:08:17.679 CWStationTests[393:3416471] PASS: Decoder pitch & slow WPM (3-5 WPM) configuration verified.
+2026-09-23 14:08:17.679 CWStationTests[393:3416471] PASS: Audio devices enumerated (2 found).
+2026-09-23 14:08:17.712 CWStationTests[393:3416471] PASS: Real-Time Goertzel DSP Morse Audio Decoding verified at both standard and slow 5 WPM.
+2026-09-23 14:08:17.712 CWStationTests[393:3416471] PASS: Keyer macro expansion and cut-numbers verified.
+2026-09-23 14:08:17.712 CWStationTests[393:3416471] PASS: Keyer Kenwood KS and KY chunking verified.
+2026-09-23 14:08:17.712 CWStationTests[393:3416471] PASS: QSO Assistant CQ pattern parsing and callsign extraction verified.
+2026-09-23 14:08:17.719 CWStationTests[393:3416471] PASS: Semi-automated QSO state machine flow and automatic logging verified.
+2026-09-23 14:08:17.722 CWStationTests[393:3416471] PASS: ADIF 3.1 generation and file export verified.
+2026-09-23 14:08:17.722 CWStationTests[393:3416471] ALL TX-500 CW STATION AND AUDIO DSP TESTS PASSED! ✓
 SKIP external M4A fixtures (pass their directory as first argument)
 CW regression: 133 checks, 0 failures
-2026-09-23 09:36:14.892 AudioMonitorTests[76637:3037512] Running TX-500 AD-508 Live Audio Monitor Tests...
-2026-09-23 09:36:14.897 AudioMonitorTests[76637:3037512] PASS: Engine initial state and parameters verified.
-2026-09-23 09:36:14.897 AudioMonitorTests[76637:3037512] PASS: Device enumeration found 1 input(s) and 1 output(s).
-2026-09-23 09:36:14.897 AudioMonitorTests[76637:3037512] INFO: Running in standalone / test-bench audio mode.
-2026-09-23 09:36:14.897 AudioMonitorTests[76637:3037512] PASS: Filter presets applied and parameter ranges verified.
-2026-09-23 09:36:14.897 AudioMonitorTests[76637:3037512] PASS: Notch and squelch configuration verified.
-2026-09-23 09:36:14.897 AudioMonitorTests[76637:3037512] PASS: Volume boost, mute, and dim controls verified.
-2026-09-23 09:36:14.903 AudioMonitorTests[76637:3037512] PASS: Studio WAV recording pipeline and RIFF header verified.
-2026-09-23 09:36:14.903 AudioMonitorTests[76637:3037512] PASS: Audio simulation generator verified.
-2026-09-23 09:36:14.917 AudioMonitorTests[76637:3037512] PASS: Visualizer view, waterfall mode, rhythm speed, and bandwidth span verified.
-2026-09-23 09:36:14.991 AudioMonitorTests[76637:3037512] PASS: VFO tuning, step adjustments, and bookmark sanitization verified.
-2026-09-23 09:36:14.991 AudioMonitorTests[76637:3037512] PASS: LMS Adaptive Noise Reduction (NR) verified.
-2026-09-23 09:36:14.991 AudioMonitorTests[76637:3037512] PASS: Auto-Notch (ANF) tone suppression verified.
-2026-09-23 09:36:14.991 AudioMonitorTests[76637:3037512] PASS: 3-Band Speech Equalizer verified.
-2026-09-23 09:36:14.991 AudioMonitorTests[76637:3037512] PASS: Instant Replay 15-second rolling buffer verified.
-2026-09-23 09:36:14.991 AudioMonitorTests[76637:3037512] PASS: Waterfall Floor and Dynamic Range controls verified.
-2026-09-23 09:36:14.991 AudioMonitorTests[76637:3037512] ALL AUDIO MONITOR TESTS PASSED SUCCESSFULLY! (14/14)
-2026-09-23 09:36:20.858 FT8StationTests[76665:3037653] Running Lab599 Discovery TX-500 FT8 Digital Suite Tests...
-2026-09-23 09:36:20.859 FT8StationTests[76665:3037653] PASS: FT8 message encoding & 79 8-FSK tones verified.
-2026-09-23 09:36:20.861 FT8StationTests[76665:3037653] PASS: Continuous-phase GFSK audio synthesis verified (151680 samples, peak 1.00).
-2026-09-23 09:36:20.891 FT8StationTests[76665:3037653] PASS: Deep LDPC loopback decode verified (Decoded: CQ EP2AES KM35, Freq: 1500.0 Hz, SNR: -6.4 dB).
-2026-09-23 09:36:20.892 FT8StationTests[76665:3037653] PASS: Maidenhead grid parsing & Great Circle Haversine distance math verified.
-2026-09-23 09:36:20.892 FT8StationTests[76665:3037653] PASS: DXCC prefix & flag database verified (including China, Italy, Netherlands, Northern Ireland, Asiatic & European Russia).
-2026-09-23 09:36:20.893 FT8StationTests[76665:3037653] PASS: Semantic message parsing verified.
-2026-09-23 09:36:20.897 FT8StationTests[76665:3037653] PASS: Algorithm 1 (Auto-CQ loop & instant caller engagement with Tx 2) verified.
-2026-09-23 09:36:20.898 FT8StationTests[76665:3037653] PASS: Algorithm 2 (Intelligent Auto-Hunter multi-criteria selection) verified.
-2026-09-23 09:36:20.899 FT8StationTests[76665:3037653] PASS: Complete QSO state machine progression & ADIF generator verified.
-2026-09-23 09:36:20.900 FT8StationTests[76665:3037653] PASS: Full FT8 CQ caller response progression (ER3PM -> EP2AES) verified.
-2026-09-23 09:36:20.900 FT8StationTests[76665:3037653] PASS: 15-second slot quantization (:00, :15, :30, :45) verified.
-2026-09-23 09:36:21.412 FT8StationTests[76665:3037653] PASS: Continuous ADIF logging (All-Decodes & QSO Logbook) in UTC verified.
-2026-09-23 09:36:21.412 FT8StationTests[76665:3037653] PASS: Arm Transmit & logHandler invocation (ENABLE TX crash regression) verified.
-2026-09-23 09:36:21.413 FT8StationTests[76665:3037653] PASS: FT4 message encoding & 105 4-FSK tones verified.
-2026-09-23 09:36:21.415 FT8StationTests[76665:3037653] PASS: Continuous-phase FT4 GFSK audio synthesis verified (60480 samples, peak 1.00).
-2026-09-23 09:36:21.448 FT8StationTests[76665:3037653] PASS: Deep FT4 LDPC loopback decode verified (Decoded: CQ EP2AES KM35, Freq: 1500.0 Hz, SNR: -0.8 dB).
-2026-09-23 09:36:21.448 FT8StationTests[76665:3037653] PASS: FT4 ADIF logging (<MODE:4>MFSK <SUBMODE:3>FT4) & Audio Engine timing quantization verified.
-2026-09-23 09:36:21.448 FT8StationTests[76665:3037653] PASS: SWR meter dot-to-ratio transfer function verified (0->1.0, 2->1.6, 5->2.8, 8->5.5).
-2026-09-23 09:36:21.448 FT8StationTests[76665:3037653] PASS: Auto-CQ parity alternation (Even -> Odd -> Even) verified.
-2026-09-23 09:36:21.449 FT8StationTests[76665:3037653] PASS: Auto-Hunter immediate cycle evaluation verified.
-2026-09-23 09:36:21.449 FT8StationTests[76665:3037653] PASS: Auto-Hunter collision detection & candidate rotation verified.
-2026-09-23 09:36:21.450 FT8StationTests[76665:3037653] PASS: Transmit history frame formatting & listening parity math verified.
-FAIL: Fallback sends combined CAT TX1;TX; command
+2026-09-23 14:08:29.206 AudioMonitorTests[434:3416758] Running TX-500 AD-508 Live Audio Monitor Tests...
+2026-09-23 14:08:29.213 AudioMonitorTests[434:3416758] PASS: Engine initial state and parameters verified.
+2026-09-23 14:08:29.213 AudioMonitorTests[434:3416758] PASS: Device enumeration found 1 input(s) and 1 output(s).
+2026-09-23 14:08:29.213 AudioMonitorTests[434:3416758] INFO: Running in standalone / test-bench audio mode.
+2026-09-23 14:08:29.213 AudioMonitorTests[434:3416758] PASS: Filter presets applied and parameter ranges verified.
+2026-09-23 14:08:29.213 AudioMonitorTests[434:3416758] PASS: Notch and squelch configuration verified.
+2026-09-23 14:08:29.213 AudioMonitorTests[434:3416758] PASS: Volume boost, mute, and dim controls verified.
+2026-09-23 14:08:29.220 AudioMonitorTests[434:3416758] PASS: Studio WAV recording pipeline and RIFF header verified.
+2026-09-23 14:08:29.220 AudioMonitorTests[434:3416758] PASS: Audio simulation generator verified.
+2026-09-23 14:08:29.236 AudioMonitorTests[434:3416758] PASS: Visualizer view, waterfall mode, rhythm speed, and bandwidth span verified.
+2026-09-23 14:08:29.310 AudioMonitorTests[434:3416758] PASS: VFO tuning, step adjustments, and bookmark sanitization verified.
+2026-09-23 14:08:29.310 AudioMonitorTests[434:3416758] PASS: LMS Adaptive Noise Reduction (NR) verified.
+2026-09-23 14:08:29.310 AudioMonitorTests[434:3416758] PASS: Auto-Notch (ANF) tone suppression verified.
+2026-09-23 14:08:29.310 AudioMonitorTests[434:3416758] PASS: 3-Band Speech Equalizer verified.
+2026-09-23 14:08:29.310 AudioMonitorTests[434:3416758] PASS: Instant Replay 15-second rolling buffer verified.
+2026-09-23 14:08:29.310 AudioMonitorTests[434:3416758] PASS: Waterfall Floor and Dynamic Range controls verified.
+2026-09-23 14:08:29.310 AudioMonitorTests[434:3416758] ALL AUDIO MONITOR TESTS PASSED SUCCESSFULLY! (15/15)
+2026-09-23 14:08:33.780 FT8StationTests[468:3416885] Running Lab599 Discovery TX-500 FT8 Digital Suite Tests...
+2026-09-23 14:08:33.781 FT8StationTests[468:3416885] PASS: FT8 message encoding & 79 8-FSK tones verified.
+2026-09-23 14:08:33.783 FT8StationTests[468:3416885] PASS: Continuous-phase GFSK audio synthesis verified (151680 samples, peak 1.00).
+2026-09-23 14:08:33.814 FT8StationTests[468:3416885] PASS: Deep LDPC loopback decode verified (Decoded: CQ EP2AES KM35, Freq: 1500.0 Hz, SNR: -6.4 dB).
+2026-09-23 14:08:33.814 FT8StationTests[468:3416885] PASS: Maidenhead grid parsing & Great Circle Haversine distance math verified.
+2026-09-23 14:08:33.815 FT8StationTests[468:3416885] PASS: DXCC prefix & flag database verified (including China, Italy, Netherlands, Northern Ireland, Asiatic & European Russia).
+2026-09-23 14:08:33.815 FT8StationTests[468:3416885] PASS: Semantic message parsing verified.
+2026-09-23 14:08:33.821 FT8StationTests[468:3416885] PASS: Algorithm 1 (Auto-CQ loop & instant caller engagement with Tx 2) verified.
+2026-09-23 14:08:33.821 FT8StationTests[468:3416885] PASS: Algorithm 2 (Intelligent Auto-Hunter multi-criteria selection) verified.
+2026-09-23 14:08:33.823 FT8StationTests[468:3416885] PASS: Complete QSO state machine progression & ADIF generator verified.
+2026-09-23 14:08:33.823 FT8StationTests[468:3416885] PASS: Full FT8 CQ caller response progression (ER3PM -> EP2AES) verified.
+2026-09-23 14:08:33.823 FT8StationTests[468:3416885] PASS: 15-second slot quantization (:00, :15, :30, :45) verified.
+2026-09-23 14:08:34.335 FT8StationTests[468:3416885] PASS: Continuous ADIF logging (All-Decodes & QSO Logbook) in UTC verified.
+2026-09-23 14:08:34.335 FT8StationTests[468:3416885] PASS: Arm Transmit & logHandler invocation (ENABLE TX crash regression) verified.
+2026-09-23 14:08:34.336 FT8StationTests[468:3416885] PASS: FT4 message encoding & 105 4-FSK tones verified.
+2026-09-23 14:08:34.338 FT8StationTests[468:3416885] PASS: Continuous-phase FT4 GFSK audio synthesis verified (60480 samples, peak 1.00).
+2026-09-23 14:08:34.368 FT8StationTests[468:3416885] PASS: Deep FT4 LDPC loopback decode verified (Decoded: CQ EP2AES KM35, Freq: 1500.0 Hz, SNR: -0.8 dB).
+2026-09-23 14:08:34.369 FT8StationTests[468:3416885] PASS: FT4 ADIF logging (<MODE:4>MFSK <SUBMODE:3>FT4) & Audio Engine timing quantization verified.
+2026-09-23 14:08:34.369 FT8StationTests[468:3416885] PASS: SWR meter dot-to-ratio transfer function verified (0->1.0, 2->1.6, 5->2.8, 8->5.5).
+2026-09-23 14:08:34.369 FT8StationTests[468:3416885] PASS: Auto-CQ parity alternation (Even -> Odd -> Even) verified.
+2026-09-23 14:08:34.370 FT8StationTests[468:3416885] PASS: Auto-Hunter immediate cycle evaluation verified.
+2026-09-23 14:08:34.370 FT8StationTests[468:3416885] PASS: Auto-Hunter collision detection & candidate rotation verified.
+2026-09-23 14:08:34.371 FT8StationTests[468:3416885] PASS: Transmit history frame formatting & listening parity math verified.
+2026-09-23 14:08:34.371 FT8StationTests[468:3416885] PASS: Confirmed PTT and CAT TX; / RX; verified.
+2026-09-23 14:08:34.371 FT8StationTests[468:3416885] ALL FT8 & FT4 DIGITAL SUITE TESTS PASSED SUCCESSFULLY! (100%)
+PASS: FT8 waterfall survived concurrent ingestion, callsign tags overlay, and 1000 render cycles
+2026-09-23 14:08:41.274 LogbookAndCloudTests[505:3417055] Running TX-500 Logbook & Cloud Ecosystem Tests...
+2026-09-23 14:08:41.284 LogbookAndCloudTests[505:3417055] PASS: SQLite3 Database initialized at temporary path.
+2026-09-23 14:08:41.291 LogbookAndCloudTests[505:3417055] PASS: Voice QSO saved and verified from SQLite database.
+2026-09-23 14:08:41.291 LogbookAndCloudTests[505:3417055] PASS: ADIF 3.1 Record formatted with standard tags.
+2026-09-23 14:08:41.293 LogbookAndCloudTests[505:3417055] PASS: ADIF Record parsed correctly from raw text.
+2026-09-23 14:08:41.293 LogbookAndCloudTests[505:3417055] PASS: Cloud status updates & confirmed metrics verified.
+2026-09-23 14:08:41.300 LogbookAndCloudTests[505:3417055] PASS: ADIF Export/Import and duplicate detection verified.
+2026-09-23 14:08:41.301 LogbookAndCloudTests[505:3417055] PASS: FT8 & CW subsystem automatic logging bridges verified.
+2026-09-23 14:08:41.301 LogbookAndCloudTests[505:3417055] PASS: QRZ.com XML Parser extracts all operator metadata & photo URL.
+2026-09-23 14:08:41.302 LogbookAndCloudTests[505:3417055] PASS: HamQTH.com XML Parser extracts all operator metadata & photo URL.
+2026-09-23 14:08:41.303 LogbookAndCloudTests[505:3417055] PASS: isolated TQSL storage directory verification and creation passed.
+2026-09-23 14:08:41.382 LogbookAndCloudTests[505:3417055] PASS: WebKit 2FA session persistence & cookie header generation passed.
+2026-09-23 14:08:41.382 LogbookAndCloudTests[505:3417055] PASS: TQSL CLI arguments fallback to saved .p12/station preferences passed.
+2026-09-23 14:08:41.382 LogbookAndCloudTests[505:3417055] PASS: Maidenhead Great Circle math (Haversine & Forward Azimuth) verified.
+2026-09-23 14:08:41.383 LogbookAndCloudTests[505:3417055] PASS: Dupe check & worked-before intelligence verified.
+2026-09-23 14:08:41.383 LogbookAndCloudTests[505:3417055] PASS: Field Ops (POTA, SOTA, IOTA) ADIF 3.1 & SQLite persistence verified.
+2026-09-23 14:08:41.383 LogbookAndCloudTests[505:3417055] PASS: Award Tracking Engine statistics verified.
+2026-09-23 14:08:41.383 LogbookAndCloudTests[505:3417055] PASS: Direct TQSL LoTW signing invocation tested successfully.
+2026-09-23 14:08:41.387 LogbookAndCloudTests[505:3417055] ALL 18 LOGBOOK & CLOUD ECOSYSTEM TESTS PASSED SUCCESSFULLY!

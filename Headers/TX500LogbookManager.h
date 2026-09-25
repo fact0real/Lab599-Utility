@@ -27,6 +27,7 @@ extern NSString * const TX500LogbookDidChangeNotification;
 @property (nonatomic, copy) NSString *rstSent;      // "59", "599", "-12"
 @property (nonatomic, copy) NSString *rstRcvd;      // "59", "599", "+02"
 @property (nonatomic, copy, nullable) NSString *name;
+@property (nonatomic, copy, nullable) NSString *email;
 @property (nonatomic, copy, nullable) NSString *qth;
 @property (nonatomic, copy, nullable) NSString *state;
 @property (nonatomic, copy, nullable) NSString *country;

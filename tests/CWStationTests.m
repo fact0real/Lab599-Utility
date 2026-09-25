@@ -180,6 +180,13 @@ int main(int argc, const char * argv[]) {
         [[NSFileManager defaultManager] removeItemAtURL:tempADIF error:nil];
         NSLog(@"PASS: ADIF 3.1 generation and file export verified.");
 
+        decoder.preserveDeviceSelection=YES; decoder.selectedAudioDeviceUID=@"station-test-missing-input";
+        [decoder refreshAudioDevices];
+        AssertTrue([decoder.selectedAudioDeviceUID isEqual:@"station-test-missing-input"], @"CW keeps explicit station input when hardware is missing");
+        [keyer abortTransmission];
+        keyer.serialCommandSender=^BOOL(NSString *command) { return [command isEqual:@"KY ;RX;"]; };
+        [keyer transmitText:@"CQ" targetCall:@"" rst:@"" name:@"" qth:@""];
+        AssertTrue(!keyer.isTransmitting, @"Failed CW setup cancels keying");
         NSLog(@"ALL TX-500 CW STATION AND AUDIO DSP TESTS PASSED! ✓");
         [[NSFileManager defaultManager] removeItemAtPath:[NSString stringWithUTF8String:testRoot] error:nil];
     }

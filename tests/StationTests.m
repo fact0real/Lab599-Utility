@@ -8,14 +8,14 @@ static void Check(BOOL ok,NSString *why) { checks++; if(!ok) { fprintf(stderr,"F
 @interface FakeStationRadio : NSObject
 @property NSMutableDictionary *state;
 @property NSMutableArray *commands;
-@property BOOL failTX,failRX,failTune;
+@property BOOL failTX,failRX,failTune,failKY;
 @end
 @implementation FakeStationRadio
 - (instancetype)init { if((self=[super init])) { _state=[@{@"frequency":@14074000,@"mode":@6,@"rxVFO":@0,@"txVFO":@0,@"xit":@0,@"vox":@0,@"tx":@0} mutableCopy]; _commands=[NSMutableArray array]; } return self; }
 - (NSDictionary *)readState:(NSError **)error { (void)error; return self.state.copy; }
 - (BOOL)setTransmit:(BOOL)tx error:(NSError **)error { (void)error; [self.commands addObject:tx?@"TX;":@"RX;"]; if(tx) self.state[@"tx"]=@1; if((tx && self.failTX)||(!tx && self.failRX)) return NO; self.state[@"tx"]=@(tx); return YES; }
 - (NSString *)query:(NSString *)q error:(NSError **)error { (void)error; if([q isEqual:@"PT;"]) return [NSString stringWithFormat:@"PT%@;",self.state[@"tx"]]; return @"FA00014074000;"; }
-- (BOOL)send:(NSString *)c error:(NSError **)error { (void)error; [self.commands addObject:c]; if([c hasPrefix:@"FA"] && !self.failTune) { NSArray *parts=[c componentsSeparatedByString:@";"]; self.state[@"frequency"]=@([[parts[0] substringFromIndex:2] longLongValue]); if(parts.count>1 && [parts[1] hasPrefix:@"MD"]) self.state[@"mode"]=@([[parts[1] substringFromIndex:2] integerValue]); } return YES; }
+- (BOOL)send:(NSString *)c error:(NSError **)error { (void)error; [self.commands addObject:c]; if(self.failKY && [c hasPrefix:@"KY"]) return NO; if([c hasPrefix:@"FA"] && !self.failTune) { NSArray *parts=[c componentsSeparatedByString:@";"]; self.state[@"frequency"]=@([[parts[0] substringFromIndex:2] longLongValue]); if(parts.count>1 && [parts[1] hasPrefix:@"MD"]) self.state[@"mode"]=@([[parts[1] substringFromIndex:2] integerValue]); } if([c hasPrefix:@"MD"] && !self.failTune) self.state[@"mode"]=@([[c substringFromIndex:2] integerValue]); return YES; }
 - (void)close { [self.commands addObject:@"CLOSE"]; }
 @end
 static void TestCore(void) {
@@ -23,7 +23,7 @@ static void TestCore(void) {
     Check([c selectOwner:@"Digital" port:@"fake" error:nil],@"Select owner without transmitting"); Check(r.commands.count==0,@"Selecting owner performs no CAT writes");
     Check(![c transmit:YES owner:@"Voice" error:nil],@"Inactive sender rejected"); Check(r.commands.count==0,@"Rejected sender sends nothing");
     Check([c transmit:NO owner:@"Digital" error:nil],@"Unowned release is harmless"); Check(r.commands.count==0,@"Unowned release sends no RX");
-    Check([c transmit:YES owner:@"Digital" error:nil],@"PTT is verified"); Check(c.ownsTX,@"PTT ownership acquired");
+    Check([c transmit:YES owner:@"Digital" error:nil],@"PTT is verified"); Check(c.ownsTX,@"PTT ownership acquired"); Check([c.snapshot[@"tx"] boolValue],@"Confirmed TX updates the published snapshot");
     Check(![c selectOwner:@"Voice" port:@"fake" error:nil],@"Cannot steal TX ownership"); Check(![c tune:14285000 mode:2 owner:@"Digital" error:nil],@"Retune blocked in TX");
     Check([c query:@"PT;" error:nil]!=nil,@"Status subscribers can read during TX"); Check(![c query:@"RX;TX;" error:nil],@"Read-only path rejects mutations"); Check(![c query:@"TX;" error:nil] && ![c query:@"RX;" error:nil],@"Bare transmit commands are not queries");
     r.failRX=YES; Check(![c suspend:nil] && c.ownsTX,@"Unconfirmed RX retains ownership and port"); r.failRX=NO; Check([c suspend:nil] && !c.ownsTX,@"Confirmed RX permits handoff");
@@ -35,6 +35,9 @@ static void TestCore(void) {
     r.state[@"vox"]=@1; Check(![c transmit:YES owner:@"Station" error:nil],@"VOX blocks app TX"); r.state[@"vox"]=@0;
     [c selectOwner:@"CW" port:@"fake" error:nil]; Check([c send:@"KS022;KY CQ;" owner:@"CW" error:nil] && c.ownsTX,@"CW queue has exclusive TX ownership");
     Check(![c send:@"FA00014000000;" owner:@"Station" error:nil],@"Late command from old owner is rejected"); Check([c releaseOwnedTX:nil] && !c.ownsTX,@"CW release clears keying and RX");
+    r.failKY=YES;
+    Check(![c send:@"KY CQ;" owner:@"CW" error:nil] && c.ownsTX,@"Failed CW queue retains cleanup ownership");
+    Check([c send:@"KY ;RX;" owner:@"CW" error:nil] && !c.ownsTX,@"CW abort confirms RX even when clearing the queue fails");
     Check(![c tune:100 mode:2 owner:@"CW" error:nil],@"Invalid RF frequency rejected");
 }
 static void TestStore(NSURL *root) {
@@ -55,23 +58,48 @@ static void TestStore(NSURL *root) {
     Check([TX500StationStore segmentsAt:14074000].count==1,@"FT8 spectrum locates digital segment"); Check([TX500StationStore segmentsAt:14099000].count==1 && [[TX500StationStore segmentsAt:14099000][0][@"usage"] containsString:@"Beacons"],@"Band boundary is half-open");
     Check([TX500StationStore segmentsAt:5366500].count==0,@"Upper edge is excluded");
     [@"broken" writeToURL:url atomically:YES encoding:NSUTF8StringEncoding error:nil]; loaded=[[TX500StationStore alloc] initWithURL:url defaults:d]; Check(loaded.loadError!=nil && ![loaded saveFrequency:f error:nil],@"Corrupt store is preserved, never overwritten");
+    NSDictionary *invalid=@{@"version":@1,@"active":@"missing",@"profiles":@[],@"frequencies":@[],@"shortcuts":@{}};
+    [[NSJSONSerialization dataWithJSONObject:invalid options:0 error:nil] writeToURL:url atomically:YES];
+    loaded=[[TX500StationStore alloc] initWithURL:url defaults:d]; Check(loaded.loadError!=nil,@"Missing active profile is rejected without overwriting storage");
     [d removePersistentDomainForName:suite];
 }
 static uint16_t Get16(const uint8_t *b) { return ((uint16_t)b[0]<<8)|b[1]; }
 static uint32_t Get32(const uint8_t *b) { return ((uint32_t)b[0]<<24)|((uint32_t)b[1]<<16)|((uint32_t)b[2]<<8)|b[3]; }
 static void TestReporter(void) {
-    NSDictionary *r=@{@"call":@"K1ABC",@"grid":@"FN42",@"antenna":@"Dipole"}; NSDictionary *s=@{@"call":@"W1AW",@"grid":@"FN31",@"hz":@14074500,@"mode":@"FT8",@"time":@1700000000};
+    NSDictionary *r=@{@"call":@"K1ABC",@"grid":@"FN42",@"antenna":@"Dipole",@"rig":@"Lab599 TX-500"}; NSDictionary *s=@{@"call":@"W1AW",@"grid":@"FN31",@"hz":@14074500,@"mode":@"FT8",@"time":@1700000000};
     NSData *p=[TX500PSKReporter packetForReceiver:r spots:@[s] timestamp:1700000001 sequence:7 domain:42]; Check(p!=nil,@"Encode IPFIX packet"); const uint8_t *b=p.bytes;
     Check(Get16(b)==10 && Get16(b+2)==p.length,@"IPFIX version and network-order length"); Check(Get32(b+4)==1700000001 && Get32(b+8)==7 && Get32(b+12)==42,@"UTC, record sequence and stream ID");
-    NSUInteger offset=16; NSArray *ids=@[@3,@2,@0x9992,@0x9993]; NSArray *lens=@[@44,@52,@0,@0];
+    NSUInteger offset=16; NSArray *ids=@[@3,@2,@0x9992,@0x9993]; NSArray *lens=@[@52,@52,@0,@0];
     for(NSUInteger i=0;i<4;i++) { Check(offset+4<=p.length && Get16(b+offset)==[ids[i] intValue],@"Template and data set order"); uint16_t len=Get16(b+offset+2); Check(len>=4 && offset+len<=p.length && len%4==0,@"Bounded padded set"); if([lens[i] intValue]) Check(len==[lens[i] intValue],@"Official descriptor lengths"); offset+=len; }
     Check(offset==p.length,@"No trailing or truncated records");
     NSData *freq=[NSData dataWithBytes:(uint8_t[]){0x00,0xd6,0xc2,0x84} length:4]; // 14,074,500 Hz, big endian
     Check([p rangeOfData:freq options:0 range:NSMakeRange(0,p.length)].location!=NSNotFound,@"RF frequency is sent in Hz, not MHz or dial alone");
+    NSData *rig=[@"Lab599 TX-500" dataUsingEncoding:NSUTF8StringEncoding];
+    Check([p rangeOfData:rig options:0 range:NSMakeRange(0,p.length)].location!=NSNotFound,
+          @"Receiver record explicitly reports Lab599 TX-500 as rigInformation");
     Check(![TX500PSKReporter packetForReceiver:@{@"call":@"",@"grid":@"FN42"} spots:@[s] timestamp:0 sequence:0 domain:0],@"Missing receiver identity rejected");
     NSMutableDictionary *bad=[s mutableCopy]; bad[@"call"]=@"<...>"; Check(![TX500PSKReporter packetForReceiver:r spots:@[bad] timestamp:0 sequence:0 domain:0],@"Unresolved hashed callsign is not reported");
     TX500PSKReporter *reporter=[TX500PSKReporter new]; reporter.sender=^BOOL(NSData *data,NSError **error){(void)data;(void)error; Check(NO,@"Tests must not emit a network report");return NO;};
     [reporter enqueue:s receiver:r]; Check(reporter.pendingCount==0,@"Reporting is opt-in"); reporter.enabled=YES; [reporter enqueue:s receiver:r]; [reporter enqueue:s receiver:r]; Check(reporter.pendingCount==1,@"Duplicate call per band/mode suppressed"); reporter.enabled=NO; Check(reporter.pendingCount==0,@"Disabling clears unsent data");
+    __block NSUInteger packets=0, records=0; __block BOOL fail=YES;
+    reporter.sender=^BOOL(NSData *data,NSError **error) {
+        (void)error; Check(data.length<=1400,@"Batches respect the datagram size budget");
+        if(fail) return NO;
+        const uint8_t *bytes=data.bytes; Check(Get32(bytes+8)==records,@"Successful packets advance the sequence by report count");
+        NSUInteger pos=16; for(int i=0;i<3;i++) pos+=Get16(bytes+pos+2);
+        NSUInteger end=pos+Get16(bytes+pos+2); pos+=4;
+        while(pos<end && bytes[pos]) { pos+=1+bytes[pos]+4; pos+=1+bytes[pos]+1; pos+=1+bytes[pos]+4; records++; }
+        packets++; return YES;
+    };
+    reporter.enabled=YES;
+    NSDictionary *longReceiver=@{@"call":@"K1ABC",@"grid":@"FN42",@"antenna":[@"A" stringByPaddingToLength:254 withString:@"A" startingAtIndex:0]};
+    for(int i=0;i<45;i++) { NSMutableDictionary *spot=[s mutableCopy]; spot[@"call"]=[NSString stringWithFormat:@"W%030dA",i]; spot[@"grid"]=@"FN31AA00"; [reporter enqueue:spot receiver:longReceiver]; }
+    Check(reporter.pendingCount==45,@"Long but valid reports queue successfully");
+    [reporter setValue:@0 forKey:@"lastFlush"]; [reporter flush]; Check(reporter.pendingCount==45,@"Failed UDP submission retains queued reports");
+    fail=NO; [reporter setValue:@0 forKey:@"lastFlush"]; [reporter flush];
+    Check(reporter.pendingCount==0 && packets>=3 && records==45,@"Oversized batch splits without losing or duplicating reports");
+    reporter.enabled=NO;
+
 }
 int main(int argc,const char *argv[]) { @autoreleasepool { (void)argc;(void)argv; char path[]="/tmp/StationTests.XXXXXX"; Check(mkdtemp(path)!=NULL,@"Isolated test directory"); NSURL *root=[NSURL fileURLWithPath:[NSString stringWithUTF8String:path]]; TestCore(); TestStore(root); TestReporter();
     if([NSProcessInfo.processInfo.arguments containsObject:@"--render"]) { setenv("TX500_STATION_TEST_ROOT",path,1); [NSApplication sharedApplication];
@@ -79,6 +107,11 @@ int main(int argc,const char *argv[]) { @autoreleasepool { (void)argc;(void)argv
             TX500StationController *c=[TX500StationController new]; c.core=[TX500StationCore new]; NSWindow *w=[[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,width.doubleValue,1100) styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO]; w.appearance=[NSAppearance appearanceNamed:NSAppearanceNameDarkAqua]; w.contentView=c.view;
             NSSegmentedControl *tabs=[c valueForKey:@"tabs"]; tabs.selectedSegment=tab.integerValue; [c performSelector:@selector(tabChanged:) withObject:nil]; [c activate]; [w layoutIfNeeded]; [c.view layoutSubtreeIfNeeded];
             Check(!c.view.hasAmbiguousLayout,@"Station pane has determinate layout");
+            if(tab.integerValue<2) {
+                NSTableView *table=[c valueForKey:tab.integerValue==0 ? @"table" : @"bandTable"];
+                CGFloat total=0; for(NSTableColumn *column in table.tableColumns) total+=column.width;
+                Check(total<=table.enclosingScrollView.contentView.bounds.size.width+3,@"All table columns fit the compact pane");
+            }
             NSBitmapImageRep *rep=[c.view bitmapImageRepForCachingDisplayInRect:c.view.bounds]; [c.view cacheDisplayInRect:c.view.bounds toBitmapImageRep:rep]; [[rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}] writeToFile:[NSString stringWithFormat:@"validation/station-%@-%@.png",width,tab] atomically:YES];
         }
     }

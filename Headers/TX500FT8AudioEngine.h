@@ -31,6 +31,7 @@ typedef NS_ENUM(NSInteger, TX500FT8SlotParity) {
 @property (nonatomic, copy) NSString *myGrid;
 
 // Audio Hardware Devices
+@property (nonatomic) BOOL preserveDeviceSelection; // Explicit station routes never fall back on disconnect.
 @property (nonatomic, copy, nullable) NSString *selectedInputDeviceUID;
 @property (nonatomic, copy, nullable) NSString *selectedOutputDeviceUID;
 @property (nonatomic, strong, readonly) NSArray<NSDictionary<NSString *, NSString *> *> *inputDevices;
@@ -40,6 +41,8 @@ typedef NS_ENUM(NSInteger, TX500FT8SlotParity) {
 
 // Radio & Frequencies
 @property (nonatomic, assign) uint64_t dialFrequencyHz; // e.g. 14074000
+@property (nonatomic, assign) BOOL requiresVerifiedCATDial;
+@property (nonatomic, assign) BOOL catDialAndModeVerified;
 @property (nonatomic, assign) float rxAudioFrequencyHz; // e.g. 1200 Hz
 @property (nonatomic, assign) float txAudioFrequencyHz; // e.g. 1500 Hz
 @property (nonatomic, assign) BOOL lockTxRxFrequencies;
@@ -52,6 +55,8 @@ typedef NS_ENUM(NSInteger, TX500FT8SlotParity) {
 @property (nonatomic, assign, readonly) BOOL isTransmitting;
 @property (nonatomic, assign, readonly) BOOL isTuning;
 @property (nonatomic, assign) BOOL isTransmitArmed;
+@property (nonatomic, assign) BOOL repeatArmedTransmission;
+@property (nonatomic, assign, readonly) BOOL isReceiveRecoveryPending;
 @property (nonatomic, assign) TX500FT8SlotParity txSlotParity;
 @property (nonatomic, assign) BOOL isSimulationMode;
 
@@ -89,13 +94,24 @@ typedef NS_ENUM(NSInteger, TX500FT8SlotParity) {
 // Live SWR Monitoring (polled from radio via CAT during TX)
 @property (nonatomic, copy, nullable) void (^onSWRUpdated)(double swrValue); // called when SWR read from radio
 @property (nonatomic, copy, nullable) void (^onSWRMeterUpdated)(NSInteger rawDots, BOOL valid); // documented RM1 meter, 0...30 dots
+@property (nonatomic, copy, nullable) void (^onALCMeterUpdated)(NSInteger rawDots, BOOL valid); // documented RM3 meter, 0...30 dots
+@property (nonatomic, copy, nullable) void (^onPowerMeterUpdated)(NSInteger rawDots, BOOL valid); // documented SM0 TX power meter, 0...30 dots
 @property (nonatomic, assign) double maxSWRThreshold; // 0 = disabled, >0 = abort TX if exceeded
 @property (nonatomic, assign, readonly) double lastSWRReading;
 @property (nonatomic, assign, readonly) NSInteger lastSWRMeterDots;
 @property (nonatomic, assign, readonly) BOOL swrMeterValid;
+@property (nonatomic, strong, readonly, nullable) NSDate *lastSWRMeterSampleDate;
+@property (nonatomic, assign, readonly) NSInteger lastALCMeterDots;
+@property (nonatomic, assign, readonly) BOOL alcMeterValid;
+@property (nonatomic, assign, readonly) NSUInteger alcMeterSampleCount;
+@property (nonatomic, strong, readonly, nullable) NSDate *lastALCMeterSampleDate;
+@property (nonatomic, assign, readonly) NSInteger lastPowerMeterDots;
+@property (nonatomic, assign, readonly) BOOL powerMeterValid;
 
 // Strict parser for the documented TX-500 RM1dddd; CAT frame.
 + (BOOL)parseSWRMeterReply:(nullable NSString *)reply rawDots:(NSInteger *)rawDots;
++ (BOOL)parseMeterReply:(nullable NSString *)reply meter:(NSInteger)meter rawDots:(NSInteger *)rawDots;
++ (BOOL)parsePowerMeterReply:(nullable NSString *)reply rawDots:(NSInteger *)rawDots;
 + (double)swrRatioFromMeterDots:(NSInteger)dots;
 
 // Control Methods
@@ -107,6 +123,7 @@ typedef NS_ENUM(NSInteger, TX500FT8SlotParity) {
 // Transmit Control
 - (void)armTransmitWithText:(NSString *)text parity:(TX500FT8SlotParity)parity;
 - (void)disarmTransmit;
+- (void)resetSWRReading;
 - (void)beginTransmission;
 - (void)endTransmission;
 - (void)startTuneCarrier;

@@ -30,15 +30,21 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy, nullable) BOOL (^pttControlHandler)(BOOL pttActive);
 @property (nonatomic, copy, nullable) NSString * _Nullable (^catQueryHandler)(NSString *catCommand, NSTimeInterval timeout);
 @property (nonatomic, copy, nullable) void (^stationStateChangedHandler)(BOOL isMonitoring);
+/// Follows the complete user-requested Digital run, including audio setup and
+/// failure diagnostics that occur before monitoring becomes active.
+@property (nonatomic, copy, nullable) void (^diagnosticSessionStateChangedHandler)(BOOL isRunning);
 
 // Lifecycle & Protocol
 @property (nonatomic, assign) tx500_ft8_protocol_t protocol;
 - (void)selectProtocol:(tx500_ft8_protocol_t)protocol;
 - (void)startStation;
 - (void)stopStation;
+- (void)prepareRadioForDigitalMode;
 - (void)updateFrequencyHz:(uint64_t)freqHz mode:(NSString *)mode;
+- (void)refreshRadioFrequency;
 - (void)reloadStationPreferences;
 - (void)setSimulationEnabled:(BOOL)enabled;
+- (void)startSimulationPreview;
 - (void)refreshAudioTab;
 - (void)updateAudioDeviceMenus;
 - (void)toggleWideTables:(nullable id)sender;

@@ -47,3 +47,6 @@ fastlane/test_output
 build/
 *.app
 .DS_Store
+
+# 
+validation/

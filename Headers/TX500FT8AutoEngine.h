@@ -79,7 +79,7 @@ typedef NS_ENUM(NSInteger, TX500FT8HunterCriteria) {
 @property (nonatomic, assign) BOOL autoHunterSkipWorked;    // default YES
 @property (nonatomic, copy) NSString *autoHunterContinent;  // @"ALL", @"EU", @"AS", @"NA", etc.
 @property (nonatomic, copy, readonly) NSString *autoHunterStatus;
-// Maximum number of TX-retry cycles per callsign before giving up (1–9, default 2).
+// Maximum number of total transmissions of one unanswered message (1–9, default 3).
 // Persisted in TX500_MaxReplyAttempts NSUserDefaults key.
 @property (nonatomic, assign) NSInteger maxReplyAttempts;
 
@@ -98,6 +98,9 @@ typedef NS_ENUM(NSInteger, TX500FT8HunterCriteria) {
 
 // High-Level Operator Controls
 - (void)startAutoCQWithLimit:(NSInteger)count;
+- (BOOL)startCQWithText:(NSString *)text parity:(TX500FT8SlotParity)parity limit:(NSInteger)count;
+- (void)noteTransmittedText:(NSString *)text;
+- (void)noteTransmissionEnded;
 - (void)stopAutoCQ;
 - (void)setCallingCQState:(BOOL)callingCQ;
 

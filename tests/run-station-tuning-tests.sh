@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+cd "$(dirname "$0")/.."
+mkdir -p build validation
+clang -O1 -g -Wall -Wextra -Werror -Wno-unused-parameter -fobjc-arc -mmacosx-version-min=12.0 \
+ -framework Foundation -IHeaders -ISources tests/StationTuningTests.m \
+ Sources/TX500StationCore.m Sources/TX500VoiceCATRadio.m Sources/Lab599SerialPort.m -o build/StationTuningTests
+./build/StationTuningTests

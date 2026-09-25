@@ -1,5 +1,6 @@
 #import "TX500VoiceKeyer.h"
 #import "TX500VoiceKeyerController.h"
+#import "Lab599SerialPort.h"
 #import <util.h>
 #import <unistd.h>
 #import <poll.h>
@@ -178,7 +179,7 @@ static void TestLibrary(NSURL *root) {
 }
 static void TestCAT(void) {
     int master=-1,slave=-1; char path[256]={0}; Check(openpty(&master,&slave,path,NULL,NULL)==0,@"PTY radio created"); close(slave);
-    __block BOOL transmitting=NO; __block NSString *frequency=@"00014200000"; __block NSString *mode=@"2";
+    __block BOOL transmitting=NO; __block double pttSettlesAt=0; __block NSString *frequency=@"00014200000"; __block NSString *mode=@"2";
     NSMutableArray *commands=[NSMutableArray array]; dispatch_group_t group=dispatch_group_create();
     dispatch_queue_t queue=dispatch_queue_create("voice.test.radio",DISPATCH_QUEUE_SERIAL);
     __block BOOL quit=NO;
@@ -197,9 +198,9 @@ static void TestCAT(void) {
                 else if([cmd hasPrefix:@"FA"]) frequency=[cmd substringWithRange:NSMakeRange(2,11)];
                 else if([cmd isEqual:@"MD;"]) reply=[NSString stringWithFormat:@"MD%@;",mode];
                 else if([cmd hasPrefix:@"MD"]) mode=[cmd substringWithRange:NSMakeRange(2,1)];
-                else if([cmd isEqual:@"PT;"]) reply=transmitting ? @"PT1;" : @"PT0;";
-                else if([cmd isEqual:@"TX;"]) transmitting=YES;
-                else if([cmd isEqual:@"RX;"]) transmitting=NO;
+                else if([cmd isEqual:@"PT;"]) reply=(Lab599MonotonicTime() < pttSettlesAt ? !transmitting : transmitting) ? @"PT1;" : @"PT0;";
+                else if([cmd isEqual:@"TX;"]) { transmitting=YES; pttSettlesAt=Lab599MonotonicTime()+0.25; }
+                else if([cmd isEqual:@"RX;"]) { transmitting=NO; pttSettlesAt=Lab599MonotonicTime()+0.25; }
                 else if([@[@"FR;",@"FT;",@"XT;",@"VX;"] containsObject:cmd]) reply=[[cmd substringToIndex:2] stringByAppendingString:@"0;"];
                 else reply=@"?;";
                 if(reply) { NSData *data=[reply dataUsingEncoding:NSASCIIStringEncoding]; const char *p=data.bytes; write(master,p,1); usleep(1000); write(master,p+1,data.length-1); }
@@ -210,7 +211,7 @@ static void TestCAT(void) {
     NSDictionary *s=[radio readState:&e]; Check(s && [s[@"frequency"] isEqual:@14200000],@"CAT handles fragmented status frames");
     Check([radio tuneFrequency:7100000 mode:1 error:&e],@"CAT sets requested voice frequency");
     s=[radio readState:&e]; Check([s[@"frequency"] isEqual:@7100000] && [s[@"mode"] isEqual:@1],@"CAT frequency/mode readback");
-    Check([radio setTransmit:YES error:&e],@"CAT TX verified using PT"); Check([radio setTransmit:NO error:&e],@"CAT RX verified using PT");
+    Check([radio setTransmit:YES error:&e],@"CAT TX verified after delayed PT transition"); Check([radio setTransmit:NO error:&e],@"CAT RX verified after delayed PT transition");
     @synchronized(commands) { Check(![commands containsObject:@"TX1;"],@"No undocumented TX audio selector"); quit=YES; }
     [radio close]; dispatch_group_wait(group,DISPATCH_TIME_FOREVER); close(master);
 }

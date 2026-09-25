@@ -18,6 +18,7 @@ NSString * const TX500CloudSettingsDidChangeNotification = @"TX500CloudSettingsD
 
 @property (nonatomic, strong) NSSegmentedControl *tabSegment;
 @property (nonatomic, strong) NSTabView *tabView;
+@property (nonatomic, strong) TX500WebAuthenticatorController *activeAuthenticator;
 
 // LoTW Controls
 @property (nonatomic, strong) NSTextField *lotwUsernameField;
@@ -948,11 +949,11 @@ NSString * const TX500CloudSettingsDidChangeNotification = @"TX500CloudSettingsD
 
 - (void)update2FABadges {
     BOOL qrz2FA = [TX500WebAuthenticatorController hasSavedSessionForService:TX500AuthServiceQRZ];
-    self.qrz2FAStatusBadge.stringValue = qrz2FA ? @"🔐 2FA Session Active & Saved" : @"⚪ No 2FA Session Saved";
+    self.qrz2FAStatusBadge.stringValue = qrz2FA ? @"🔐 Browser Session Saved" : @"⚪ No 2FA Session Saved";
     self.qrz2FAStatusBadge.textColor = qrz2FA ? [NSColor systemGreenColor] : [NSColor secondaryLabelColor];
 
     BOOL cl2FA = [TX500WebAuthenticatorController hasSavedSessionForService:TX500AuthServiceClubLog];
-    self.clubLog2FAStatusBadge.stringValue = cl2FA ? @"🔐 2FA Session Active & Saved" : @"⚪ No 2FA Session Saved";
+    self.clubLog2FAStatusBadge.stringValue = cl2FA ? @"🔐 Browser Session Saved" : @"⚪ No 2FA Session Saved";
     self.clubLog2FAStatusBadge.textColor = cl2FA ? [NSColor systemGreenColor] : [NSColor secondaryLabelColor];
 }
 
@@ -1050,10 +1051,26 @@ NSString * const TX500CloudSettingsDidChangeNotification = @"TX500CloudSettingsD
 }
 
 - (void)qrz2FALoginClicked {
-    TX500WebAuthenticatorController *auth = [TX500WebAuthenticatorController authenticatorForService:TX500AuthServiceQRZ];
+    [self presentAuthenticatorForService:TX500AuthServiceQRZ];
+}
+
+- (TX500WebAuthenticatorController *)newAuthenticatorForService:(TX500AuthService)service {
+    return [TX500WebAuthenticatorController authenticatorForService:service];
+}
+
+- (void)presentAuthenticatorForService:(TX500AuthService)service {
+    if (self.activeAuthenticator) {
+        [self.activeAuthenticator.window makeKeyAndOrderFront:nil];
+        return;
+    }
+    // Buttons and WebKit delegates do not retain their target. Own the controller
+    // until it has dismissed the window and delivered its completion.
+    TX500WebAuthenticatorController *auth = [self newAuthenticatorForService:service];
+    self.activeAuthenticator = auth;
     __weak typeof(self) weakSelf = self;
-    [auth presentModalOverWindow:self.window completion:^(BOOL success, NSString *message) {
+    [auth presentModalOverWindow:self.settingsView.window ?: self.window completion:^(BOOL success, NSString *message) {
         (void)success; (void)message;
+        weakSelf.activeAuthenticator = nil;
         [weakSelf update2FABadges];
         [[NSNotificationCenter defaultCenter] postNotificationName:TX500CloudSettingsDidChangeNotification object:nil];
         if (weakSelf.onSettingsChanged) weakSelf.onSettingsChanged();
@@ -1068,14 +1085,7 @@ NSString * const TX500CloudSettingsDidChangeNotification = @"TX500CloudSettingsD
 }
 
 - (void)clubLog2FALoginClicked {
-    TX500WebAuthenticatorController *auth = [TX500WebAuthenticatorController authenticatorForService:TX500AuthServiceClubLog];
-    __weak typeof(self) weakSelf = self;
-    [auth presentModalOverWindow:self.window completion:^(BOOL success, NSString *message) {
-        (void)success; (void)message;
-        [weakSelf update2FABadges];
-        [[NSNotificationCenter defaultCenter] postNotificationName:TX500CloudSettingsDidChangeNotification object:nil];
-        if (weakSelf.onSettingsChanged) weakSelf.onSettingsChanged();
-    }];
+    [self presentAuthenticatorForService:TX500AuthServiceClubLog];
 }
 
 - (void)clubLog2FAClearClicked {

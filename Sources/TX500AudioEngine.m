@@ -620,7 +620,7 @@ static OSStatus AudioMonitorHardwareDevicesListener(AudioObjectID inObjectID,
         }
     }
 
-    if (!selectedInValid || (currentInIsVirtual && (bestAD508InUID || bestUSBInUID)) || !self.selectedInputDeviceUID || [self.selectedInputDeviceUID isEqualToString:@"default"]) {
+    if (!self.preserveDeviceSelection && (!selectedInValid || (currentInIsVirtual && (bestAD508InUID || bestUSBInUID)) || !self.selectedInputDeviceUID || [self.selectedInputDeviceUID isEqualToString:@"default"])) {
         if (bestAD508InUID) {
             _selectedInputDeviceUID = bestAD508InUID;
         } else if (bestUSBInUID) {
@@ -630,7 +630,7 @@ static OSStatus AudioMonitorHardwareDevicesListener(AudioObjectID inObjectID,
         }
     }
 
-    if (!self.selectedOutputDeviceUID) {
+    if (!self.preserveDeviceSelection && !self.selectedOutputDeviceUID) {
         TX500AudioDeviceItem *bestOutput = nil;
         for (TX500AudioDeviceItem *outItem in outputs) {
             NSString *lower = [outItem.name lowercaseString];
@@ -867,6 +867,15 @@ static OSStatus AudioMonitorHardwareDevicesListener(AudioObjectID inObjectID,
     if (self.isMonitoring) return YES;
 
     [self refreshDevices];
+    if(self.preserveDeviceSelection) {
+        BOOL inputOK=NO, outputOK=NO;
+        for(TX500AudioDeviceItem *d in self.inputDevices) if([d.uid isEqual:self.selectedInputDeviceUID]) inputOK=YES;
+        for(TX500AudioDeviceItem *d in self.outputDevices) if([d.uid isEqual:self.selectedOutputDeviceUID]) outputOK=YES;
+        if(!inputOK || !outputOK) {
+            if(error) *error=[NSError errorWithDomain:@"TX500AudioErrorDomain" code:1 userInfo:@{NSLocalizedDescriptionKey:@"The station's receive input or headphones are unavailable. Select connected audio devices in Station Profiles."}];
+            return NO;
+        }
+    }
 
     // Reset ring buffer
     pthread_mutex_lock(&_ringMutex);
@@ -917,7 +926,10 @@ static OSStatus AudioMonitorHardwareDevicesListener(AudioObjectID inObjectID,
     // Set Input Device
     if (self.selectedInputDeviceUID && ![self.selectedInputDeviceUID isEqualToString:@"default"]) {
         CFStringRef uidRef = (__bridge CFStringRef)self.selectedInputDeviceUID;
-        AudioQueueSetProperty(self.inputQueue, kAudioQueueProperty_CurrentDevice, &uidRef, sizeof(uidRef));
+        st=AudioQueueSetProperty(self.inputQueue, kAudioQueueProperty_CurrentDevice, &uidRef, sizeof(uidRef));
+        if(st!=noErr) { AudioQueueDispose(self.inputQueue,true); self.inputQueue=NULL;
+            if(error) *error=[NSError errorWithDomain:@"TX500AudioErrorDomain" code:st userInfo:@{NSLocalizedDescriptionKey:@"The selected receive input could not be opened."}]; return NO; }
+
     }
 
     // Allocate Input Buffers
@@ -947,7 +959,10 @@ static OSStatus AudioMonitorHardwareDevicesListener(AudioObjectID inObjectID,
     // Set Output Device
     if (self.selectedOutputDeviceUID && ![self.selectedOutputDeviceUID isEqualToString:@"default"]) {
         CFStringRef uidRef = (__bridge CFStringRef)self.selectedOutputDeviceUID;
-        AudioQueueSetProperty(self.outputQueue, kAudioQueueProperty_CurrentDevice, &uidRef, sizeof(uidRef));
+        st=AudioQueueSetProperty(self.outputQueue, kAudioQueueProperty_CurrentDevice, &uidRef, sizeof(uidRef));
+        if(st!=noErr) { AudioQueueDispose(self.inputQueue,true); self.inputQueue=NULL; AudioQueueDispose(self.outputQueue,true); self.outputQueue=NULL;
+            if(error) *error=[NSError errorWithDomain:@"TX500AudioErrorDomain" code:st userInfo:@{NSLocalizedDescriptionKey:@"The selected headphones could not be opened."}]; return NO; }
+
     }
 
     // Allocate Output Buffers (stereo: 2 * bufferByteSize)

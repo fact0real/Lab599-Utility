@@ -14,9 +14,10 @@
 #define FT8_SLOT_SECONDS 15.0
 #define FT8_TX_SECONDS 14.5
 #define FT8_MAX_SLOT_SAMPLES (FT8_SAMPLE_RATE * 15)
-#define FT8_WATERFALL_BINS 256
+#define FT8_WATERFALL_BINS 4096
 
-#define TX500_FT8_FFT_SIZE 1024
+#define TX500_FT8_FFT_SIZE 16384
+#define TX500_FT8_WATER_BUFFER_SIZE 16384
 
 @interface TX500FT8AudioEngine () {
     AudioQueueRef _inputQueue;
@@ -38,7 +39,7 @@
     // Waterfall FFT buffer & live audio circular buffer
     float *_waterfallMag;
     double _lastWaterfallUpdateMonotonic;
-    float _liveWaterBuffer[2048];
+    float _liveWaterBuffer[TX500_FT8_WATER_BUFFER_SIZE];
     int _liveWaterHead;
     NSLock *_liveWaterLock;
     float _liveNoiseFloorDb;
@@ -47,7 +48,7 @@
 
     // High precision slot clock
     dispatch_source_t _slotTimer;
-    double _lastSlotSecond;
+    int64_t _lastProcessedSlotIndex;
     BOOL _slotDecodeDispatched;
     double _rxBufferStartMonotonic;
     TX500AudioClockTracker *_audioClockTracker;
@@ -74,8 +75,27 @@
     double _lastSWRReading;
     NSInteger _lastSWRMeterDots;
     BOOL _swrMeterValid;
+    NSDate *_lastSWRMeterSampleDate;
+    NSInteger _lastALCMeterDots;
+    BOOL _alcMeterValid;
+    NSUInteger _alcMeterSampleCount;
+    NSDate *_lastALCMeterSampleDate;
+    NSInteger _lastPowerMeterDots;
+    BOOL _powerMeterValid;
     BOOL _swrQueryInFlight;
+    NSUInteger _swrPollingGeneration;
+    NSInteger _meterPollPhase;
+    NSUInteger _meterPollFailureCount;
     dispatch_source_t _swrPollTimer;
+
+    // A TX slot is not complete until the radio has explicitly confirmed RX.
+    // Keep the state keyed while recovery retries are in flight so another TX
+    // cannot begin over an unresolved PTT state.
+    BOOL _receiveReleaseInProgress;
+    NSUInteger _receiveReleaseGeneration;
+    NSUInteger _receiveReleaseAttempt;
+    double _lastInputCallbackMonotonic;
+    NSUInteger _audioRecoveryGeneration;
 }
 
 @property (nonatomic, assign, readwrite) float audioInputLevelDb;
@@ -93,6 +113,10 @@
 - (void)startSWRPolling;
 - (void)stopSWRPolling;
 - (void)pollSWRMeter;
+- (void)processSlotTickAtUTC:(NSTimeInterval)now;
+- (void)requestReceiveReleaseForGeneration:(NSUInteger)generation;
+- (void)finishReceiveTransitionAfterRecovery:(BOOL)recovered;
+- (void)verifyReceiveCaptureAfterRestart:(NSUInteger)generation restartedAt:(double)restartedAt;
 
 @end
 
@@ -155,6 +179,12 @@ static void TX500FT8ComputeFFT(const float *realIn, float *magnitudesOut, int n)
     }
 }
 
+static int TX500CompareFloatAscending(const void *lhs, const void *rhs) {
+    float a = *(const float *)lhs;
+    float b = *(const float *)rhs;
+    return (a > b) - (a < b);
+}
+
 // AudioQueue Callbacks
 static void FT8AudioQueueInputCallback(void *inUserData,
                                        AudioQueueRef inAQ,
@@ -213,6 +243,7 @@ static void FT8AudioQueueOutputCallback(void *inUserData,
         _protocol = TX500_FT8_PROTOCOL_FT8;
         _txSlotParity = TX500FT8SlotParityEven;
         _isTransmitArmed = NO;
+        _lastProcessedSlotIndex = INT64_MIN;
         // Simulation mode defaults to NO (Live Radio Mode) so connected TX-500 transceivers operate on air.
         // It is only enabled if explicitly passed via CLI arguments or toggled by the operator in the current session.
         _isSimulationMode = NO;
@@ -223,6 +254,7 @@ static void FT8AudioQueueOutputCallback(void *inUserData,
         _rxBuffer = (float *)calloc(FT8_MAX_SLOT_SAMPLES, sizeof(float));
         _rxBufferCount = 0;
         _rxBufferStartMonotonic = NAN;
+        _lastInputCallbackMonotonic = -DBL_MAX;
         _rxBufferLock = [[NSLock alloc] init];
         _audioClockTracker = [[TX500AudioClockTracker alloc] initWithNominalSampleRate:FT8_SAMPLE_RATE];
 
@@ -277,7 +309,7 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
         if (_isSimulationMode) {
             [self teardownAudioHardware];
         } else {
-            [self setupAudioHardware:nil];
+            if(![self setupAudioHardware:nil]) [self stopMonitoring];
         }
     }
 }
@@ -511,7 +543,12 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
     }
 
     // If no device selected, invalid, or currently selected is a virtual driver and a real radio USB is available:
-    if (!selectedInValid || (currentInIsVirtual && (bestAD508InUID || bestUSBInUID)) || !_selectedInputDeviceUID) {
+    // A USB audio interface receives a new CoreAudio UID after a hot unplug.
+    // A preserved UID is therefore only a preference, never a reason to keep
+    // an unavailable device selected. Rebind to the best physical interface
+    // immediately so reconnecting the cable does not leave FT8 unusable.
+    if ((!selectedInValid && (bestAD508InUID || bestUSBInUID)) ||
+        (!self.preserveDeviceSelection && (currentInIsVirtual || !_selectedInputDeviceUID))) {
         if (bestAD508InUID) {
             _selectedInputDeviceUID = bestAD508InUID;
         } else if (bestUSBInUID) {
@@ -533,7 +570,8 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
             break;
         }
     }
-    if (!selectedOutValid || (currentOutIsVirtual && (bestAD508OutUID || bestUSBOutUID)) || !_selectedOutputDeviceUID) {
+    if ((!selectedOutValid && (bestAD508OutUID || bestUSBOutUID)) ||
+        (!self.preserveDeviceSelection && (currentOutIsVirtual || !_selectedOutputDeviceUID))) {
         if (bestAD508OutUID) {
             _selectedOutputDeviceUID = bestAD508OutUID;
         } else if (bestUSBOutUID) {
@@ -543,6 +581,10 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
         }
     }
 
+    if(self.preserveDeviceSelection && self.isMonitoring && !self.isSimulationMode && (!selectedInValid || !selectedOutValid)) {
+        [self disarmTransmit]; [self stopTuneCarrier]; [self stopMonitoring];
+        if(self.logHandler) self.logHandler(@"Station audio device disconnected. Monitoring and transmission stopped.");
+    }
     if (self.onAudioDevicesChanged) {
         dispatch_async(dispatch_get_main_queue(), ^{
             if (self.onAudioDevicesChanged) self.onAudioDevicesChanged();
@@ -555,12 +597,24 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
 - (BOOL)startMonitoring:(NSError **)error {
     if (self.isMonitoring) return YES;
 
-    // Ensure radio mode is set to DIG
-    if (self.serialCommandSender && !self.isSimulationMode) {
-        self.serialCommandSender(@"MD6;");
+    [self resetSWRReading];
+
+    if(!self.isSimulationMode && self.preserveDeviceSelection) {
+        BOOL inputOK=NO, outputOK=NO;
+        for(NSDictionary *d in self.inputDevices) if([d[@"uid"] isEqual:self.selectedInputDeviceUID]) inputOK=YES;
+        for(NSDictionary *d in self.outputDevices) if([d[@"uid"] isEqual:self.selectedOutputDeviceUID]) outputOK=YES;
+        if(!inputOK || !outputOK) {
+            if(error) *error=[NSError errorWithDomain:@"TX500AudioErrorDomain" code:1 userInfo:@{NSLocalizedDescriptionKey:@"The station's radio input or transmit output is unavailable. Select connected audio devices in Station Profiles."}];
+            return NO;
+        }
     }
+    if(!self.isSimulationMode && ![self setupAudioHardware:error]) return NO;
+    // The station controller requests DIG mode asynchronously before monitoring.
+    // Do not run a second synchronous CAT command on the UI thread here: a
+    // slow serial acknowledgement can freeze Start FT8 and miss slot starts.
     [[TX500DisciplinedClock sharedClock] setCriticalTimingActive:YES];
     [[TX500DisciplinedClock sharedClock] startAutomaticNetworkSynchronization];
+    _lastProcessedSlotIndex = INT64_MIN;
 
     // A 10 ms cadence bounds software slot-start jitter.  The output queue uses
     // four 10 ms buffers, keeping total queued silence below one FT8 coarse
@@ -572,11 +626,6 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
         [weakSelf processSlotTick];
     });
     dispatch_resume(_slotTimer);
-
-    // Setup CoreAudio Units if not pure simulation
-    if (!_isSimulationMode) {
-        [self setupAudioHardware:error];
-    }
 
     self.isMonitoring = YES;
     if (self.logHandler) {
@@ -609,75 +658,51 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
     }
 }
 
-- (void)setupAudioHardware:(NSError **)error {
-    (void)error;
+- (BOOL)audioSetupFailed:(OSStatus)status error:(NSError **)error {
     [self teardownAudioHardware];
-
-    // Audio format: 12000 Hz 32-bit Float Mono
-    AudioStreamBasicDescription inFormat;
-    memset(&inFormat, 0, sizeof(inFormat));
-    inFormat.mSampleRate = FT8_SAMPLE_RATE;
-    inFormat.mFormatID = kAudioFormatLinearPCM;
-    inFormat.mFormatFlags = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked;
-    inFormat.mBytesPerPacket = 4;
-    inFormat.mFramesPerPacket = 1;
-    inFormat.mBytesPerFrame = 4;
-    inFormat.mChannelsPerFrame = 1; // Mono
-    inFormat.mBitsPerChannel = 32;
-
-    OSStatus st = AudioQueueNewInput(&inFormat, FT8AudioQueueInputCallback, (__bridge void *)self,
-                                     NULL, NULL, 0, &_inputQueue);
-    if (st != noErr) {
-        if (self.logHandler) {
-            self.logHandler([NSString stringWithFormat:@"[Audio Error] AudioQueueNewInput failed: %d", (int)st]);
-        }
-        return;
+    NSString *message=[NSString stringWithFormat:@"Cannot open the selected radio audio devices (error %d). Check the station routes and microphone permission.",(int)status];
+    if(error) *error=[NSError errorWithDomain:@"TX500AudioErrorDomain" code:status userInfo:@{NSLocalizedDescriptionKey:message}];
+    if(self.logHandler) self.logHandler(message);
+    return NO;
+}
+- (BOOL)setupAudioHardware:(NSError **)error {
+    [self teardownAudioHardware];
+    AudioStreamBasicDescription format={0};
+    format.mSampleRate=FT8_SAMPLE_RATE; format.mFormatID=kAudioFormatLinearPCM;
+    format.mFormatFlags=kAudioFormatFlagIsFloat|kAudioFormatFlagIsPacked;
+    format.mBytesPerPacket=4; format.mFramesPerPacket=1; format.mBytesPerFrame=4;
+    format.mChannelsPerFrame=1; format.mBitsPerChannel=32;
+    OSStatus status=AudioQueueNewInput(&format,FT8AudioQueueInputCallback,(__bridge void *)self,NULL,NULL,0,&_inputQueue);
+    if(status!=noErr) return [self audioSetupFailed:status error:error];
+    if(self.selectedInputDeviceUID.length && ![self.selectedInputDeviceUID isEqual:@"default"]) {
+        CFStringRef uid=(__bridge CFStringRef)self.selectedInputDeviceUID;
+        status=AudioQueueSetProperty(_inputQueue,kAudioQueueProperty_CurrentDevice,&uid,sizeof(uid));
+        if(status!=noErr) return [self audioSetupFailed:status error:error];
     }
-
-    // Set selected device if specified
-    if (self.selectedInputDeviceUID && self.selectedInputDeviceUID.length > 0 &&
-        ![self.selectedInputDeviceUID isEqualToString:@"default"]) {
-        CFStringRef uidRef = (__bridge CFStringRef)self.selectedInputDeviceUID;
-        AudioQueueSetProperty(_inputQueue, kAudioQueueProperty_CurrentDevice, &uidRef, sizeof(uidRef));
+    status=AudioQueueNewOutput(&format,FT8AudioQueueOutputCallback,(__bridge void *)self,NULL,NULL,0,&_outputQueue);
+    if(status!=noErr) return [self audioSetupFailed:status error:error];
+    if(self.selectedOutputDeviceUID.length && ![self.selectedOutputDeviceUID isEqual:@"default"]) {
+        CFStringRef uid=(__bridge CFStringRef)self.selectedOutputDeviceUID;
+        status=AudioQueueSetProperty(_outputQueue,kAudioQueueProperty_CurrentDevice,&uid,sizeof(uid));
+        if(status!=noErr) return [self audioSetupFailed:status error:error];
     }
-
-    // Input uses 100 ms buffers for efficient decoding and carries an exact
-    // AudioTimeStamp, so buffer size does not reduce timing precision.
-    UInt32 bufferByteSize = 1200 * sizeof(float);
-    for (int i = 0; i < 4; i++) {
-        AudioQueueAllocateBuffer(_inputQueue, bufferByteSize, &_inputBuffers[i]);
-        if (_inputBuffers[i]) {
-            AudioQueueEnqueueBuffer(_inputQueue, _inputBuffers[i], 0, NULL);
-        }
+    for(int i=0;i<4;i++) {
+        status=AudioQueueAllocateBuffer(_inputQueue,1200*sizeof(float),&_inputBuffers[i]);
+        if(status!=noErr) return [self audioSetupFailed:status error:error];
+        status=AudioQueueEnqueueBuffer(_inputQueue,_inputBuffers[i],0,NULL);
+        if(status!=noErr) return [self audioSetupFailed:status error:error];
+        status=AudioQueueAllocateBuffer(_outputQueue,120*sizeof(float),&_outputBuffers[i]);
+        if(status!=noErr) return [self audioSetupFailed:status error:error];
+        memset(_outputBuffers[i]->mAudioData,0,120*sizeof(float));
+        _outputBuffers[i]->mAudioDataByteSize=120*sizeof(float);
+        status=AudioQueueEnqueueBuffer(_outputQueue,_outputBuffers[i],0,NULL);
+        if(status!=noErr) return [self audioSetupFailed:status error:error];
     }
-
-    st = AudioQueueStart(_inputQueue, NULL);
-    if (st != noErr && self.logHandler) {
-        self.logHandler([NSString stringWithFormat:@"[Audio Error] AudioQueueStart input failed: %d", (int)st]);
-    }
-
-    // 2. Setup Output Queue for soundcard transmission (AD-508 audio out / DATA in)
-    AudioStreamBasicDescription outFormat = inFormat;
-    st = AudioQueueNewOutput(&outFormat, FT8AudioQueueOutputCallback, (__bridge void *)self,
-                             NULL, NULL, 0, &_outputQueue);
-    if (st == noErr && _outputQueue) {
-        if (self.selectedOutputDeviceUID && self.selectedOutputDeviceUID.length > 0 &&
-            ![self.selectedOutputDeviceUID isEqualToString:@"default"]) {
-            CFStringRef outUidRef = (__bridge CFStringRef)self.selectedOutputDeviceUID;
-            AudioQueueSetProperty(_outputQueue, kAudioQueueProperty_CurrentDevice, &outUidRef, sizeof(outUidRef));
-        }
-
-        UInt32 outputBufferByteSize = 120 * sizeof(float); // 10 ms
-        for (int i = 0; i < 4; i++) {
-            AudioQueueAllocateBuffer(_outputQueue, outputBufferByteSize, &_outputBuffers[i]);
-            if (_outputBuffers[i]) {
-                memset(_outputBuffers[i]->mAudioData, 0, outputBufferByteSize);
-                _outputBuffers[i]->mAudioDataByteSize = outputBufferByteSize;
-                AudioQueueEnqueueBuffer(_outputQueue, _outputBuffers[i], 0, NULL);
-            }
-        }
-        AudioQueueStart(_outputQueue, NULL);
-    }
+    status=AudioQueueStart(_inputQueue,NULL);
+    if(status!=noErr) return [self audioSetupFailed:status error:error];
+    status=AudioQueueStart(_outputQueue,NULL);
+    if(status!=noErr) return [self audioSetupFailed:status error:error];
+    return YES;
 }
 
 - (void)teardownAudioHardware {
@@ -696,7 +721,7 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
 - (void)restartAudioHardware {
     if (!self.isMonitoring) return;
     if (!self.isSimulationMode) {
-        [self setupAudioHardware:nil];
+        if(![self setupAudioHardware:nil]) [self stopMonitoring];
     }
 }
 
@@ -719,18 +744,23 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
 #pragma mark - Slot Timing Engine
 
 - (void)processSlotTick {
-    NSTimeInterval now = [[TX500DisciplinedClock sharedClock] utcTimeInterval];
+    [self processSlotTickAtUTC:[[TX500DisciplinedClock sharedClock] utcTimeInterval]];
+}
+
+- (void)processSlotTickAtUTC:(NSTimeInterval)now {
     double slotPeriod = self.currentSlotPeriod;
     double slotSec = fmod(now, slotPeriod);
-    NSInteger parity = ((NSInteger)(now / slotPeriod)) % 2; // FT8: 0=Even (:00,:30), 1=Odd (:15,:45) | FT4: 0=Even, 1=Odd
+    int64_t slotIndex = (int64_t)floor(now / slotPeriod);
+    NSInteger parity = (NSInteger)(slotIndex & 1); // FT8: 0=Even (:00,:30), 1=Odd (:15,:45)
 
     self.currentSlotSecond = slotSec;
     self.currentSlotParity = parity;
     self.slotProgressFraction = slotSec / slotPeriod;
 
-    // Detect slot transition (crossing 0.0s)
-    double transitionThreshold = slotPeriod - 1.5;
-    if (_lastSlotSecond > transitionThreshold && slotSec < 1.0) {
+    // An absolute slot index cannot miss a boundary when AppKit or CAT work
+    // delays the 10 ms timer callback past the first second of a slot.
+    if (slotIndex != _lastProcessedSlotIndex) {
+        _lastProcessedSlotIndex = slotIndex;
         _slotDecodeDispatched = NO;
 
         // Reset RX buffer for new slot
@@ -760,11 +790,11 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
         }
 
         if (self.isTransmitArmed && parityMatches && self.queuedTxMessage.length > 0) {
-            [self beginTransmission];
+            if (slotSec <= 1.0) [self beginTransmission];
+            else if (self.logHandler) self.logHandler([NSString stringWithFormat:
+                @"[FT8 Slot] Skipped a late TX slot (timer resumed %.2f s after boundary); keeping the next matching slot armed.", slotSec]);
         }
     }
-
-    _lastSlotSecond = slotSec;
 
     // End Transmission
     if (_isTransmitting && slotSec >= self.currentTxSeconds) {
@@ -790,11 +820,11 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
         }
     }
 
-    // Slot timing needs the 10 ms timer, while the display does not. Running an
-    // FFT and invalidating AppKit at 100 Hz caused sustained allocation pressure
-    // during long decode sessions. Cap visualization work at 25 Hz.
     double waterfallNow = [[TX500DisciplinedClock sharedClock] monotonicTime];
-    if (waterfallNow - _lastWaterfallUpdateMonotonic >= 0.04) {
+    // A 16384-point FFT yields 0.73 Hz source bins and 4096 independently
+    // coloured pixels across the 0-3000 Hz passband. Ten rows per second keep
+    // the time axis fluid and preserve short FT8 tone transitions.
+    if (waterfallNow - _lastWaterfallUpdateMonotonic >= 0.10) {
         _lastWaterfallUpdateMonotonic = waterfallNow;
         [self updateWaterfallStream];
     }
@@ -968,10 +998,48 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
 
 #pragma mark - Transmit Path & Audio Synthesis
 
+- (void)restoreNominalDialAfterFakeIt {
+    if (self.isSimulationMode || !self.serialCommandSender || self.dialFrequencyHz == 0) return;
+
+    const uint64_t nominalDial = self.dialFrequencyHz;
+    NSString *restoreCommand = [NSString stringWithFormat:@"FA%011llu;", (unsigned long long)nominalDial];
+    BOOL (^sendCommand)(NSString *) = [self.serialCommandSender copy];
+    NSString * _Nullable (^queryCommand)(NSString *, NSTimeInterval) = [self.catQueryHandler copy];
+    void (^logLine)(NSString *) = [self.logHandler copy];
+
+    // The TX-500 can still be settling immediately after PT0.  Retry the
+    // nominal dial write and verify it with FA readback instead of assuming a
+    // single accepted USB write changed the VFO.  This prevents a temporary
+    // Fake-It offset (for example 28.073500) becoming the next RX dial.
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        BOOL written = NO;
+        BOOL verified = NO;
+        NSString *expectedReply = restoreCommand;
+        for (NSUInteger attempt = 0; attempt < 3 && !verified; attempt++) {
+            written = sendCommand(restoreCommand) || written;
+            [NSThread sleepForTimeInterval:0.15 + (0.10 * attempt)];
+            if (queryCommand) {
+                NSString *reply = queryCommand(@"FA;", 0.7);
+                verified = [reply isEqualToString:expectedReply];
+            }
+        }
+        if (logLine) {
+            NSString *result = queryCommand ? (verified ? @"verified" : @"NOT verified")
+                                             : (written ? @"requested three times" : @"failed");
+            logLine([NSString stringWithFormat:
+                @"[Split / Fake It] Nominal VFO %.6f MHz %@ after TX.", nominalDial / 1e6, result]);
+        }
+    });
+}
+
 - (void)armTransmitWithText:(NSString *)text parity:(TX500FT8SlotParity)parity {
+    // Preserve the last measured SWR while receiving.  It is cleared only when
+    // the next RF burst actually begins, so merely arming a message does not
+    // erase the operator's most recent antenna reading.
     self.queuedTxMessage = text;
     self.txSlotParity = parity;
     self.isTransmitArmed = YES;
+    self.repeatArmedTransmission = NO;
     _autoParityLocked = -1; // Reset so next transition locks the parity
 
     if (self.logHandler) {
@@ -983,6 +1051,7 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
 
 - (void)disarmTransmit {
     self.isTransmitArmed = NO;
+    self.repeatArmedTransmission = NO;
     _autoParityLocked = -1;
     if (_isTransmitting) {
         [self endTransmission];
@@ -992,8 +1061,31 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
     }
 }
 
+- (void)resetSWRReading {
+    _lastSWRReading = 0.0;
+    _lastSWRMeterDots = 0;
+    _swrMeterValid = NO;
+    _lastSWRMeterSampleDate = nil;
+    _lastALCMeterDots = 0;
+    _alcMeterValid = NO;
+    _alcMeterSampleCount = 0;
+    _lastALCMeterSampleDate = nil;
+    _lastPowerMeterDots = 0;
+    _powerMeterValid = NO;
+    if (self.onSWRMeterUpdated) self.onSWRMeterUpdated(0, NO);
+    if (self.onALCMeterUpdated) self.onALCMeterUpdated(0, NO);
+    if (self.onPowerMeterUpdated) self.onPowerMeterUpdated(0, NO);
+}
+
 - (void)beginTransmission {
-    if (self.queuedTxMessage.length == 0) return;
+    if (self.queuedTxMessage.length == 0 || _receiveReleaseInProgress) return;
+    if (!self.isSimulationMode && (self.dialFrequencyHz == 0 ||
+        (self.requiresVerifiedCATDial && !self.catDialAndModeVerified))) {
+        self.isTransmitArmed = NO;
+        _autoParityLocked = -1;
+        if (self.logHandler) self.logHandler(@"[FT8 TX blocked] Radio dial frequency and DIG mode have not been verified over CAT.");
+        return;
+    }
     TX500TimeSnapshot *time = [[TX500DisciplinedClock sharedClock] snapshot];
     if (!self.isSimulationMode && !time.transmitAllowed) {
         self.isTransmitArmed = NO;
@@ -1024,7 +1116,11 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
         uint64_t shiftedVfo = (uint64_t)((int64_t)self.dialFrequencyHz + _fakeItVfoShiftHz);
         if (self.serialCommandSender && !self.isSimulationMode) {
             NSString *faCmd = [NSString stringWithFormat:@"FA%011llu;", (unsigned long long)shiftedVfo];
-            self.serialCommandSender(faCmd);
+            if(!self.serialCommandSender(faCmd)) {
+                _fakeItVfoShiftHz=0; self.isTransmitArmed=NO;
+                if(self.logHandler) self.logHandler(@"[TX blocked] Split frequency change failed.");
+                return;
+            }
             if (self.logHandler) {
                 self.logHandler([NSString stringWithFormat:@"[Split / Fake It] Shifted TX VFO by %+lld Hz to %llu Hz (audio tone centered at 1500 Hz)",
                                  _fakeItVfoShiftHz, (unsigned long long)shiftedVfo]);
@@ -1039,9 +1135,7 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
     _txBufferReadIndex = 0;
     [_txBufferLock unlock];
 
-    _lastSWRReading = 0.0;
-    _lastSWRMeterDots = 0;
-    _swrMeterValid = NO;
+    [self resetSWRReading];
 
     // Request confirmed PTT from the shared station transport before exposing audio.
     // Note: Do NOT send MD6; here. The radio is already in DIG mode; sending MD6; at TX trigger
@@ -1052,6 +1146,11 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
             _isTransmitting=NO; _isTuning=NO; self.isTransmitArmed=NO;
             if(self.pttControlHandler) self.pttControlHandler(NO);
             else if(self.serialCommandSender) self.serialCommandSender(@"RX;");
+            if(_fakeItVfoShiftHz) {
+                [self restoreNominalDialAfterFakeIt];
+                _fakeItVfoShiftHz=0;
+            }
+            [_txBufferLock lock]; _txBufferTotalSamples=0; _txBufferReadIndex=0; [_txBufferLock unlock];
             if(self.logHandler) self.logHandler(@"[TX blocked] PTT was not confirmed; audio transmission cancelled.");
             if(self.onTransmitStateChanged) self.onTransmitStateChanged(NO,@"");
             return;
@@ -1059,6 +1158,7 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
     }
 
     _isTransmitting=YES;
+    if (!self.repeatArmedTransmission) self.isTransmitArmed = NO;
     if (self.logHandler) {
         NSString *pttMethod = self.isSimulationMode ? @"[Simulation - No RF]" : @"[CAT TX confirmed]";
         self.logHandler([NSString stringWithFormat:@"[FT8 TX ON] Sending '%@' at %.0f Hz %@",
@@ -1073,9 +1173,11 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
 }
 
 - (void)endTransmission {
-    if (!_isTransmitting) return;
+    if (!_isTransmitting || _receiveReleaseInProgress) return;
 
-    _isTransmitting = NO;
+    _receiveReleaseInProgress = YES;
+    _receiveReleaseAttempt = 0;
+    NSUInteger releaseGeneration = ++_receiveReleaseGeneration;
     [_txBufferLock lock];
     _txBufferTotalSamples = 0;
     _txBufferReadIndex = 0;
@@ -1083,34 +1185,110 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
 
     [self stopSWRPolling];
 
-    // Deassert PTT: release hardware RTS/DTR line + CAT RX; command
-    if (!self.isSimulationMode) {
-        if (self.pttControlHandler) {
-            self.pttControlHandler(NO);
-        } else if (self.serialCommandSender) {
-            self.serialCommandSender(@"RX;");
-        }
-    }
+    [self requestReceiveReleaseForGeneration:releaseGeneration];
+}
 
-    // Restore radio VFO if Split / Fake It shifted it
-    if (_fakeItVfoShiftHz != 0) {
-        if (self.serialCommandSender && !self.isSimulationMode) {
-            NSString *restoreCmd = [NSString stringWithFormat:@"FA%011llu;", (unsigned long long)self.dialFrequencyHz];
-            self.serialCommandSender(restoreCmd);
-            if (self.logHandler) {
-                self.logHandler([NSString stringWithFormat:@"[Split / Fake It] Restored VFO to %llu Hz", (unsigned long long)self.dialFrequencyHz]);
-            }
+- (void)requestReceiveReleaseForGeneration:(NSUInteger)generation {
+    if (generation != _receiveReleaseGeneration || !_receiveReleaseInProgress) return;
+    _receiveReleaseAttempt++;
+    NSUInteger attempt = _receiveReleaseAttempt;
+    __weak typeof(self) weakSelf = self;
+    // CAT acknowledgement can take several USB timeouts. Keep it off AppKit's
+    // main thread so a difficult RX recovery cannot make the window look hung.
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        BOOL released = strongSelf.isSimulationMode;
+        if (!released) {
+            released = strongSelf.pttControlHandler ? strongSelf.pttControlHandler(NO) :
+                       (strongSelf.serialCommandSender ? strongSelf.serialCommandSender(@"RX;") : NO);
         }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) mainSelf = weakSelf;
+            if (!mainSelf || generation != mainSelf->_receiveReleaseGeneration ||
+                !mainSelf->_receiveReleaseInProgress) return;
+            if (released) {
+                [mainSelf finishReceiveTransitionAfterRecovery:(attempt > 1)];
+                return;
+            }
+
+            // Preserve the operator's CQ intent while RX is unresolved.  The
+            // recovery guard and station core both block another PTT until
+            // the radio has explicitly confirmed PT0.
+            if (mainSelf.logHandler) {
+                mainSelf.logHandler([NSString stringWithFormat:
+                    @"[RX RECOVERY] Radio has not confirmed RX (attempt %lu). TX audio is muted; retrying RX automatically.",
+                    (unsigned long)attempt]);
+            }
+
+            // Retry quickly through relay/USB transients, then continue at a calm rate.
+            // Never declare RX or permit another transmission without PT0 confirmation.
+            NSTimeInterval delay = (attempt < 4) ? 0.25 : 1.0;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)),
+                           dispatch_get_main_queue(), ^{
+                [weakSelf requestReceiveReleaseForGeneration:generation];
+            });
+        });
+    });
+}
+
+- (void)finishReceiveTransitionAfterRecovery:(BOOL)recovered {
+    _receiveReleaseInProgress = NO;
+    _isTransmitting = NO;
+
+    if (_fakeItVfoShiftHz != 0) {
+        [self restoreNominalDialAfterFakeIt];
         _fakeItVfoShiftHz = 0;
     }
 
-    if (self.logHandler) {
-        self.logHandler(@"[FT8 TX OFF] Transmission complete. Requested RX through the station transport");
+    // Discard TX loopback and rebuild the full-duplex USB queues. Some AD-508
+    // devices stop delivering input after a CAT keyed burst until CoreAudio is
+    // reopened; tab switching used to hide this recovery accidentally.
+    [_rxBufferLock lock];
+    _rxBufferCount = 0;
+    _rxBufferStartMonotonic = NAN;
+    [_rxBufferLock unlock];
+    [_liveWaterLock lock];
+    memset(_liveWaterBuffer, 0, sizeof(_liveWaterBuffer));
+    _liveWaterHead = 0;
+    _liveBinFloorInitialized = NO;
+    [_liveWaterLock unlock];
+    if (self.isMonitoring && !self.isSimulationMode) {
+        double restartedAt = [[TX500DisciplinedClock sharedClock] monotonicTime];
+        NSUInteger audioGeneration = ++_audioRecoveryGeneration;
+        [self restartAudioHardware];
+        [self verifyReceiveCaptureAfterRestart:audioGeneration restartedAt:restartedAt];
     }
 
-    if (self.onTransmitStateChanged) {
-        self.onTransmitStateChanged(NO, @"");
+    if (recovered && self.serialCommandSender) {
+        // Digital reception must never remain hidden behind a closed squelch.
+        self.serialCommandSender(@"SQ0000;");
     }
+    if (self.logHandler) {
+        self.logHandler(recovered ?
+            @"[RX RECOVERY] RX confirmed; AD-508 capture restarted and decoding resumed." :
+            @"[FT8 TX OFF] RX confirmed; AD-508 capture restarted for the next slot.");
+    }
+    if (self.onTransmitStateChanged) self.onTransmitStateChanged(NO, @"");
+}
+
+- (BOOL)isReceiveRecoveryPending {
+    return _receiveReleaseInProgress;
+}
+
+- (void)verifyReceiveCaptureAfterRestart:(NSUInteger)generation restartedAt:(double)restartedAt {
+    __weak typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf || generation != strongSelf->_audioRecoveryGeneration ||
+            !strongSelf.isMonitoring || strongSelf.isSimulationMode || strongSelf.isTransmitting) return;
+        if (strongSelf->_lastInputCallbackMonotonic > restartedAt) return;
+        if (strongSelf.logHandler) {
+            strongSelf.logHandler(@"[RX RECOVERY] AD-508 delivered no input after RX; reopening the audio path once more.");
+        }
+        [strongSelf restartAudioHardware];
+    });
 }
 
 - (double)lastSWRReading {
@@ -1125,11 +1303,24 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
     return _swrMeterValid;
 }
 
+- (NSDate *)lastSWRMeterSampleDate { return _lastSWRMeterSampleDate; }
+- (NSInteger)lastALCMeterDots { return _lastALCMeterDots; }
+- (BOOL)alcMeterValid { return _alcMeterValid; }
+- (NSUInteger)alcMeterSampleCount { return _alcMeterSampleCount; }
+- (NSDate *)lastALCMeterSampleDate { return _lastALCMeterSampleDate; }
+- (NSInteger)lastPowerMeterDots { return _lastPowerMeterDots; }
+- (BOOL)powerMeterValid { return _powerMeterValid; }
+
 + (BOOL)parseSWRMeterReply:(NSString *)reply rawDots:(NSInteger *)rawDots {
+    return [self parseMeterReply:reply meter:1 rawDots:rawDots];
+}
+
++ (BOOL)parseMeterReply:(NSString *)reply meter:(NSInteger)meter rawDots:(NSInteger *)rawDots {
     if (reply.length == 0) return NO;
     NSString *compact = [[reply componentsSeparatedByCharactersInSet:
                           [NSCharacterSet whitespaceAndNewlineCharacterSet]] componentsJoinedByString:@""];
-    NSRange start = [compact rangeOfString:@"RM1"];
+    NSString *prefix = [NSString stringWithFormat:@"RM%ld", (long)meter];
+    NSRange start = [compact rangeOfString:prefix];
     if (start.location == NSNotFound || compact.length < NSMaxRange(start) + 5) return NO;
     NSString *frame = [compact substringWithRange:NSMakeRange(start.location, 8)];
     if (![frame hasSuffix:@";"]) return NO;
@@ -1142,31 +1333,55 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
     return YES;
 }
 
++ (BOOL)parsePowerMeterReply:(NSString *)reply rawDots:(NSInteger *)rawDots {
+    if (reply.length == 0) return NO;
+    NSString *compact = [[reply componentsSeparatedByCharactersInSet:
+                          [NSCharacterSet whitespaceAndNewlineCharacterSet]] componentsJoinedByString:@""];
+    NSRange start = [compact rangeOfString:@"SM0"];
+    if (start.location == NSNotFound || compact.length < NSMaxRange(start) + 5) return NO;
+    NSString *frame = [compact substringWithRange:NSMakeRange(start.location, 8)];
+    if (![frame hasSuffix:@";"]) return NO;
+    NSString *field = [frame substringWithRange:NSMakeRange(3, 4)];
+    if ([field rangeOfCharacterFromSet:NSCharacterSet.decimalDigitCharacterSet.invertedSet].location != NSNotFound) return NO;
+    NSInteger value = field.integerValue;
+    if (value < 0 || value > 30) return NO;
+    if (rawDots) *rawDots = value;
+    return YES;
+}
+
 + (double)swrRatioFromMeterDots:(NSInteger)dots {
     // Calibrated lookup table for TX-500 RM meter dots to SWR ratio.
-    // Radio hardware verified: 2 dots = 1.6:1 (matching TX-500 LCD), 4 dots = 2.3:1, 5 dots = 2.8:1, 8 dots = 5.5:1.
+    // Hardware cross-check: two RM1 dots correspond to 1.9:1 on the TX-500
+    // LCD. CAT exposes quantized display dots rather than a continuous ratio.
     if (dots <= 0) return 1.0;
-    if (dots == 1) return 1.3;
-    if (dots == 2) return 1.6;
-    if (dots == 3) return 1.9;
-    if (dots == 4) return 2.3;
-    if (dots == 5) return 2.8;  // ← Calibrated: TX-500 hardware 5 dots = 2.8:1 SWR
-    if (dots == 6) return 3.5;
-    if (dots == 7) return 4.5;
-    if (dots == 8) return 5.5;
-    return 5.5 + ((double)(dots - 8) * 0.5);
+    double ratio;
+    if (dots == 1) ratio = 1.3;
+    else if (dots == 2) ratio = 1.8;
+    else if (dots == 3) ratio = 1.9;
+    else if (dots == 4) ratio = 2.3;
+    else if (dots == 5) ratio = 2.8;
+    else if (dots == 6) ratio = 3.5;
+    else if (dots == 7) ratio = 4.5;
+    else if (dots == 8) ratio = 5.5;
+    else ratio = 5.5 + ((double)(dots - 8) * 0.5);
+    // RM exposes only whole display dots. Report the conservative upper edge
+    // of that quantization bin so the app no longer understates the LCD value.
+    return ratio + (dots <= 5 ? 0.1 : 0.2);
 }
 
 - (void)startSWRPolling {
     [self stopSWRPolling];
-    _swrQueryInFlight = NO;
+    _meterPollPhase = 0;
+    _meterPollFailureCount = 0;
     if (self.onSWRMeterUpdated) self.onSWRMeterUpdated(0, NO);
     if (!self.isSimulationMode && !self.catQueryHandler) return;
 
     __weak typeof(self) weakSelf = self;
     _swrPollTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, dispatch_get_main_queue());
-    dispatch_source_set_timer(_swrPollTimer, dispatch_time(DISPATCH_TIME_NOW, 200 * NSEC_PER_MSEC),
-                              NSEC_PER_SEC, 100 * NSEC_PER_MSEC);
+    // Poll one meter per tick.  Keeping each CAT transaction independent avoids
+    // losing all three readings when one meter reply is delayed or malformed.
+    dispatch_source_set_timer(_swrPollTimer, dispatch_time(DISPATCH_TIME_NOW, 250 * NSEC_PER_MSEC),
+                              400 * NSEC_PER_MSEC, 40 * NSEC_PER_MSEC);
     dispatch_source_set_event_handler(_swrPollTimer, ^{
         [weakSelf pollSWRMeter];
     });
@@ -1174,11 +1389,17 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
 }
 
 - (void)stopSWRPolling {
+    _swrPollingGeneration++;
     if (_swrPollTimer) {
         dispatch_source_cancel(_swrPollTimer);
         _swrPollTimer = nil;
     }
-    _swrQueryInFlight = NO;
+    // Do not clear _swrQueryInFlight here. The CAT transaction itself cannot
+    // be cancelled once it owns (or is waiting for) the shared serial lock.
+    // Clearing this bit at every TX/RX boundary allowed the next transmission
+    // to enqueue another meter query while the previous one was still alive.
+    // After several QSOs those stale queries delayed the safety-critical RX
+    // command and made the digital station appear frozen.
 }
 
 - (void)pollSWRMeter {
@@ -1186,32 +1407,79 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
     if (self.isSimulationMode) {
         double simSWR = 1.0 + ((double)(arc4random_uniform(30)) / 100.0);
         _lastSWRReading = simSWR;
+        _lastSWRMeterDots = 1;
+        _swrMeterValid = YES;
+        _lastSWRMeterSampleDate = [NSDate date];
+        _lastALCMeterDots = 3;
+        _alcMeterValid = YES;
+        _alcMeterSampleCount++;
+        _lastALCMeterSampleDate = [NSDate date];
+        _lastPowerMeterDots = 15;
+        _powerMeterValid = YES;
         if (self.onSWRUpdated) self.onSWRUpdated(simSWR);
+        if (self.onSWRMeterUpdated) self.onSWRMeterUpdated(1, YES);
+        if (self.onALCMeterUpdated) self.onALCMeterUpdated(3, YES);
+        if (self.onPowerMeterUpdated) self.onPowerMeterUpdated(15, YES);
         return;
     }
     if (!self.catQueryHandler) return;
 
     _swrQueryInFlight = YES;
+    NSUInteger queryGeneration = _swrPollingGeneration;
+    NSInteger phase = _meterPollPhase;
     __weak typeof(self) weakSelf = self;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
         typeof(self) strongSelf = weakSelf;
         if (!strongSelf) return;
-        NSString *reply = strongSelf.catQueryHandler(@"RM1;RM;", 0.35);
+        NSString *command = phase == 0 ? @"RM1;RM;" : (phase == 1 ? @"RM3;RM;" : @"SM0;");
+        NSString *reply = strongSelf.catQueryHandler(command, 0.35);
         NSInteger dots = 0;
-        BOOL valid = [TX500FT8AudioEngine parseSWRMeterReply:reply rawDots:&dots];
+        BOOL valid = phase == 0 ? [TX500FT8AudioEngine parseSWRMeterReply:reply rawDots:&dots] :
+                     (phase == 1 ? [TX500FT8AudioEngine parseMeterReply:reply meter:3 rawDots:&dots] :
+                                   [TX500FT8AudioEngine parsePowerMeterReply:reply rawDots:&dots]);
         dispatch_async(dispatch_get_main_queue(), ^{
             typeof(self) mainSelf = weakSelf;
             if (!mainSelf) return;
+            // There is at most one meter transaction across polling sessions.
+            // Release the gate even when this reply belongs to an older TX;
+            // only the UI/result application is generation-dependent.
             mainSelf->_swrQueryInFlight = NO;
+            // A reply can arrive after RX was restored or even after a new TX
+            // began.  Never apply a result from an earlier polling session.
+            if (queryGeneration != mainSelf->_swrPollingGeneration) return;
             if (!mainSelf->_isTransmitting && !mainSelf->_isTuning) return;
-            mainSelf->_swrMeterValid = valid;
-            if (valid) {
-                mainSelf->_lastSWRMeterDots = dots;
-                double swrRatio = [TX500FT8AudioEngine swrRatioFromMeterDots:dots];
+            mainSelf->_meterPollPhase = (phase + 1) % 3;
+            if (!valid) {
+                mainSelf->_meterPollFailureCount++;
+                if (mainSelf->_meterPollFailureCount == 3 && mainSelf.logHandler) {
+                    mainSelf.logHandler(@"[TX Meter] Waiting for valid SWR/ALC replies from the radio.");
+                }
+                return;
+            }
+            mainSelf->_meterPollFailureCount = 0;
+            if (phase == 0) {
+                mainSelf->_swrMeterValid = YES;
+                // Preserve the highest confirmed antenna reading from this RF
+                // burst. Early RM1 replies can legitimately be zero while the
+                // PA/relay is still settling; replacing a later 1.9 reading
+                // with that 1.0 sample made RX history misleading.
+                mainSelf->_lastSWRMeterDots = MAX(mainSelf->_lastSWRMeterDots, dots);
+                mainSelf->_lastSWRMeterSampleDate = [NSDate date];
+                double swrRatio = [TX500FT8AudioEngine swrRatioFromMeterDots:mainSelf->_lastSWRMeterDots];
                 mainSelf->_lastSWRReading = swrRatio;
                 if (mainSelf.onSWRUpdated) mainSelf.onSWRUpdated(swrRatio);
+                if (mainSelf.onSWRMeterUpdated) mainSelf.onSWRMeterUpdated(mainSelf->_lastSWRMeterDots, YES);
+            } else if (phase == 1) {
+                mainSelf->_alcMeterValid = YES;
+                mainSelf->_lastALCMeterDots = dots;
+                mainSelf->_alcMeterSampleCount++;
+                mainSelf->_lastALCMeterSampleDate = [NSDate date];
+                if (mainSelf.onALCMeterUpdated) mainSelf.onALCMeterUpdated(dots, YES);
+            } else {
+                mainSelf->_powerMeterValid = YES;
+                mainSelf->_lastPowerMeterDots = dots;
+                if (mainSelf.onPowerMeterUpdated) mainSelf.onPowerMeterUpdated(dots, YES);
             }
-            if (mainSelf.onSWRMeterUpdated) mainSelf.onSWRMeterUpdated(dots, valid);
         });
     });
 }
@@ -1220,6 +1488,16 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
 #pragma mark - Carrier Tune Mode
 
 - (void)startTuneCarrier {
+    if (!self.isSimulationMode && (self.dialFrequencyHz == 0 ||
+        (self.requiresVerifiedCATDial && !self.catDialAndModeVerified))) {
+        if (self.logHandler) self.logHandler(@"[Tune blocked] Radio dial frequency and DIG mode have not been verified over CAT.");
+        return;
+    }
+    if (_receiveReleaseInProgress) {
+        if (self.logHandler) self.logHandler(@"[Tune blocked] Waiting for the radio to confirm RX.");
+        return;
+    }
+    [self resetSWRReading];
     _isTuning = NO;
     _carrierPhase = 0.0;
     if (!self.isSimulationMode) {
@@ -1245,21 +1523,20 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
     if (!_isTuning) return;
     _isTuning = NO;
     [self stopSWRPolling];
-    if (!self.isSimulationMode) {
-        if (self.pttControlHandler) {
-            self.pttControlHandler(NO);
-        } else if (self.serialCommandSender) {
-            self.serialCommandSender(@"RX;");
-        }
-    }
-    if (self.logHandler) {
-        self.logHandler(@"[Tune Carrier] Tone stopped; RX requested through the station transport");
-    }
+    // Reuse the confirmed RX recovery path. Marking the muted carrier as TX
+    // keeps all new transmissions blocked until the radio answers PT0.
+    _isTransmitting = YES;
+    _receiveReleaseInProgress = YES;
+    _receiveReleaseAttempt = 0;
+    NSUInteger releaseGeneration = ++_receiveReleaseGeneration;
+    if (self.logHandler) self.logHandler(@"[Tune Carrier] Tone muted; confirming RX.");
+    [self requestReceiveReleaseForGeneration:releaseGeneration];
 }
 
 #pragma mark - Audio Samples Processing
 
 - (void)appendIncomingAudioSamples:(const float *)samples count:(NSInteger)count timestamp:(const AudioTimeStamp *)timestamp {
+    _lastInputCallbackMonotonic = [[TX500DisciplinedClock sharedClock] monotonicTime];
     double bufferMonotonic = [[TX500DisciplinedClock sharedClock] monotonicTime] - (double)count / FT8_SAMPLE_RATE;
     if (timestamp && (timestamp->mFlags & kAudioTimeStampHostTimeValid)) {
         bufferMonotonic = TX500ContinuousTimeForAudioHostTime(timestamp->mHostTime);
@@ -1282,7 +1559,7 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
     [_liveWaterLock lock];
     for (NSInteger i = 0; i < count; i++) {
         _liveWaterBuffer[_liveWaterHead] = samples[i];
-        _liveWaterHead = (_liveWaterHead + 1) % 2048;
+        _liveWaterHead = (_liveWaterHead + 1) % TX500_FT8_WATER_BUFFER_SIZE;
     }
     [_liveWaterLock unlock];
 
@@ -1340,12 +1617,12 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
 
 - (void)updateWaterfallStream {
     if (!self.isSimulationMode) {
-        // Copy latest 1024 samples from live waterfall circular buffer
+        // Copy the latest high-resolution FFT window from the live audio ring.
         float fftIn[TX500_FT8_FFT_SIZE];
         [_liveWaterLock lock];
         int head = _liveWaterHead;
         for (int i = 0; i < TX500_FT8_FFT_SIZE; i++) {
-            int idx = (head - TX500_FT8_FFT_SIZE + i + 2048) % 2048;
+            int idx = (head - TX500_FT8_FFT_SIZE + i + TX500_FT8_WATER_BUFFER_SIZE) % TX500_FT8_WATER_BUFFER_SIZE;
             fftIn[i] = _liveWaterBuffer[idx];
         }
         [_liveWaterLock unlock];
@@ -1371,36 +1648,46 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
             float mags[TX500_FT8_FFT_SIZE / 2];
             TX500FT8ComputeFFT(fftIn, mags, TX500_FT8_FFT_SIZE);
 
-            // Per-bin noise floor estimation and subtraction (spectral whitening)
+            float dbBins[FT8_WATERFALL_BINS];
+            float floorSamples[FT8_WATERFALL_BINS];
             for (int i = 0; i < FT8_WATERFALL_BINS; i++) {
-                float raw = mags[i];
-                float db = 20.0f * log10f(raw + 1e-7f);
-                if (!_liveBinFloorInitialized) {
-                    _liveBinFloorDb[i] = db;
-                } else {
-                    // Asymmetric tracker: adapt quickly downwards on noise dips, slowly upwards on signals
-                    if (db < _liveBinFloorDb[i]) {
-                        _liveBinFloorDb[i] = _liveBinFloorDb[i] * 0.95f + db * 0.05f;
-                    } else {
-                        float snrDiff = db - _liveBinFloorDb[i];
-                        if (snrDiff > 2.0f) {
-                            // Active carrier / tone: preserve signal visibility over full 12.6s transmission
-                            _liveBinFloorDb[i] = _liveBinFloorDb[i] * 0.9998f + db * 0.0002f;
-                        } else {
-                            _liveBinFloorDb[i] = _liveBinFloorDb[i] * 0.997f + db * 0.003f;
-                        }
-                    }
-                }
+                dbBins[i] = 20.0f * log10f(mags[i] + 1e-9f);
+                floorSamples[i] = dbBins[i];
+            }
+            qsort(floorSamples, FT8_WATERFALL_BINS, sizeof(float), TX500CompareFloatAscending);
+            // The lower 35th percentile stays stable with several simultaneous
+            // stations and does not mistake random FFT peaks for the floor.
+            float frameFloor = floorSamples[(NSInteger)(FT8_WATERFALL_BINS * 0.35f)];
+            if (!_liveBinFloorInitialized) {
+                _liveNoiseFloorDb = frameFloor;
+            } else {
+                float floorRate = (frameFloor < _liveNoiseFloorDb) ? 0.18f : 0.06f;
+                _liveNoiseFloorDb += (frameFloor - _liveNoiseFloorDb) * floorRate;
+            }
 
-                // SNR in dB relative to each individual bin's background floor
-                float snr = db - _liveBinFloorDb[i];
-                float norm = 0.02f;
-                if (snr > 1.0f) {
-                    // High-contrast signal trace: 1 dB to 25 dB mapped across 0.12 to 1.0
-                    norm = 0.12f + ((snr - 1.0f) / 22.0f) * 0.88f;
-                    norm = fminf(1.0f, norm);
+            // Combine a robust global floor with a slowly adapting per-bin
+            // response correction. Fast attack and slow decay retain real FT8
+            // tone segments while rejecting one-frame noise speckles.
+            for (int i = 0; i < FT8_WATERFALL_BINS; i++) {
+                float db = dbBins[i];
+                if (!_liveBinFloorInitialized) {
+                    _liveBinFloorDb[i] = _liveNoiseFloorDb;
+                } else {
+                    float quietObservation = fminf(db, _liveNoiseFloorDb + 3.0f);
+                    _liveBinFloorDb[i] += (quietObservation - _liveBinFloorDb[i]) * 0.008f;
                 }
-                _waterfallMag[i] = _waterfallMag[i] * 0.30f + norm * 0.70f;
+                float reference = fmaxf(_liveNoiseFloorDb - 2.0f, _liveBinFloorDb[i]);
+                float snr = db - reference;
+                float norm = 0.012f;
+                if (snr > 7.5f) {
+                    // Preserve a wide intensity range so a strong station is
+                    // visibly brighter than a weak one without lighting the
+                    // noise-only bins.
+                    float signal = fminf(1.0f, (snr - 7.5f) / 42.0f);
+                    norm = 0.045f + 0.955f * powf(signal, 0.90f);
+                }
+                float rate = (norm > _waterfallMag[i]) ? 0.62f : 0.14f;
+                _waterfallMag[i] += (norm - _waterfallMag[i]) * rate;
             }
             _liveBinFloorInitialized = YES;
         } else {
@@ -1410,7 +1697,8 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
             }
         }
     } else {
-        // Simulation mode: emulate realistic FT8 traffic matching active candidate stations
+        // Simulation mode renders the active 6.25 Hz tone of each FT8 signal,
+        // rather than a solid 50 Hz block, matching live time/frequency tracks.
         double slotSec = self.currentSlotSecond;
         BOOL inTxWindow = (slotSec >= 0.4 && slotSec <= 12.8);
 
@@ -1454,10 +1742,12 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
                 NSInteger curParity = self.currentSlotParity;
                 for (int s = 0; s < numSimStations; s++) {
                     if (simStations[s].parity == -1 || simStations[s].parity == curParity) {
-                        float dist = fabsf(binFreq - simStations[s].freq);
-                        if (dist < 25.0f) {
-                            // FT8 50 Hz carrier/tone track
-                            float profile = 1.0f - (dist / 25.0f) * (dist / 25.0f);
+                        NSInteger symbol = (NSInteger)floor(slotSec / 0.160);
+                        NSInteger tone = (symbol * 5 + s * 3) & 7;
+                        float toneFreq = simStations[s].freq - 21.875f + (float)tone * 6.25f;
+                        float dist = fabsf(binFreq - toneFreq);
+                        if (dist < 4.5f) {
+                            float profile = expf(-0.5f * (dist / 2.2f) * (dist / 2.2f));
                             float stationSig = simStations[s].strength * profile;
                             if (stationSig > sig) sig = stationSig;
                         }
@@ -1465,9 +1755,11 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
                 }
                 // Check if engaged sim partner has a specific frequency
                 if (_simPartnerCall.length > 0 && self.rxAudioFrequencyHz > 100.0f) {
-                    float dist = fabsf(binFreq - self.rxAudioFrequencyHz);
-                    if (dist < 25.0f) {
-                        float profile = 1.0f - (dist / 25.0f) * (dist / 25.0f);
+                    NSInteger symbol = (NSInteger)floor(slotSec / 0.160);
+                    float partnerTone = self.rxAudioFrequencyHz - 21.875f + (float)((symbol * 7) & 7) * 6.25f;
+                    float dist = fabsf(binFreq - partnerTone);
+                    if (dist < 4.5f) {
+                        float profile = expf(-0.5f * (dist / 2.2f) * (dist / 2.2f));
                         float partnerSig = 0.85f * profile;
                         if (partnerSig > sig) sig = partnerSig;
                     }

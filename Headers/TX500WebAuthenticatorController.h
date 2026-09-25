@@ -4,7 +4,7 @@
 //
 //  Native WebKit Authenticator & 2FA/MFA Session Manager
 //  Supports QRZ.com and Club Log 2FA/MFA web login, OTP code entry,
-//  and automatic session cookie capture.
+//  and operator-confirmed session cookie capture.
 //
 
 #import <Cocoa/Cocoa.h>

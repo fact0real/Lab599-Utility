@@ -254,7 +254,13 @@ int main(int argc, const char * argv[]) {
         AssertTrue(fabsf(viz.waterfallDynamicRangeDb - 55.0f) < 0.01f, @"Waterfall dynamic range set to 55 dB");
         NSLog(@"PASS: Waterfall Floor and Dynamic Range controls verified.");
 
-        NSLog(@"ALL AUDIO MONITOR TESTS PASSED SUCCESSFULLY! (14/14)");
+        engine.preserveDeviceSelection=YES;
+        engine.selectedInputDeviceUID=@"station-test-missing-input";
+        engine.selectedOutputDeviceUID=@"station-test-missing-output";
+        NSError *routeError=nil;
+        AssertTrue(![engine startMonitoring:&routeError] && routeError!=nil, @"Missing explicit route blocks monitoring");
+        AssertTrue([engine.selectedInputDeviceUID isEqual:@"station-test-missing-input"], @"Station route survives device refresh without fallback");
+        NSLog(@"ALL AUDIO MONITOR TESTS PASSED SUCCESSFULLY! (15/15)");
         [[NSFileManager defaultManager] removeItemAtPath:[NSString stringWithUTF8String:testRoot] error:nil];
     }
     return 0;

@@ -74,8 +74,6 @@ TXCATSummary *TXRunCATTest(NSString *path, TXCATOptions options, Lab599Cancellat
     NSData *query = [@"ID;" dataUsingEncoding:NSASCIIStringEncoding];
     while (!token.cancelled && (!options.maximumChecks || result.checks < options.maximumChecks)) {
         error = nil;
-        result.lastReply = @"(none)";
-        result.responseMilliseconds = 0;
         double started = Lab599MonotonicTime();
         NSMutableData *received = [NSMutableData data];
         double completeAt = 0;
@@ -128,18 +126,8 @@ TXCATSummary *TXRunCATTest(NSString *path, TXCATOptions options, Lab599Cancellat
 @implementation TXRadioState
 - (instancetype)init {
     if ((self = [super init])) {
-        _frequencyHz = 14074000;
-        _frequencyDisplay = @"14.074.000 MHz";
-        _operatingMode = @"USB";
-        _modeCode = 2;
-        _rfPowerWatts = 10.0;
-        _filterNumber = 1;
-        _preampOn = NO;
-        _attenuatorOn = NO;
-        _voltage = 13.8;
-        _sMeterDots = 12;
-        _modelID = @"Lab599 TX-500 (ID019)";
-        _isTransmitting = NO;
+        // Unknown readings must never look like measurements from a connected radio.
+        _sMeterDots = -1;
     }
     return self;
 }
@@ -152,10 +140,15 @@ TXCATSummary *TXRunCATTest(NSString *path, TXCATOptions options, Lab599Cancellat
     c.modeCode = self.modeCode;
     c.rfPowerWatts = self.rfPowerWatts;
     c.filterNumber = self.filterNumber;
+    c.filterKnown = self.filterKnown;
     c.preampOn = self.preampOn;
+    c.preampKnown = self.preampKnown;
     c.attenuatorOn = self.attenuatorOn;
+    c.attenuatorKnown = self.attenuatorKnown;
     c.voltage = self.voltage;
+    c.voltageKnown = self.voltageKnown;
     c.sMeterDots = self.sMeterDots;
+    c.sMeterKnown = self.sMeterKnown;
     c.modelID = [self.modelID copy];
     c.isTransmitting = self.isTransmitting;
     c.rawIFReply = [self.rawIFReply copy];
@@ -348,28 +341,33 @@ TXRadioState *TXReadRadioState(NSString *path, NSTimeInterval timeout, NSError *
     // 6. Preamp (PA;)
     NSString *paReply = SendOverPort(port, @"PA;", cmdTimeout, NULL, nil);
     if (paReply && [paReply hasPrefix:@"PA"] && paReply.length >= 3) {
+        state.preampKnown = YES;
         state.preampOn = ([paReply characterAtIndex:2] == '1');
     }
 
     // 7. Attenuator (RA;)
     NSString *raReply = SendOverPort(port, @"RA;", cmdTimeout, NULL, nil);
     if (raReply && [raReply hasPrefix:@"RA"] && raReply.length >= 3) {
+        state.attenuatorKnown = YES;
         int r = [[raReply substringFromIndex:2] intValue];
         state.attenuatorOn = (r > 0);
     }
 
     // 8. Filter (FL;)
     NSString *flReply = SendOverPort(port, @"FL;", cmdTimeout, NULL, nil);
-    if (flReply && [flReply hasPrefix:@"FL"] && flReply.length >= 3) {
-        // Radio returns e.g. FL21; or FL2; where character at index 2 is active filter
+    if (flReply && [flReply hasPrefix:@"FL"] && flReply.length >= 4) {
+        // Lab599 replies FL<P1><P2>;: zero-based RX filter and TX filter.
+        // Preserve older single-digit firmware replies as a compatibility path.
         unichar c = [flReply characterAtIndex:2];
-        if (c >= '1' && c <= '4') {
+        if (flReply.length == 5 && c >= '0' && c <= '3') {
+            state.filterNumber = (NSInteger)(c - '0') + 1;
+            state.filterKnown = YES;
+        } else if (flReply.length == 4 && c >= '1' && c <= '4') {
             state.filterNumber = (NSInteger)(c - '0');
-        } else if (c == '0') {
-            state.filterNumber = 1;
+            state.filterKnown = YES;
         } else {
             int fl = [[flReply substringFromIndex:2] intValue];
-            if (fl >= 1 && fl <= 4) state.filterNumber = fl;
+            if (fl >= 1 && fl <= 4) { state.filterNumber = fl; state.filterKnown = YES; }
         }
     }
 
@@ -377,16 +375,23 @@ TXRadioState *TXReadRadioState(NSString *path, NSTimeInterval timeout, NSError *
     NSString *vlReply = SendOverPort(port, @"VL;", cmdTimeout, NULL, nil);
     if (vlReply) {
         double v = ParseVoltageReply(vlReply);
-        if (v > 0) state.voltage = v;
+        if (v > 0) { state.voltage = v; state.voltageKnown = YES; }
     }
 
     // 10. S-Meter (SM0;)
     NSString *smReply = SendOverPort(port, @"SM0;", cmdTimeout, NULL, nil);
     if (smReply && [smReply hasPrefix:@"SM"] && smReply.length >= 4) {
         state.sMeterDots = [[smReply substringFromIndex:2] intValue];
+        state.sMeterKnown = YES;
     }
 
     [port close];
+    if (!state.modelID.length && !state.frequencyHz) {
+        if (error) *error = [NSError errorWithDomain:Lab599SerialErrorDomain
+                                               code:Lab599SerialTimeout
+                                           userInfo:@{NSLocalizedDescriptionKey: @"The serial port opened, but the radio did not answer CAT queries."}];
+        return nil;
+    }
     return state;
 }
 
@@ -465,15 +470,117 @@ BOOL TXSetRadioAttenuator(NSString *path, BOOL on, NSError **error) {
 BOOL TXSetRadioFilter(NSString *path, NSInteger filterNumber, NSError **error) {
     if (filterNumber < 1) filterNumber = 1;
     if (filterNumber > 4) filterNumber = 4;
-    // TX-500 filter parameter is 0-indexed: Filter 1 is FL0;, Filter 4 is FL3;
+    // One-digit FL is an app shorthand. The macro executor reads and preserves
+    // the separate TX filter digit before sending the full wire command.
     NSString *cmd = [NSString stringWithFormat:@"FL%ld;", (long)(filterNumber - 1)];
-    double rtt = 0;
-    NSError *cmdErr = nil;
-    TXExecuteCATCommand(path, cmd, 0.1, &rtt, &cmdErr);
-    if (cmdErr && cmdErr.code != Lab599SerialTimeout) {
-        if (error) *error = cmdErr;
-        return NO;
-    }
-    return YES;
+    return TXRunCATMacro(path, @[cmd], nil, nil, error);
 }
 
+static NSError *MacroError(NSString *message) {
+    return [NSError errorWithDomain:@"TXCATMacro" code:1 userInfo:@{NSLocalizedDescriptionKey: message}];
+}
+
+NSArray<NSString *> *TXValidatedCATMacro(NSString *source, NSError **error) {
+    NSMutableArray<NSString *> *result = [NSMutableArray array];
+    NSArray<NSString *> *lines = [source componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet];
+    NSRegularExpression *pattern = [NSRegularExpression regularExpressionWithPattern:
+        @"^(ID|IF|FA|MD|PC|FL|PA|RA|VL|SM0|FA[0-9]{11}|MD[1-7]|PC(?:0[1-9][0-9]|100)|FL[0-3][0-1]?|PA[01]|RA0[01]);$"
+        options:0 error:nil];
+    for (NSUInteger lineIndex = 0; lineIndex < lines.count; lineIndex++) {
+        NSString *line = lines[lineIndex];
+        NSString *command = [[line stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] uppercaseString];
+        if (!command.length || [command hasPrefix:@"#"]) continue;
+        BOOL valid = [pattern numberOfMatchesInString:command options:0 range:NSMakeRange(0, command.length)] == 1;
+        if (!valid || result.count >= 20) {
+            if (error) *error = MacroError([NSString stringWithFormat:@"Line %lu is not a supported safe CAT command (maximum 20 lines): %@", (unsigned long)(lineIndex + 1), command]);
+            return nil;
+        }
+        if ([command hasPrefix:@"FA"] && command.length > 3) {
+            unsigned long long hz = [[command substringWithRange:NSMakeRange(2, 11)] longLongValue];
+            if (hz < 100000 || hz > 60000000) {
+                if (error) *error = MacroError([NSString stringWithFormat:@"Line %lu: frequency must be 100 kHz–60 MHz.", (unsigned long)(lineIndex + 1)]);
+                return nil;
+            }
+        }
+        [result addObject:command];
+    }
+    if (!result.count) {
+        if (error) *error = MacroError(@"Add at least one CAT command, one per line.");
+        return nil;
+    }
+    return result;
+}
+
+static NSString *MacroReadbackQuery(NSString *command) {
+    if (command.length <= 3) return nil;
+    if ([command hasPrefix:@"FA"]) return @"FA;";
+    if ([command hasPrefix:@"MD"]) return @"MD;";
+    if ([command hasPrefix:@"PC"]) return @"PC;";
+    if ([command hasPrefix:@"FL"]) return @"FL;";
+    if ([command hasPrefix:@"PA"]) return @"PA;";
+    if ([command hasPrefix:@"RA"]) return @"RA;";
+    return nil;
+}
+
+BOOL TXRunCATMacro(NSString *path, NSArray<NSString *> *commands, Lab599Cancellation *token,
+    void (^progress)(NSUInteger, NSString *, NSString *), NSError **error) {
+    NSString *source = [commands componentsJoinedByString:@"\n"];
+    NSArray<NSString *> *validated = TXValidatedCATMacro(source, error);
+    if (!validated) return NO;
+    if (!token) token = [Lab599Cancellation new];
+    if (token.cancelled) { if (error) *error = MacroError(@"Macro stopped."); return NO; }
+    Lab599SerialPort *port = [Lab599SerialPort openPath:path speed:B9600 error:error];
+    if (!port) return NO;
+    BOOL success = YES;
+    for (NSUInteger i = 0; i < validated.count && !token.cancelled; i++) {
+        NSString *command = validated[i];
+        NSString *wireCommand = command;
+        NSString *query = MacroReadbackQuery(command);
+        if ([command hasPrefix:@"FL"] && command.length == 4) {
+            NSError *filterError = nil;
+            NSString *oldFilter = SendOverPort(port, @"FL;", 0.5, NULL, &filterError);
+            BOOL fullReply = oldFilter.length == 5 && [oldFilter hasPrefix:@"FL"] &&
+                [oldFilter characterAtIndex:2] >= '0' && [oldFilter characterAtIndex:2] <= '3' &&
+                [oldFilter characterAtIndex:3] >= '0' && [oldFilter characterAtIndex:3] <= '1';
+            if (!fullReply) {
+                if (error) *error = filterError ?: MacroError(@"Cannot confirm the current TX filter from a complete FL reply.");
+                success = NO; break;
+            }
+            wireCommand = [NSString stringWithFormat:@"FL%c%c;", [command characterAtIndex:2], [oldFilter characterAtIndex:3]];
+        }
+        // SendOverPort bounds a no-reply setter; the explicit query then checks
+        // that the requested value actually took effect.
+        NSError *stepError = nil;
+        NSString *reply = SendOverPort(port, wireCommand, query ? 0.18 : 0.5, NULL, &stepError);
+        if (token.cancelled) break;
+        if (stepError && (!query || stepError.code != Lab599SerialTimeout)) {
+            if (error) *error = stepError;
+            success = NO; break;
+        }
+        if (reply && ([reply hasPrefix:@"?;"] || [reply hasPrefix:@"E;"] || [reply hasPrefix:@"O;"])) {
+            if (error) *error = MacroError([NSString stringWithFormat:@"Radio rejected %@ with %@", command, reply]);
+            success = NO; break;
+        }
+        if (query) {
+            stepError = nil;
+            reply = SendOverPort(port, query, 0.5, NULL, &stepError);
+            NSString *expected = [wireCommand substringFromIndex:2];
+            BOOL matches = reply && [reply hasPrefix:[query substringToIndex:2]] &&
+                (([command hasPrefix:@"FL"] && command.length == 4 && reply.length == 5) ?
+                    [reply characterAtIndex:2] == [command characterAtIndex:2] &&
+                        [reply characterAtIndex:3] == [wireCommand characterAtIndex:3] :
+                    [[reply substringFromIndex:2] isEqualToString:expected]);
+            if (!matches) {
+                if (error) *error = stepError ?: MacroError([NSString stringWithFormat:@"Read-back failed after %@ (received %@).", command, reply ?: @"no reply"]);
+                success = NO; break;
+            }
+        } else if (!reply || ![reply hasSuffix:@";"]) {
+            if (error) *error = stepError ?: MacroError([NSString stringWithFormat:@"No complete reply to %@", command]);
+            success = NO; break;
+        }
+        if (progress) progress(i, command, reply ?: @"Verified");
+    }
+    if (token.cancelled) { success = NO; if (error) *error = MacroError(@"Macro stopped."); }
+    [port close];
+    return success;
+}

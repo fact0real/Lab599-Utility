@@ -8,6 +8,7 @@
 #import <unistd.h>
 
 NSString *const Lab599SerialErrorDomain = @"Lab599SerialError";
+NSString *const Lab599CATTrafficNotification = @"Lab599CATTrafficNotification";
 @implementation Lab599Cancellation
 @end
 
@@ -43,6 +44,10 @@ static BOOL Cancelled(Lab599Cancellation *token, NSError **error) {
 
 @implementation Lab599SerialPort {
     int _fd;
+    NSString *_path;
+    BOOL _catSpeed;
+    NSMutableData *_catRX;
+    double _lastCATTX;
 }
 - (instancetype)init {
     if ((self = [super init])) _fd = -1;
@@ -51,6 +56,9 @@ static BOOL Cancelled(Lab599Cancellation *token, NSError **error) {
 + (instancetype)openPath:(NSString *)path speed:(speed_t)speed error:(NSError **)error {
     if (!path.length) { Error(error, Lab599SerialIOError, @"Select a serial port."); return nil; }
     Lab599SerialPort *port = [self new];
+    port->_path = [path copy];
+    port->_catSpeed = (speed == B9600);
+    port->_catRX = [NSMutableData data];
     port->_fd = open(path.fileSystemRepresentation, O_RDWR | O_NOCTTY | O_NONBLOCK | O_CLOEXEC);
     if (port->_fd < 0) { SystemError(error, @"Opening port (close other radio applications)"); return nil; }
     if (ioctl(port->_fd, TIOCEXCL) < 0) { SystemError(error, @"Obtaining exclusive serial access"); return nil; }
@@ -76,7 +84,41 @@ static BOOL Cancelled(Lab599Cancellation *token, NSError **error) {
     return port;
 }
 - (BOOL)discardInput:(NSError **)error {
+    [_catRX setLength:0];
     return tcflush(_fd, TCIFLUSH) == 0 ? YES : SystemError(error, @"Clearing stale serial input");
+}
+
+- (void)publishCATBytes:(NSData *)data direction:(NSString *)direction {
+    if (!_catSpeed || !data.length) return;
+    if ([direction isEqualToString:@"TX"]) {
+        _lastCATTX = Lab599MonotonicTime();
+        [_catRX setLength:0];
+    }
+    NSMutableData *buffer = [direction isEqualToString:@"RX"] ? _catRX : [NSMutableData data];
+    [buffer appendData:data];
+    if (buffer.length > 256) { [buffer setLength:0]; return; }
+    const uint8_t *bytes = buffer.bytes;
+    for (NSUInteger i = 0; i < buffer.length; i++) {
+        if (bytes[i] < 32 || bytes[i] > 126) { [buffer setLength:0]; return; }
+    }
+    while (buffer.length) {
+        bytes = buffer.bytes;
+        NSUInteger end = 0;
+        while (end < buffer.length && bytes[end] != ';') end++;
+        if (end == buffer.length) break;
+        NSData *frameData = [buffer subdataWithRange:NSMakeRange(0, end + 1)];
+        NSString *frame = [[NSString alloc] initWithData:frameData encoding:NSASCIIStringEncoding];
+        if (frame.length && frame.length <= 128) {
+            double latency = [direction isEqualToString:@"RX"] && _lastCATTX > 0 ?
+                (Lab599MonotonicTime() - _lastCATTX) * 1000.0 : -1.0;
+            if (latency > 2000) latency = -1.0; // Unsolicited radio output is not an RTT.
+            [[NSNotificationCenter defaultCenter] postNotificationName:Lab599CATTrafficNotification object:self
+                userInfo:@{@"direction": direction, @"frame": frame, @"port": _path ?: @"",
+                    @"timestamp": [NSDate date], @"latencyMs": @(latency)}];
+            if ([direction isEqualToString:@"RX"]) _lastCATTX = 0;
+        }
+        [buffer replaceBytesInRange:NSMakeRange(0, end + 1) withBytes:NULL length:0];
+    }
 }
 - (BOOL)assertDTRAndRTS:(NSError **)error {
     int bits = TIOCM_DTR | TIOCM_RTS;
@@ -109,7 +151,7 @@ static BOOL Cancelled(Lab599Cancellation *token, NSError **error) {
             if (errno == EINTR) continue;
             return SystemError(error, @"Checking serial output queue");
         }
-        if (!pending) return YES;
+        if (!pending) { [self publishCATBytes:data direction:@"TX"]; return YES; }
         Lab599Pause(0.001, token);
     }
 }
@@ -133,7 +175,11 @@ static BOOL Cancelled(Lab599Cancellation *token, NSError **error) {
         if (!(item.revents & POLLIN)) continue;
         uint8_t bytes[1024];
         ssize_t count = read(_fd, bytes, MIN(maximum, sizeof(bytes)));
-        if (count > 0) return [NSData dataWithBytes:bytes length:(NSUInteger)count];
+        if (count > 0) {
+            NSData *result = [NSData dataWithBytes:bytes length:(NSUInteger)count];
+            [self publishCATBytes:result direction:@"RX"];
+            return result;
+        }
         if (count < 0 && errno != EINTR && errno != EAGAIN && errno != EWOULDBLOCK) {
             SystemError(error, @"Reading CAT data"); return nil;
         }

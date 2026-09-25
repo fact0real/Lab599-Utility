@@ -8,7 +8,9 @@
 @property(nonatomic, copy) void (^activityChanged)(BOOL busy);
 @property(nonatomic, copy) void (^statusChanged)(NSString *text, double progress);
 @property(nonatomic, copy) void (^log)(NSString *message);
+@property(nonatomic, readonly) BOOL operationInProgress;
 - (void)selectTool:(NSInteger)tool; // CAT=0, Settings=1, Memory=2
 - (void)portsAvailable:(BOOL)available;
+- (void)cancelActiveOperation;
 - (BOOL)confirmDiscard;
 @end

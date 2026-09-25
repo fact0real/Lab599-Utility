@@ -342,8 +342,8 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
 @property (nonatomic, strong) NSButton *fakeItCheckbox;
 @property (nonatomic, strong) NSButton *tuneButton;
 @property (nonatomic, strong) NSPopUpButton *rfPowerPopup;
-@property (nonatomic, strong) NSSlider *digGainSlider;
-@property (nonatomic, strong) NSTextField *digGainValueLabel;
+@property (nonatomic, strong) NSTextField *digGainField;
+@property (nonatomic, assign) NSInteger displayedDIGGain;
 @property (nonatomic, assign) NSInteger pendingRFPowerTenths;
 @property (nonatomic, assign) NSInteger pendingDIGGain;
 @property (nonatomic, assign) BOOL hasPendingRFPower;
@@ -1099,10 +1099,25 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
         // on the radio when FW is unavailable.
         if (!widthVerified) strongSelf.serialCommandSender(@"FL00;");
 
-        NSString *pcReply = strongSelf.catQueryHandler ? strongSelf.catQueryHandler(@"PC;", 0.5) : nil;
-        NSString *maReply = strongSelf.catQueryHandler ? strongSelf.catQueryHandler(@"MA;", 0.5) : nil;
+        NSString *pcReply = strongSelf.catQueryHandler ? strongSelf.catQueryHandler(@"PC;", 0.8) : nil;
+        NSString *maReply = strongSelf.catQueryHandler ? strongSelf.catQueryHandler(@"MA;", 0.8) : nil;
         NSInteger powerTenths = TX500ThreeDigitCATValue(pcReply, @"PC");
         NSInteger digGain = TX500ThreeDigitCATValue(maReply, @"MA");
+        // Frequency refresh may be querying CAT at the same time as digital
+        // setup. Retry read-only values so a transient busy port cannot leave
+        // the power selector showing an unverified value.
+        for (NSUInteger attempt = 0; attempt < 2 &&
+             (powerTenths == NSNotFound || digGain == NSNotFound); attempt++) {
+            [NSThread sleepForTimeInterval:0.15];
+            if (powerTenths == NSNotFound) {
+                pcReply = strongSelf.catQueryHandler ? strongSelf.catQueryHandler(@"PC;", 0.8) : nil;
+                powerTenths = TX500ThreeDigitCATValue(pcReply, @"PC");
+            }
+            if (digGain == NSNotFound) {
+                maReply = strongSelf.catQueryHandler ? strongSelf.catQueryHandler(@"MA;", 0.8) : nil;
+                digGain = TX500ThreeDigitCATValue(maReply, @"MA");
+            }
+        }
 
         dispatch_async(dispatch_get_main_queue(), ^{
             typeof(self) mainSelf = weakSelf;
@@ -1112,8 +1127,7 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
                 if ([mainSelf.rfPowerPopup itemWithTitle:title]) [mainSelf.rfPowerPopup selectItemWithTitle:title];
             }
             if (digGain != NSNotFound && digGain >= 0 && digGain <= 100) {
-                mainSelf.digGainSlider.doubleValue = digGain;
-                mainSelf.digGainValueLabel.stringValue = [NSString stringWithFormat:@"%ld", (long)digGain];
+                [mainSelf displayDIGGain:digGain];
             }
             if (modeVerified && mainSelf.audioEngine.dialFrequencyHz > 0)
                 mainSelf.audioEngine.catDialAndModeVerified = YES;
@@ -1140,10 +1154,14 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
     [self applyPendingRadioSettings];
 }
 
-- (void)digGainChanged:(NSSlider *)sender {
-    NSInteger gain = (NSInteger)lround(sender.doubleValue);
-    gain = MAX(0, MIN(100, gain));
-    self.digGainValueLabel.stringValue = [NSString stringWithFormat:@"%ld", (long)gain];
+- (void)displayDIGGain:(NSInteger)gain {
+    self.displayedDIGGain = gain;
+    self.digGainField.stringValue = [NSString stringWithFormat:@"%ld", (long)gain];
+}
+
+- (void)requestDIGGain:(NSInteger)gain {
+    if (gain < 0 || gain > 100) return;
+    [self displayDIGGain:gain];
     if (!self.serialCommandSender) return;
     self.pendingDIGGain = gain;
     self.hasPendingDIGGain = YES;
@@ -1152,6 +1170,30 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
             @"[DIG Gain] %ld queued; it will be written and read back as soon as RX is confirmed.", (long)gain]];
     }
     [self applyPendingRadioSettings];
+}
+
+- (void)stepDIGGain:(NSButton *)sender {
+    [self requestDIGGain:MAX(0, MIN(100, self.displayedDIGGain + sender.tag))];
+}
+
+- (void)commitDIGGain:(NSTextField *)sender {
+    NSString *value = [sender.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    NSInteger gain = 0;
+    BOOL valid = value.length > 0 && value.length <= 3;
+    for (NSUInteger i = 0; valid && i < value.length; i++) {
+        unichar digit = [value characterAtIndex:i];
+        if (digit >= '0' && digit <= '9') digit -= '0';
+        else if (digit >= 0x06F0 && digit <= 0x06F9) digit -= 0x06F0;
+        else if (digit >= 0x0660 && digit <= 0x0669) digit -= 0x0660;
+        else { valid = NO; break; }
+        gain = gain * 10 + digit;
+    }
+    if (!valid || gain > 100) {
+        NSBeep();
+        [self displayDIGGain:self.displayedDIGGain];
+        return;
+    }
+    [self requestDIGGain:gain];
 }
 
 - (void)applyPendingRadioSettings {
@@ -1207,8 +1249,7 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
             if (applyGain && mainSelf.pendingDIGGain == requestedGain) {
                 mainSelf.hasPendingDIGGain = !gainVerified;
                 if (actualGain != NSNotFound) {
-                    mainSelf.digGainSlider.integerValue = actualGain;
-                    mainSelf.digGainValueLabel.stringValue = [NSString stringWithFormat:@"%ld", (long)actualGain];
+                    [mainSelf displayDIGGain:actualGain];
                 }
                 [mainSelf appendToQSOConsole:gainVerified ?
                     [NSString stringWithFormat:@"[DIG Gain] Radio confirmed MA%03ld. Use ALC during TX for final adjustment.", (long)actualGain] :
@@ -1611,8 +1652,8 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
 
     NSTextField *rfPowerLabel = [NSTextField labelWithString:@"RF:"];
     self.rfPowerPopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
-    [self.rfPowerPopup addItemsWithTitles:@[@"1 W", @"2 W", @"3 W", @"5 W", @"7 W", @"10 W"]];
-    [self.rfPowerPopup selectItemWithTitle:@"5 W"];
+    [self.rfPowerPopup addItemsWithTitles:@[@"—", @"1 W", @"2 W", @"3 W", @"5 W", @"7 W", @"10 W"]];
+    [self.rfPowerPopup selectItemWithTitle:@"—"];
     self.rfPowerPopup.controlSize = NSControlSizeSmall;
     self.rfPowerPopup.target = self;
     self.rfPowerPopup.action = @selector(rfPowerChanged:);
@@ -1620,16 +1661,33 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
     [self.rfPowerPopup.widthAnchor constraintEqualToConstant:66].active = YES;
 
     NSTextField *digGainLabel = [NSTextField labelWithString:@"DIG:"];
-    self.digGainSlider = [NSSlider sliderWithValue:20.0 minValue:0.0 maxValue:100.0 target:self action:@selector(digGainChanged:)];
-    self.digGainSlider.continuous = NO;
-    self.digGainSlider.numberOfTickMarks = 11;
-    self.digGainSlider.allowsTickMarkValuesOnly = NO;
-    self.digGainSlider.toolTip = @"Radio line-input gain (CAT MA). Raise gradually while Tune is active; keep ALC low for a clean FT8 signal.";
-    [self.digGainSlider.widthAnchor constraintEqualToConstant:78].active = YES;
-    self.digGainValueLabel = [NSTextField labelWithString:@"20"];
-    self.digGainValueLabel.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightSemibold];
-    self.digGainValueLabel.alignment = NSTextAlignmentRight;
-    [self.digGainValueLabel.widthAnchor constraintEqualToConstant:26].active = YES;
+    NSButton *digGainDownButton = [NSButton buttonWithTitle:@"−" target:self action:@selector(stepDIGGain:)];
+    digGainDownButton.tag = -1;
+    digGainDownButton.bezelStyle = NSBezelStyleInline;
+    digGainDownButton.toolTip = @"Decrease DIG line-input gain by one.";
+    digGainDownButton.accessibilityLabel = @"Decrease DIG gain";
+    [digGainDownButton.widthAnchor constraintEqualToConstant:22].active = YES;
+    self.digGainField = [NSTextField textFieldWithString:@"20"];
+    self.displayedDIGGain = 20;
+    self.digGainField.alignment = NSTextAlignmentCenter;
+    self.digGainField.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightSemibold];
+    self.digGainField.controlSize = NSControlSizeSmall;
+    self.digGainField.target = self;
+    self.digGainField.action = @selector(commitDIGGain:);
+    self.digGainField.cell.sendsActionOnEndEditing = YES;
+    self.digGainField.toolTip = @"Radio DIG gain (0–100). Enter an exact value; changes during TX apply after RX is confirmed.";
+    self.digGainField.accessibilityLabel = @"DIG line-input gain";
+    [self.digGainField.widthAnchor constraintEqualToConstant:36].active = YES;
+    NSButton *digGainUpButton = [NSButton buttonWithTitle:@"+" target:self action:@selector(stepDIGGain:)];
+    digGainUpButton.tag = 1;
+    digGainUpButton.bezelStyle = NSBezelStyleInline;
+    digGainUpButton.toolTip = @"Increase DIG line-input gain by one.";
+    digGainUpButton.accessibilityLabel = @"Increase DIG gain";
+    [digGainUpButton.widthAnchor constraintEqualToConstant:22].active = YES;
+    NSStackView *digGainControls = [NSStackView stackViewWithViews:@[digGainDownButton, self.digGainField, digGainUpButton]];
+    digGainControls.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    digGainControls.alignment = NSLayoutAttributeCenterY;
+    digGainControls.spacing = 2;
 
     // TX Slot Parity: Even / Auto / Odd
     self.txParitySegment = [NSSegmentedControl segmentedControlWithLabels:@[@"Even", @"Auto", @"Odd"]
@@ -1687,7 +1745,7 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
     NSStackView *row2Stack = [NSStackView stackViewWithViews:@[
         rxLbl, self.rxFreqField, txLbl, self.txFreqField,
         self.lockFreqsButton, self.tuneButton, self.armTxButton, sepRow2_1,
-        rfPowerLabel, self.rfPowerPopup, digGainLabel, self.digGainSlider, self.digGainValueLabel,
+        rfPowerLabel, self.rfPowerPopup, digGainLabel, digGainControls,
         self.txParitySegment, self.fakeItCheckbox, sepRow2_2,
         self.powerMeterLabel, self.alcLabel, self.swrLabel, spacerR2
     ]];

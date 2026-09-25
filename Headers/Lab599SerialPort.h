@@ -2,6 +2,9 @@
 #import <termios.h>
 
 FOUNDATION_EXPORT NSString *const Lab599SerialErrorDomain;
+// App-owned, printable semicolon-framed CAT traffic only. userInfo:
+// direction (TX/RX), frame, port, timestamp, latencyMs (RX when available).
+FOUNDATION_EXPORT NSString *const Lab599CATTrafficNotification;
 typedef NS_ENUM(NSInteger, Lab599SerialError) {
     Lab599SerialCancelled = 1,
     Lab599SerialTimeout,

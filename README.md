@@ -25,14 +25,14 @@ Firmware header validation reads the BL20 model ID before transfer begins and di
 | Time Sync | Disciplines a continuous internal UTC clock from multi-source NTP, TLS/HTTPS fallback, calibrated holdover and robust FT8 timing consensus; sets the radio to local time or UTC and verifies read-back | Normal operation, CAT 9600 |
 | Telemetry | Live arc-gauge dashboard: RF power, SWR (RM1 dots), supply/battery voltage, S-meter, frequency, mode, TX/RX state; rolling averages at 5 m / 15 m / 30 m / 60 m; over-voltage, low-voltage and high-SWR alert guards; selectable poll rate (250 ms / 500 ms / 1 s); Demo Mode | Normal operation, CAT 9600 |
 | Radio Screen | Real-time 256×128 LCD mirror via CAT; four display themes (Amber, Cool White / Daylight, Green phosphor, OLED); panadapter spectrum and calibrated meter bars; save screenshot to PNG or copy to clipboard; Demo Mode | Normal operation, CAT 9600 |
-| CAT Test | Single or continuous identification query; displays reply, round-trip latency and pass/fail counts | Normal operation, CAT 9600 |
+| CAT Studio | Verified live controls and band presets; named quick-launch CAT macros with safe command validation and read-back; full 1024-byte settings snapshots with model check and pre-restore backup; app-owned CAT protocol monitor with TX/RX/error filters and response timeline; the separate system console starts collapsed | Normal operation, CAT 9600 |
 | Settings | Read, save, open and restore the full 1024-byte `.set` backup; read-back comparison after every write | Normal operation, CAT 9600 |
 | Memory | Read, edit, save, open and write 100 channels using the original 600-byte `.mem` format; built-in operating profiles (SOTA/POTA, FT8/JS8Call, Contest); CSV import/export; read-back comparison after every write; file editing without a connected radio | Normal operation, CAT 9600 |
 | Driver Install | FTDI D2XX driver download and installation guide; system serial-device diagnostics | — |
 | Documentation | Embedded Lab599 manuals, schematics and firmware download library | — |
 | Feedback & Suggestion | Structured bug report and feature request form; auto-collects macOS version and hardware model (`sysctl hw.model`); generates a pre-filled GitHub issue URL or copies Markdown to clipboard | — |
 
-Only one radio operation runs at a time. Telemetry and Radio Screen stop automatically when switching to another view. CAT Test, Settings and Memory have a cooperative Stop button; partial writes are reported explicitly. File editing and Demo Mode work without a connected radio. Unsaved memory banks are protected by replacement and exit prompts.
+Only one radio operation runs at a time. Telemetry and Radio Screen stop automatically when switching to another view. CAT Studio, Settings and Memory have a cooperative Stop button; partial writes are reported explicitly. File editing and Demo Mode work without a connected radio. Unsaved memory banks are protected by replacement and exit prompts.
 
 Settings is a complete-block backup/restore tool matching the original utility; it does not identify individual setting fields. Memory exposes frequency, mode and preamplifier/attenuator. DIG uses the same stored code as USB. Writing memory replaces all 100 slots, including empty ones.
 
@@ -45,7 +45,7 @@ The **Voice Keyer** sidebar panel records/imports local voice messages, previews
 Open **Lab599 Utility.app**, connect the CAT-USB cable and choose the serial port from the port menu. Tap **Refresh** if the port does not appear. Close other applications using the same port.
 
 - **Firmware Update** — power off the radio; hold the third top function key while pressing POWER until the display shows *"The loader is waiting..."*; select firmware matching your model; click Start Update and keep power and cable connected until completion.
-- **Time Sync, CAT Test, Settings, Memory, Telemetry, Radio Screen** — turn the radio on normally; set CAT protocol to **LAB599** (Menu 35) at 9600 baud.
+- **Time Sync, CAT Studio, Settings, Memory, Telemetry, Radio Screen** — turn the radio on normally; set CAT protocol to **LAB599** (Menu 35) at 9600 baud.
 - **Telemetry / Radio Screen Demo Mode** — enable Demo Mode in either panel to explore the UI without a connected radio.
 
 Read and save the current settings/memory before restoring another bank. File-size checks cannot identify which radio model or firmware version created an untagged backup. A failed or interrupted write can leave the radio in a partially changed state; success is reported only after the implemented read-back checks complete.

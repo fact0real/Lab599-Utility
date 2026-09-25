@@ -4,7 +4,7 @@
 //
 //  Native WebKit Authenticator & 2FA/MFA Session Manager
 //  Supports QRZ.com and Club Log 2FA/MFA web login, OTP code entry,
-//  and automatic session cookie capture.
+//  and operator-confirmed session cookie capture.
 //
 
 #import "TX500WebAuthenticatorController.h"
@@ -14,13 +14,16 @@ static NSString * const kQRZActiveKey = @"TX500_QRZ_2FA_Active";
 static NSString * const kClubLogCookieKey = @"TX500_ClubLog_2FASessionCookies";
 static NSString * const kClubLogActiveKey = @"TX500_ClubLog_2FA_Active";
 
-@interface TX500WebAuthenticatorController ()
+@interface TX500WebAuthenticatorController () <NSWindowDelegate>
 
 @property (nonatomic, assign, readwrite) TX500AuthService service;
 @property (nonatomic, strong) WKWebView *webView;
 @property (nonatomic, strong) NSTextField *statusLabel;
 @property (nonatomic, strong) NSProgressIndicator *spinner;
-@property (nonatomic, assign) BOOL isSessionCaptured;
+@property (nonatomic, strong) NSButton *doneButton;
+@property (nonatomic, assign) BOOL completed;
+@property (nonatomic, assign) BOOL savingSession;
+@property (nonatomic, assign) NSUInteger captureGeneration;
 
 @end
 
@@ -44,6 +47,8 @@ static NSString * const kClubLogActiveKey = @"TX500_ClubLog_2FA_Active";
     [win center];
 
     self.window = win;
+    win.delegate = self;
+    win.releasedWhenClosed = NO;
     NSView *content = win.contentView;
 
     // Header Bar
@@ -80,10 +85,12 @@ static NSString * const kClubLogActiveKey = @"TX500_ClubLog_2FA_Active";
     btnDone.bezelStyle = NSBezelStyleRounded;
     btnDone.font = [NSFont systemFontOfSize:12.0 weight:NSFontWeightBold];
     [headerBox addSubview:btnDone];
+    self.doneButton = btnDone;
 
     NSButton *btnCancel = [NSButton buttonWithTitle:@"Cancel" target:self action:@selector(cancelClicked)];
     btnCancel.translatesAutoresizingMaskIntoConstraints = NO;
     btnCancel.bezelStyle = NSBezelStyleRounded;
+    btnCancel.keyEquivalent = @"\033";
     [headerBox addSubview:btnCancel];
 
     // WebKit View
@@ -181,10 +188,15 @@ static NSString * const kClubLogActiveKey = @"TX500_ClubLog_2FA_Active";
 - (void)presentModalOverWindow:(nullable NSWindow *)parentWindow
                     completion:(nullable void (^)(BOOL success, NSString *message))completion {
     self.completionHandler = completion;
-    self.isSessionCaptured = NO;
+    self.completed = NO;
+    self.savingSession = NO;
+    self.doneButton.enabled = YES;
+    self.captureGeneration++;
     if (parentWindow) {
+        __weak typeof(self) weakSelf = self;
         [parentWindow beginSheet:self.window completionHandler:^(NSModalResponse returnCode) {
             (void)returnCode;
+            [weakSelf finishWithSuccess:NO message:@"Authentication closed."];
         }];
     } else {
         [self.window makeKeyAndOrderFront:nil];
@@ -195,90 +207,108 @@ static NSString * const kClubLogActiveKey = @"TX500_ClubLog_2FA_Active";
 
 - (void)webView:(WKWebView *)webView didStartProvisionalNavigation:(WKNavigation *)navigation {
     (void)webView; (void)navigation;
+    if (self.completed || self.savingSession) return;
     [self.spinner startAnimation:nil];
     self.statusLabel.stringValue = @"Loading login portal...";
 }
 
 - (void)webView:(WKWebView *)webView didFinish:(WKNavigation *)navigation {
-    (void)navigation;
+    (void)webView; (void)navigation;
+    if (self.completed || self.savingSession) return;
     [self.spinner stopAnimation:nil];
-    self.statusLabel.stringValue = @"Page loaded. Enter credentials & 2FA code if prompted.";
-    [self captureCookiesManual:NO];
+    // Anonymous login pages can also set session cookies. Only the operator can
+    // confirm completion of this web login; cookie names do not verify 2FA.
+    self.statusLabel.stringValue = @"Finish signing in, including 2FA, then click Done / Save Session.";
 }
 
 - (void)webView:(WKWebView *)webView didFailNavigation:(WKNavigation *)navigation withError:(NSError *)error {
     (void)webView; (void)navigation;
+    if (self.completed || self.savingSession || error.code == NSURLErrorCancelled) return;
     [self.spinner stopAnimation:nil];
     self.statusLabel.stringValue = [NSString stringWithFormat:@"Navigation error: %@", error.localizedDescription];
 }
 
+- (void)webView:(WKWebView *)webView didFailProvisionalNavigation:(WKNavigation *)navigation withError:(NSError *)error {
+    [self webView:webView didFailNavigation:navigation withError:error];
+}
+
 #pragma mark - Cookie Capture & Session Persistence
 
-- (void)captureCookiesManual:(BOOL)isManual {
-    WKHTTPCookieStore *store = self.webView.configuration.websiteDataStore.httpCookieStore;
-    NSString *targetDomain = (self.service == TX500AuthServiceQRZ) ? @"qrz.com" : @"clublog.org";
-
-    [store getAllCookies:^(NSArray<NSHTTPCookie *> *cookies) {
-        NSMutableArray<NSString *> *pairs = [NSMutableArray array];
-        BOOL hasLoginSession = NO;
-
-        for (NSHTTPCookie *c in cookies) {
-            if ([c.domain containsString:targetDomain]) {
-                [pairs addObject:[NSString stringWithFormat:@"%@=%@", c.name, c.value]];
-                NSString *nameLower = [c.name lowercaseString];
-                if ([nameLower containsString:@"session"] ||
-                    [nameLower containsString:@"qrz"] ||
-                    [nameLower containsString:@"login"] ||
-                    [nameLower containsString:@"auth"] ||
-                    [nameLower containsString:@"remember"]) {
-                    hasLoginSession = YES;
-                }
-            }
-        }
-
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (pairs.count > 0 && (hasLoginSession || isManual)) {
-                NSString *cookieHeader = [pairs componentsJoinedByString:@"; "];
-                NSString *cookieKey = (self.service == TX500AuthServiceQRZ) ? kQRZCookieKey : kClubLogCookieKey;
-                NSString *activeKey = (self.service == TX500AuthServiceQRZ) ? kQRZActiveKey : kClubLogActiveKey;
-
-                [[NSUserDefaults standardUserDefaults] setObject:cookieHeader forKey:cookieKey];
-                [[NSUserDefaults standardUserDefaults] setBool:YES forKey:activeKey];
-                [[NSUserDefaults standardUserDefaults] synchronize];
-
-                self.isSessionCaptured = YES;
-                self.statusLabel.stringValue = @"✅ 2FA Session verified & saved successfully!";
-
-                if (self.completionHandler) {
-                    self.completionHandler(YES, @"2FA Session verified and saved.");
-                }
-
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                    [self closeWindow];
-                });
-            } else if (isManual) {
-                self.statusLabel.stringValue = @"No login session cookie found yet. Please finish signing in first.";
-            }
-        });
-    }];
+// Kept separate so lifecycle tests can supply cookies without contacting a service.
+- (void)readSessionCookies:(void (^)(NSArray<NSHTTPCookie *> *))completion {
+    [self.webView.configuration.websiteDataStore.httpCookieStore getAllCookies:completion];
 }
 
 - (void)doneClicked {
-    [self captureCookiesManual:YES];
+    if (self.completed || self.savingSession) return;
+    self.savingSession = YES;
+    self.doneButton.enabled = NO;
+    self.statusLabel.stringValue = @"Saving browser session…";
+    [self.spinner startAnimation:nil];
+    NSUInteger generation = ++self.captureGeneration;
+    NSString *targetDomain = (self.service == TX500AuthServiceQRZ) ? @"qrz.com" : @"clublog.org";
+    __weak typeof(self) weakSelf = self;
+    [self readSessionCookies:^(NSArray<NSHTTPCookie *> *cookies) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) self = weakSelf;
+            if (!self || self.completed || generation != self.captureGeneration) return;
+            NSMutableArray<NSString *> *pairs = [NSMutableArray array];
+            for (NSHTTPCookie *cookie in cookies) {
+                NSString *domain = cookie.domain.lowercaseString;
+                if ([domain hasPrefix:@"."]) domain = [domain substringFromIndex:1];
+                if (!([domain isEqualToString:targetDomain] || [domain hasSuffix:[@"." stringByAppendingString:targetDomain]])) continue;
+                if (cookie.expiresDate && [cookie.expiresDate timeIntervalSinceNow] <= 0) continue;
+                [pairs addObject:[NSString stringWithFormat:@"%@=%@", cookie.name, cookie.value]];
+            }
+            self.savingSession = NO;
+            [self.spinner stopAnimation:nil];
+            if (pairs.count == 0) {
+                self.doneButton.enabled = YES;
+                self.statusLabel.stringValue = @"No session cookies found. Finish signing in, then try Done again.";
+                return;
+            }
+            NSString *cookieKey = (self.service == TX500AuthServiceQRZ) ? kQRZCookieKey : kClubLogCookieKey;
+            NSString *activeKey = (self.service == TX500AuthServiceQRZ) ? kQRZActiveKey : kClubLogActiveKey;
+            [NSUserDefaults.standardUserDefaults setObject:[pairs componentsJoinedByString:@"; "] forKey:cookieKey];
+            [NSUserDefaults.standardUserDefaults setBool:YES forKey:activeKey];
+            [self finishWithSuccess:YES message:@"Browser session saved."];
+        });
+    }];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        typeof(self) self = weakSelf;
+        if (!self || self.completed || !self.savingSession || generation != self.captureGeneration) return;
+        self.captureGeneration++;
+        self.savingSession = NO;
+        self.doneButton.enabled = YES;
+        [self.spinner stopAnimation:nil];
+        self.statusLabel.stringValue = @"Session saving timed out. Click Done to retry, or Cancel to close.";
+    });
 }
 
 - (void)cancelClicked {
-    if (self.completionHandler) {
-        self.completionHandler(NO, @"Authentication cancelled by user.");
-    }
-    [self closeWindow];
+    [self finishWithSuccess:NO message:@"Authentication cancelled by user."];
 }
 
-- (void)closeWindow {
-    if (self.window.sheetParent) {
-        [self.window.sheetParent endSheet:self.window];
-    }
+- (BOOL)windowShouldClose:(NSWindow *)sender {
+    (void)sender;
+    [self cancelClicked];
+    return NO;
+}
+
+- (void)finishWithSuccess:(BOOL)success message:(NSString *)message {
+    if (self.completed) return;
+    self.completed = YES;
+    self.captureGeneration++;
+    self.savingSession = NO;
+    [self.spinner stopAnimation:nil];
+    [self.webView stopLoading];
+    void (^completion)(BOOL, NSString *) = self.completionHandler;
+    self.completionHandler = nil;
+    // Dismiss before the owner releases its strong reference in the callback.
+    if (self.window.sheetParent) [self.window.sheetParent endSheet:self.window];
+    [self.window orderOut:nil];
     [self.window close];
+    if (completion) completion(success, message);
 }
 
 #pragma mark - Class Helpers

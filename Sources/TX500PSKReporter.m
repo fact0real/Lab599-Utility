@@ -26,19 +26,24 @@ static BOOL ValidGrid(NSString *s) { return [s isKindOfClass:NSString.class] && 
 - (void)update:(NSString *)s { @synchronized(self) { _status=[s copy]; } dispatch_async(dispatch_get_main_queue(), ^{ [NSNotificationCenter.defaultCenter postNotificationName:TXPSKReporterChanged object:self]; }); }
 - (NSString *)status { @synchronized(self) { return _status; } }
 - (BOOL)enabled { @synchronized(self) { return _enabled; } }
-- (void)setEnabled:(BOOL)v { @synchronized(self) { _enabled=v; } dispatch_async(_queue, ^{ if(!v) { [self->_pending removeAllObjects]; [self->_seen removeAllObjects]; } [self update:v ? @"Reporting enabled • waiting for real decodes" : @"Reporting off"]; }); }
+- (void)setEnabled:(BOOL)v { @synchronized(self) { if(_enabled==v) return; _enabled=v; } dispatch_async(_queue, ^{ if(!v) { [self->_pending removeAllObjects]; [self->_seen removeAllObjects]; } [self update:v ? @"Reporting enabled • waiting for real decodes" : @"Reporting off"]; }); }
 - (NSUInteger)pendingCount { __block NSUInteger n; dispatch_sync(_queue, ^{ n=self->_pending.count; }); return n; }
 + (NSData *)packetForReceiver:(NSDictionary *)receiver spots:(NSArray *)spots timestamp:(uint32_t)timestamp sequence:(uint32_t)sequence domain:(uint32_t)domain {
     if(!ValidCall(receiver[@"call"]) || !ValidGrid(receiver[@"grid"]) || !spots.count) return nil;
     NSMutableData *d=[NSMutableData data]; U16(d,10); U16(d,0); U32(d,timestamp); U32(d,sequence); U32(d,domain);
-    // Options template: receiver call, locator, software, antenna (enterprise 30351).
-    U16(d,3); U16(d,44); U16(d,0x9992); U16(d,4); U16(d,1);
-    for(NSNumber *field in @[@2,@4,@8,@9]) { U16(d,0x8000|field.unsignedShortValue); U16(d,65535); U32(d,30351); } U16(d,0);
+    // Options template: receiver call, locator, decoder software, antenna and
+    // rig information (enterprise 30351).  Field 13 is required explicitly;
+    // omitting it lets PSK Reporter retain a stale rig name from another
+    // reporting application used by the same callsign.
+    U16(d,3); U16(d,52); U16(d,0x9992); U16(d,5); U16(d,1);
+    for(NSNumber *field in @[@2,@4,@8,@9,@13]) { U16(d,0x8000|field.unsignedShortValue); U16(d,65535); U32(d,30351); } U16(d,0);
     // Sender template: call, uint32 frequency, mode, source, locator, Unix time.
     U16(d,2); U16(d,52); U16(d,0x9993); U16(d,6);
     for(NSArray *field in @[@[@1,@65535],@[@5,@4],@[@10,@65535],@[@11,@1],@[@3,@65535]]) { U16(d,0x8000|[field[0] unsignedShortValue]); U16(d,[field[1] unsignedShortValue]); U32(d,30351); } U16(d,150); U16(d,4);
     NSUInteger base=d.length; U16(d,0x9992); U16(d,0);
-    for(NSString *s in @[receiver[@"call"],receiver[@"grid"],@"Lab599 Utility",receiver[@"antenna"] ?: @""]) if(!TextField(d,s)) return nil;
+    NSString *rig = [receiver[@"rig"] isKindOfClass:NSString.class] && [receiver[@"rig"] length] > 0
+        ? receiver[@"rig"] : @"Lab599 TX-500";
+    for(NSString *s in @[receiver[@"call"],receiver[@"grid"],@"Lab599 Utility",receiver[@"antenna"] ?: @"",rig]) if(!TextField(d,s)) return nil;
     Pad(d); Length(d,base+2,(uint16_t)(d.length-base)); base=d.length; U16(d,0x9993); U16(d,0);
     for(NSDictionary *s in spots) {
         uint64_t hz=[s[@"hz"] unsignedLongLongValue];
@@ -80,8 +85,15 @@ static BOOL ValidGrid(NSString *s) { return [s isKindOfClass:NSString.class] && 
     NSUInteger total=0;
     while(_pending.count && self.enabled) {
         NSDictionary *receiver=_pending.firstObject[@"receiver"]; NSMutableArray *spots=[NSMutableArray array]; NSUInteger count=0;
-        for(NSDictionary *entry in _pending) { if(![entry[@"receiver"] isEqual:receiver] || count>=20) break; [spots addObject:entry[@"spot"]]; count++; }
-        NSData *packet=[self.class packetForReceiver:receiver spots:spots timestamp:(uint32_t)NSDate.date.timeIntervalSince1970 sequence:_sequence domain:_domain]; NSError *e=nil;
+        NSData *packet=nil;
+        for(NSDictionary *entry in _pending) {
+            if(![entry[@"receiver"] isEqual:receiver] || count>=20) break;
+            [spots addObject:entry[@"spot"]];
+            NSData *candidate=[self.class packetForReceiver:receiver spots:spots timestamp:(uint32_t)NSDate.date.timeIntervalSince1970 sequence:_sequence domain:_domain];
+            if(!candidate) break;
+            packet=candidate; count++;
+        }
+        NSError *e=nil;
         if(!packet || ![self sendPacket:packet error:&e]) { [self update:e.localizedDescription ?: @"Report encoding failed"]; return; }
         _sequence+=(uint32_t)count; total+=count; [_pending removeObjectsInRange:NSMakeRange(0,count)];
     }

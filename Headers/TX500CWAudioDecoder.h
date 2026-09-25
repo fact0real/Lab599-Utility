@@ -55,6 +55,7 @@ FOUNDATION_EXPORT int TX500CWRunLiveAudioCheck(NSString *directory, NSString *re
 @property (nonatomic, copy, nullable) NSString *selectedAudioDeviceUID;
 @property (nonatomic, strong, readonly) NSArray<NSDictionary<NSString *, NSString *> *> *availableAudioInputDevices;
 @property (nonatomic, assign) BOOL isSimulationActive;
+@property (nonatomic) BOOL preserveDeviceSelection;
 
 // Callbacks
 @property (nonatomic, copy, nullable) void (^onDecodedTextUpdated)(NSString *newText, NSString *characterBuffer);

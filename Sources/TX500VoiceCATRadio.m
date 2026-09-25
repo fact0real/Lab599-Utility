@@ -23,8 +23,12 @@ NSError *TXVoiceError(NSString *message) {
 - (NSString *)query:(NSString *)command error:(NSError **)error {
     if (![self open:error] || ![_port discardInput:error] || ![self send:command error:error]) return nil;
     NSMutableData *pending = [NSMutableData data];
-    double deadline = Lab599MonotonicTime() + 0.35;
+    double deadline = Lab599MonotonicTime() + 0.8;
     NSString *prefix = [command substringToIndex:2];
+    NSMutableSet<NSString *> *echoFrames = [NSMutableSet set];
+    for (NSString *component in [command componentsSeparatedByString:@";"]) {
+        if (component.length > 0) [echoFrames addObject:[component stringByAppendingString:@";"]];
+    }
     while (Lab599MonotonicTime() < deadline) {
         NSError *readError = nil;
         NSData *chunk = [_port readMaximum:128 timeout:0.04 cancellation:nil error:&readError];
@@ -38,7 +42,13 @@ NSError *TXVoiceError(NSString *message) {
             NSString *frame = [[NSString alloc] initWithData:[pending subdataWithRange:NSMakeRange(0, end.location+1)] encoding:NSASCIIStringEncoding];
             [pending replaceBytesInRange:NSMakeRange(0, end.location+1) withBytes:NULL length:0];
             frame = [frame stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-            if ([frame isEqual:@"?;"] || [frame isEqual:@"E;"]) break;
+            if ([frame isEqual:@"?;"] || [frame isEqual:@"E;"] || [frame isEqual:@"O;"]) {
+                if (error) *error = TXVoiceError([NSString stringWithFormat:@"Radio returned %@ while reading %@ (command rejected, communication error, or busy).", frame, command]);
+                return nil;
+            }
+            // Compound meter queries are commonly echoed one component at a
+            // time (for example RM3; then RM;). Neither short echo is data.
+            if ([frame isEqual:command] || [echoFrames containsObject:frame]) continue;
             if ([frame hasPrefix:prefix]) return frame;
         }
     }
@@ -79,11 +89,17 @@ NSError *TXVoiceError(NSString *message) {
     // LAB599 documents TX/RX without an audio-source parameter. Audio input is
     // selected explicitly on the radio; modem-control pins are never asserted.
     if (![self send:transmit ? @"TX;" : @"RX;" error:error]) return NO;
-    for (NSInteger attempt = 0; attempt < 3; attempt++) {
-        NSNumber *state = [self number:@"PT;" digits:1 error:error];
+    // The TX-500 can answer PT with the old state while its PTT relay changes.
+    // Give the radio a short settling period before each read-back, including
+    // RX release. Never assume that an accepted CAT write is confirmed PTT.
+    NSError *lastError = nil;
+    for (NSInteger attempt = 0; attempt < 5; attempt++) {
+        Lab599Pause(0.12, nil);
+        lastError = nil;
+        NSNumber *state = [self number:@"PT;" digits:1 error:&lastError];
         if (state && state.integerValue == (transmit ? 1 : 0)) return YES;
     }
-    if (error) *error = TXVoiceError(transmit ? @"The radio did not confirm TX. Check mode, frequency and radio protections." : @"RX was not confirmed. Check the radio and release PTT locally.");
+    if (error) *error = lastError ?: TXVoiceError(transmit ? @"The radio remained in RX after TX; check the radio's transmit inhibit, mode and protection status." : @"RX was not confirmed. Check the radio and release PTT locally.");
     return NO;
 }
 - (void)close { [_port close]; _port = nil; }

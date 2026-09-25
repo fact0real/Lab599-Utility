@@ -44,6 +44,7 @@ typedef NS_ENUM(NSInteger, TX500AudioFilterPreset) {
 @property (nonatomic, assign) BOOL isSimulationMode;
 
 // Hardware Devices
+@property (nonatomic) BOOL preserveDeviceSelection; // Explicit station routes never fall back on disconnect.
 @property (nonatomic, copy, nullable) NSString *selectedInputDeviceUID;
 @property (nonatomic, copy, nullable) NSString *selectedOutputDeviceUID;
 @property (nonatomic, strong, readonly) NSArray<TX500AudioDeviceItem *> *inputDevices;

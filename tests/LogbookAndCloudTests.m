@@ -18,6 +18,19 @@
 #import "TX500CWQSOAssistant.h"
 #import "TX500WebAuthenticatorController.h"
 #import "TX500CloudSettingsController.h"
+#import "TX500LogbookController.h"
+
+@interface TX500CollisionTableView : NSTableView
+@property (nonatomic, strong) NSView *forcedReusableView;
+@end
+
+@implementation TX500CollisionTableView
+- (NSView *)makeViewWithIdentifier:(NSUserInterfaceItemIdentifier)identifier owner:(id)owner {
+    (void)identifier;
+    (void)owner;
+    return self.forcedReusableView;
+}
+@end
 
 static void AssertTrue(BOOL condition, NSString *message) {
     if (!condition) {
@@ -59,12 +72,15 @@ int main(int argc, const char * argv[]) {
         rec1.rstSent = @"59";
         rec1.rstRcvd = @"59";
         rec1.name = @"Hiram Percy Maxim Memorial";
+        rec1.email = @"operator@example.net";
+        rec1.imageURL = @"https://example.net/w1aw.jpg";
         rec1.qth = @"Newington";
         rec1.state = @"CT";
         rec1.country = @"United States";
         rec1.grid = @"FN31pr";
         rec1.notes = @"Strong SSB voice signal over 20m beam";
         rec1.myCall = @"EP2AES";
+        rec1.stationProfile=@{@"operatorCall":@"K1ABC",@"operatorName":@"Portable Op",@"antenna":@"Dipole",@"cqZone":@"21"};
 
         NSError *err = nil;
         BOOL saved = [mgr saveContact:rec1 error:&err];
@@ -76,8 +92,36 @@ int main(int argc, const char * argv[]) {
         AssertTrue([fetched.callsign isEqualToString:@"W1AW"], @"Callsign matches");
         AssertTrue([fetched.mode isEqualToString:@"USB"], @"Mode is USB");
         AssertTrue([fetched.state isEqualToString:@"CT"], @"State is CT");
+        AssertTrue([fetched.email isEqualToString:@"operator@example.net"], @"Enriched operator email survives SQLite roundtrip");
+        AssertTrue([fetched.imageURL isEqualToString:@"https://example.net/w1aw.jpg"], @"Enriched operator photo URL survives SQLite roundtrip");
         AssertTrue(fetched.frequencyHz == 14205000, @"Frequency is 14.205 MHz");
+        AssertTrue([fetched.stationProfile isEqual:rec1.stationProfile], @"Station identity snapshot survives SQLite roundtrip");
         NSLog(@"PASS: Voice QSO saved and verified from SQLite database.");
+
+        // Regression: AppKit can return a stale reusable NSBox whose identifier
+        // collides with a Logbook text or badge cell. The Station -> Logbook
+        // crash report showed setStringValue: being sent to that NSBox.
+        [NSApplication sharedApplication];
+        TX500LogbookManager *shared = [TX500LogbookManager sharedManager];
+        [shared clearAllContactsForTesting];
+        AssertTrue([shared saveContact:[rec1 copy] error:nil], @"Seeded shared logbook for table-cell regression");
+        TX500LogbookController *logbookController = [TX500LogbookController new];
+        TX500CollisionTableView *collisionTable = [TX500CollisionTableView new];
+        collisionTable.forcedReusableView = [[NSBox alloc] initWithFrame:NSZeroRect];
+        NSTableColumn *callColumn = [[NSTableColumn alloc] initWithIdentifier:@"CALL"];
+        NSView *callCell = [(id<NSTableViewDelegate>)logbookController tableView:collisionTable
+                                                            viewForTableColumn:callColumn
+                                                                           row:0];
+        AssertTrue([callCell isKindOfClass:NSTableCellView.class], @"Stale NSBox is replaced by a safe text cell");
+        AssertTrue([((NSTableCellView *)callCell).textField.stringValue isEqualToString:@"W1AW"], @"Recovered text cell shows the contact");
+
+        collisionTable.forcedReusableView = [[NSBox alloc] initWithFrame:NSZeroRect];
+        NSTableColumn *qrzColumn = [[NSTableColumn alloc] initWithIdentifier:@"QRZ"];
+        NSView *badgeCell = [(id<NSTableViewDelegate>)logbookController tableView:collisionTable
+                                                             viewForTableColumn:qrzColumn
+                                                                            row:0];
+        AssertTrue([badgeCell isKindOfClass:NSTableCellView.class], @"Stale NSBox is replaced by a safe cloud badge cell");
+        NSLog(@"PASS: Station -> Logbook recycled-view crash regression verified.");
 
         // 3. ADIF 3.1 Record Generation & Tag Integrity
         NSString *adif = [rec1 adifRecordString];
@@ -87,6 +131,7 @@ int main(int argc, const char * argv[]) {
         AssertTrue([adif containsString:@"<FREQ:9>14.205000"], @"ADIF has FREQ");
         AssertTrue([adif containsString:@"<RST_SENT:2>59"], @"ADIF has RST_SENT 59");
         AssertTrue([adif containsString:@"<STATE:2>CT"], @"ADIF has STATE CT");
+        AssertTrue([adif containsString:@"<EMAIL:20>operator@example.net"], @"ADIF preserves enriched operator email");
         AssertTrue([adif containsString:@"<GRIDSQUARE:6>FN31PR"], @"ADIF has GRIDSQUARE");
         AssertTrue([adif containsString:@"<EOR>"], @"ADIF has EOR");
         NSLog(@"PASS: ADIF 3.1 Record formatted with standard tags.");
@@ -97,7 +142,11 @@ int main(int argc, const char * argv[]) {
         AssertTrue([parsedRec.callsign isEqualToString:@"W1AW"], @"Parsed callsign");
         AssertTrue([parsedRec.mode isEqualToString:@"USB"], @"Parsed mode");
         AssertTrue([parsedRec.state isEqualToString:@"CT"], @"Parsed state");
+        AssertTrue([parsedRec.email isEqualToString:@"operator@example.net"], @"Parsed operator email");
         AssertTrue([parsedRec.grid isEqualToString:@"FN31PR"], @"Parsed grid");
+        AssertTrue([parsedRec.stationProfile[@"operatorCall"] isEqual:@"K1ABC"], @"ADIF preserves operator distinct from station callsign");
+        AssertTrue([parsedRec.stationProfile[@"antenna"] isEqual:@"Dipole"], @"ADIF preserves station antenna");
+        AssertTrue([parsedRec.myCall isEqual:@"EP2AES"], @"ADIF preserves station callsign");
         NSLog(@"PASS: ADIF Record parsed correctly from raw text.");
 
         // 5. Cloud Status Updating

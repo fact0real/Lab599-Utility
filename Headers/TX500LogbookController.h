@@ -35,6 +35,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 // Voice Logger Focus
 - (void)focusCallsignField;
+// Opens an editable draft; never saves a contact or uploads it.
+- (void)prepareDraftCallsign:(NSString *)callsign frequencyHz:(uint64_t)frequency mode:(NSString *)mode;
 
 // Table & Pill Refresh
 - (void)reloadTableData;

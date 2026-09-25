@@ -81,6 +81,9 @@
 		100001D1 /* TX500StationStore.m in Sources */ = {isa = PBXBuildFile; fileRef = 200001D1 /* TX500StationStore.m */; };
 		100001D2 /* TX500PSKReporter.m in Sources */ = {isa = PBXBuildFile; fileRef = 200001D2 /* TX500PSKReporter.m */; };
 		100001D3 /* TX500StationController.m in Sources */ = {isa = PBXBuildFile; fileRef = 200001D3 /* TX500StationController.m */; };
+		100001E0 /* TX500DXCluster.m in Sources */ = {isa = PBXBuildFile; fileRef = 200001E0 /* TX500DXCluster.m */; };
+		100001E1 /* TX500DXClusterController.m in Sources */ = {isa = PBXBuildFile; fileRef = 200001E1 /* TX500DXClusterController.m */; };
+		100001E2 /* Network.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 200001E2 /* Network.framework */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -205,6 +208,11 @@
 		200002D2 /* TX500PSKReporter.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TX500PSKReporter.h; sourceTree = "<group>"; };
 		200001D3 /* TX500StationController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TX500StationController.m; sourceTree = "<group>"; };
 		200002D3 /* TX500StationController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TX500StationController.h; sourceTree = "<group>"; };
+		200001E0 /* TX500DXCluster.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TX500DXCluster.m; sourceTree = "<group>"; };
+		200002E0 /* TX500DXCluster.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TX500DXCluster.h; sourceTree = "<group>"; };
+		200001E1 /* TX500DXClusterController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TX500DXClusterController.m; sourceTree = "<group>"; };
+		200002E1 /* TX500DXClusterController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TX500DXClusterController.h; sourceTree = "<group>"; };
+		200001E2 /* Network.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Network.framework; path = System/Library/Frameworks/Network.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -220,6 +228,7 @@
 				10000010 /* libsqlite3.tbd in Frameworks */,
 				100000A0 /* WebKit.framework in Frameworks */,
 				100000A1 /* Security.framework in Frameworks */,
+				100001E2 /* Network.framework in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -241,6 +250,8 @@
 			isa = PBXGroup;
 			children = (
 				200001D0 /* TX500StationCore.m */,
+				200001E1 /* TX500DXClusterController.m */,
+				200001E0 /* TX500DXCluster.m */,
 				200001D1 /* TX500StationStore.m */,
 				200001D2 /* TX500PSKReporter.m */,
 				200001D3 /* TX500StationController.m */,
@@ -308,6 +319,8 @@
 			isa = PBXGroup;
 			children = (
 				200002D0 /* TX500StationCore.h */,
+				200002E1 /* TX500DXClusterController.h */,
+				200002E0 /* TX500DXCluster.h */,
 				200002D1 /* TX500StationStore.h */,
 				200002D2 /* TX500PSKReporter.h */,
 				200002D3 /* TX500StationController.h */,
@@ -381,6 +394,7 @@
 				20000010 /* libsqlite3.tbd */,
 				200000A0 /* WebKit.framework */,
 				200000A1 /* Security.framework */,
+				200001E2 /* Network.framework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -467,6 +481,8 @@
 			buildActionMask = 2147483647;
 			files = (
 				100001D0 /* TX500StationCore.m in Sources */,
+				100001E1 /* TX500DXClusterController.m in Sources */,
+				100001E0 /* TX500DXCluster.m in Sources */,
 				100001D1 /* TX500StationStore.m in Sources */,
 				100001D2 /* TX500PSKReporter.m in Sources */,
 				100001D3 /* TX500StationController.m in Sources */,
@@ -684,7 +700,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 185;
+				CURRENT_PROJECT_VERSION = 240;
 				DEAD_CODE_STRIPPING = YES;
 				INFOPLIST_FILE = Resources/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Lab599 Utility";
@@ -693,7 +709,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
-				MARKETING_VERSION = 2.179;
+				MARKETING_VERSION = 2.234;
 				PRODUCT_BUNDLE_IDENTIFIER = local.lab599.utility;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 			};
@@ -706,7 +722,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 185;
+				CURRENT_PROJECT_VERSION = 240;
 				DEAD_CODE_STRIPPING = YES;
 				INFOPLIST_FILE = Resources/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Lab599 Utility";
@@ -715,7 +731,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
-				MARKETING_VERSION = 2.179;
+				MARKETING_VERSION = 2.234;
 				PRODUCT_BUNDLE_IDENTIFIER = local.lab599.utility;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 			};

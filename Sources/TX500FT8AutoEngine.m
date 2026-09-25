@@ -17,6 +17,16 @@
     NSMutableSet<NSString *> *_internalWorkedCalls;
     NSMutableSet<NSString *> *_internalWorkedGrids;
     NSInteger _txRetryCount;
+    BOOL _qsoStartedByAutoHunter;
+    BOOL _resumeCQAfterCurrentQSO;
+    BOOL _resumeCQWhenRadioReturnsToRX;
+    NSString *_pendingCompletionText;
+    NSString *_lastCQText;
+    TX500FT8SlotParity _lastCQParity;
+    NSInteger _lastCQLimit;
+    TX500FT8Message *_pendingCaller;
+    NSInteger _pendingCallerParity;
+    NSDate *_pendingCallerReceivedAt;
 }
 
 @property (nonatomic, assign, readwrite) TX500FT8QSOPhase qsoPhase;
@@ -33,6 +43,13 @@
 @property (nonatomic, strong, readwrite, nullable) NSArray<TX500FT8Message *> *lastDecodedMessages;
 @property (nonatomic, assign, readwrite) NSInteger lastDecodedParity;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSDate *> *unansweringCalls;
+- (void)engageStation:(TX500FT8Message *)target automaticHunter:(BOOL)automaticHunter;
+- (void)completeAndLogQSO;
+- (void)resumeCQIfSafe;
+- (void)rememberWaitingCallerFromMessages:(NSArray<TX500FT8Message *> *)messages
+                              excludingCall:(NSString *)excludedCall
+                                     parity:(NSInteger)parity;
+- (BOOL)engageWaitingCallerIfSafe;
 
 @end
 
@@ -49,7 +66,9 @@
 
         _autoCQTargetCount = 10;
         _autoCQCurrentCount = 0;
-        _resumeAutoCQAfterQSO = YES;
+        // A contact that began from CQ resumes that CQ loop after RX recovery.
+        // Manual/Hunter contacts remain opt-in through this property.
+        _resumeAutoCQAfterQSO = NO;
         _autoCQStatus = @"Auto-CQ: Idle";
 
         _autoSeqEnabled = YES;
@@ -61,9 +80,9 @@
         _autoHunterContinent = @"ALL";
         _autoHunterStatus = @"Auto-Hunter: Monitoring band";
 
-        // Load max reply attempts from preferences (default: 2 = 3 TX cycles total)
+        // Total keyed transmissions before giving up (initial + retries).
         NSInteger savedAttempts = [[NSUserDefaults standardUserDefaults] integerForKey:@"TX500_MaxReplyAttempts"];
-        _maxReplyAttempts = (savedAttempts >= 1 && savedAttempts <= 9) ? savedAttempts : 2;
+        _maxReplyAttempts = (savedAttempts >= 1 && savedAttempts <= 9) ? savedAttempts : 3;
     }
     return self;
 }
@@ -99,6 +118,26 @@
 }
 
 - (void)startAutoCQWithLimit:(NSInteger)count {
+    NSString *myCall = self.audioEngine.myCallsign ?: @"EP2AES";
+    NSString *myGrid = self.audioEngine.myGrid ?: @"KM35";
+    NSString *cqMsg = [TX500FT8Message messageForPhase:6 myCall:myCall myGrid:myGrid dxCall:@"" dxGrid:nil myReport:nil rcvdReport:nil];
+    [self startCQWithText:cqMsg parity:self.audioEngine.txSlotParity limit:count];
+}
+
+- (BOOL)startCQWithText:(NSString *)text parity:(TX500FT8SlotParity)parity limit:(NSInteger)count {
+    if (![text.uppercaseString hasPrefix:@"CQ "] || !self.audioEngine) return NO;
+    if (!self.audioEngine.isSimulationMode && self.audioEngine.requiresVerifiedCATDial &&
+        !self.audioEngine.catDialAndModeVerified) {
+        if (self.logHandler) self.logHandler(@"[Auto-CQ] Radio frequency and DIG mode are not CAT-verified; CQ was not armed.");
+        return NO;
+    }
+    if (!self.audioEngine.isMonitoring) {
+        NSError *err = nil;
+        if (![self.audioEngine startMonitoring:&err]) {
+            if (self.logHandler) self.logHandler([NSString stringWithFormat:@"[Auto-CQ] Could not start monitoring: %@", err.localizedDescription ?: @"audio unavailable"]);
+            return NO;
+        }
+    }
     self.autoCQTargetCount = count;
     self.autoCQCurrentCount = 0;
     self.isAutoCQActive = YES;
@@ -108,34 +147,61 @@
     self.activeDXCall = @"";
     self.activeDXGrid = @"";
 
-    if (!self.audioEngine.isMonitoring) {
-        NSError *err = nil;
-        [self.audioEngine startMonitoring:&err];
-    }
-
-    NSString *myCall = self.audioEngine.myCallsign ?: @"EP2AES";
-    NSString *myGrid = self.audioEngine.myGrid ?: @"KM35";
-    NSString *cqMsg = [TX500FT8Message messageForPhase:6 myCall:myCall myGrid:myGrid dxCall:@"" dxGrid:nil myReport:nil rcvdReport:nil];
-
-    TX500FT8SlotParity cqParity = self.audioEngine.txSlotParity;
+    TX500FT8SlotParity cqParity = parity;
     if (cqParity != TX500FT8SlotParityEven && cqParity != TX500FT8SlotParityOdd) {
         cqParity = TX500FT8SlotParityAuto;
     }
-    [self.audioEngine armTransmitWithText:cqMsg parity:cqParity];
-    self.autoCQCurrentCount = 1;
+    [self.audioEngine armTransmitWithText:text parity:cqParity];
+    self.audioEngine.repeatArmedTransmission = YES;
+    _lastCQText = [text copy];
+    _lastCQParity = cqParity;
+    _lastCQLimit = count;
+    _resumeCQWhenRadioReturnsToRX = NO;
 
     NSString *limitStr = (count > 0) ? [NSString stringWithFormat:@"%ld", (long)count] : @"∞";
-    self.autoCQStatus = [NSString stringWithFormat:@"📡 Auto-CQ: Calling cycle 1 of %@", limitStr];
+    self.autoCQStatus = [NSString stringWithFormat:@"📡 Auto-CQ: Waiting for first TX · limit %@", limitStr];
 
     if (self.logHandler) {
-        self.logHandler([NSString stringWithFormat:@"[Auto-CQ] Started loop (Limit: %@). Transmitting '%@'", limitStr, cqMsg]);
+        self.logHandler([NSString stringWithFormat:@"[Auto-CQ] CQ armed on one slot parity (Limit: %@): '%@'", limitStr, text]);
     }
     [self notifyStatus];
+    return YES;
+}
+
+- (void)noteTransmittedText:(NSString *)text {
+    NSString *normalized = [[text ?: @"" uppercaseString]
+        stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    NSString *completion = [[_pendingCompletionText ?: @"" uppercaseString]
+        stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (completion.length > 0 && [normalized isEqualToString:completion] && self.activeDXCall.length > 0) {
+        _pendingCompletionText = nil;
+        if (self.logHandler) {
+            self.logHandler([NSString stringWithFormat:
+                @"[QSO State] Final acknowledgement was actually transmitted to %@; exchange complete.",
+                self.activeDXCall]);
+        }
+        [self completeAndLogQSO];
+        return;
+    }
+    if (!self.isAutoCQActive || self.qsoPhase != TX500FT8QSOPhaseCallingCQ ||
+        ![normalized hasPrefix:@"CQ "]) return;
+    self.autoCQCurrentCount++;
+    NSString *limit = self.autoCQTargetCount > 0 ? [NSString stringWithFormat:@"%ld", (long)self.autoCQTargetCount] : @"∞";
+    self.autoCQStatus = [NSString stringWithFormat:@"📡 Auto-CQ: Sent CQ %ld / %@ · listening for a caller", (long)self.autoCQCurrentCount, limit];
+    [self notifyStatus];
+}
+
+- (void)noteTransmissionEnded {
+    if ([self engageWaitingCallerIfSafe]) return;
+    [self resumeCQIfSafe];
 }
 
 - (void)stopAutoCQ {
     if (!self.isAutoCQActive) return;
     self.isAutoCQActive = NO;
+    _resumeCQWhenRadioReturnsToRX = NO;
+    _pendingCaller = nil;
+    _pendingCallerReceivedAt = nil;
     self.autoCQStatus = @"Auto-CQ: Stopped";
     if (self.qsoPhase == TX500FT8QSOPhaseCallingCQ) {
         self.qsoPhase = TX500FT8QSOPhaseIdle;
@@ -167,10 +233,17 @@
 }
 
 - (void)stopAutoHunter {
-    if (!self.isAutoHunterActive) return;
+    BOOL wasActive = self.isAutoHunterActive;
     self.isAutoHunterActive = NO;
     self.autoHunterStatus = @"Auto-Hunter: Inactive";
-    if (self.logHandler) {
+    if (_qsoStartedByAutoHunter && self.isQSOActive) {
+        [self.audioEngine disarmTransmit];
+        self.qsoPhase = TX500FT8QSOPhaseIdle;
+        self.activeDXCall = @"";
+        self.activeDXGrid = @"";
+        _qsoStartedByAutoHunter = NO;
+    }
+    if (self.logHandler && wasActive) {
         self.logHandler(@"[Auto-Hunter] Deactivated.");
     }
     [self notifyStatus];
@@ -185,6 +258,14 @@
 
 - (void)engageCaller:(TX500FT8Message *)caller inReplyToSlotParity:(NSInteger)slotParity {
     if (!caller || caller.callerCall.length == 0) return;
+    if (self.isQSOActive && self.activeDXCall.length > 0) {
+        if (self.logHandler) {
+            self.logHandler([NSString stringWithFormat:
+                @"[QSO Lock] Ignored %@ while the contact with %@ is still in progress.",
+                caller.callerCall, self.activeDXCall]);
+        }
+        return;
+    }
 
     self.activeDXCall = caller.callerCall;
     self.activeDXGrid = caller.grid ?: @"";
@@ -194,6 +275,7 @@
     self.sentReport = [NSString stringWithFormat:@"%+03d", (int)roundf(caller.snrDb)];
     self.rcvdReport = (caller.snrReport.length > 0) ? caller.snrReport : @"-10";
     _txRetryCount = 0;
+    _qsoStartedByAutoHunter = NO;
 
     // Align audio frequencies
     if (caller.freqHz > 200.0f && caller.freqHz < 2900.0f) {
@@ -240,7 +322,22 @@
 }
 
 - (void)engageStation:(TX500FT8Message *)target {
+    [self engageStation:target automaticHunter:NO];
+}
+
+- (void)engageStation:(TX500FT8Message *)target automaticHunter:(BOOL)automaticHunter {
     if (!target || target.callerCall.length == 0) return;
+    // One radio can own exactly one FT8 exchange at a time.  All entry points
+    // (Auto-CQ, Auto-Hunter, table double-click and keyboard shortcuts) pass
+    // through this gate so none can overwrite the active DX call or frequency.
+    if (self.isQSOActive && self.activeDXCall.length > 0) {
+        if (self.logHandler) {
+            self.logHandler([NSString stringWithFormat:
+                @"[QSO Lock] Cannot engage %@ until the contact with %@ completes, times out or is aborted.",
+                target.callerCall, self.activeDXCall]);
+        }
+        return;
+    }
 
     // If message was directed to us, engage as response to our CQ/callsign
     if (target.isDirectedToMe) {
@@ -256,6 +353,9 @@
     self.sentReport = [NSString stringWithFormat:@"%+03d", (int)roundf(target.snrDb)];
     self.rcvdReport = @"-10"; // Default until received
     _txRetryCount = 0;
+    _qsoStartedByAutoHunter = automaticHunter;
+    _resumeCQAfterCurrentQSO = NO;
+    _pendingCompletionText = nil;
 
     // Align audio frequencies
     if (target.freqHz > 200.0f && target.freqHz < 2900.0f) {
@@ -301,6 +401,13 @@
     self.qsoPhase = TX500FT8QSOPhaseIdle;
     self.activeDXCall = @"";
     self.activeDXGrid = @"";
+    _qsoStartedByAutoHunter = NO;
+    _resumeCQAfterCurrentQSO = NO;
+    _resumeCQWhenRadioReturnsToRX = NO;
+    _pendingCompletionText = nil;
+    _pendingCaller = nil;
+    _pendingCallerReceivedAt = nil;
+    self.autoCQStatus = @"Auto-CQ: Idle";
     [self.audioEngine disarmTransmit];
 
     if (self.logHandler) {
@@ -375,6 +482,14 @@
 
     // 1. Check if we have an active QSO in progress with a specific DX station
     if (self.isQSOActive && self.activeDXCall.length > 0) {
+        // A second station can answer our CQ while we are finishing the first
+        // contact.  Preserve that directed call instead of losing it when the
+        // current RR73/73 completes and the CQ loop resumes.
+        if (_resumeCQAfterCurrentQSO && self.callFirstEnabled) {
+            [self rememberWaitingCallerFromMessages:messages
+                                       excludingCall:self.activeDXCall
+                                              parity:parity];
+        }
         TX500FT8Message *dxMsg = nil;
         TX500FT8Message *collisionMsg = nil;
         for (TX500FT8Message *m in messages) {
@@ -420,15 +535,17 @@
             }
 
             if (dxMsg.messageType == TX500FT8MessageTypeRR73 || dxMsg.messageType == TX500FT8MessageTypeRRR) {
-                // They confirmed our report with RR73! Reply with 73 and log contact!
+                // They confirmed our report. Send one courtesy 73 and log only
+                // when that final frame actually reaches the transmitter.
                 NSString *tx5 = [TX500FT8Message messageForPhase:5 myCall:myCall myGrid:myGrid dxCall:self.activeDXCall dxGrid:self.activeDXGrid myReport:self.sentReport rcvdReport:self.rcvdReport];
                 [self.audioEngine armTransmitWithText:tx5 parity:nextParity];
+                _pendingCompletionText = [tx5 copy];
 
                 self.qsoPhase = TX500FT8QSOPhaseSending73;
                 if (self.logHandler) {
                     self.logHandler([NSString stringWithFormat:@"[QSO State] Received RR73/RRR from %@. Sending Tx 5 (73): '%@'", self.activeDXCall, tx5]);
                 }
-                [self completeAndLogQSO];
+                [self notifyStatus];
                 return;
             } else if (dxMsg.messageType == TX500FT8MessageType73) {
                 // Final 73 received. Complete and log contact!
@@ -441,6 +558,9 @@
                 // They received our report and sent their roger report (R+Report). Send RR73 (Tx 4)!
                 NSString *tx4 = [TX500FT8Message messageForPhase:4 myCall:myCall myGrid:myGrid dxCall:self.activeDXCall dxGrid:self.activeDXGrid myReport:self.sentReport rcvdReport:self.rcvdReport];
                 [self.audioEngine armTransmitWithText:tx4 parity:nextParity];
+                // In the standard FT8 exchange, transmitting RR73 acknowledges
+                // the received report and completes both report acknowledgements.
+                _pendingCompletionText = [tx4 copy];
 
                 self.qsoPhase = TX500FT8QSOPhaseSendingRR73;
                 if (self.logHandler) {
@@ -449,12 +569,13 @@
                 [self notifyStatus];
                 return;
             } else if (dxMsg.messageType == TX500FT8MessageTypeReport) {
-                // They sent report without R. Send Tx 3 (Roger + Report) or Tx 4 (RR73 if we already sent report).
-                NSInteger nextStep = (self.qsoPhase == TX500FT8QSOPhaseSendingReport) ? 4 : 3;
+                // A plain report does not acknowledge ours. Always answer with
+                // Roger + Report; RR73 is valid only after an R-report.
+                NSInteger nextStep = 3;
                 NSString *msg = [TX500FT8Message messageForPhase:nextStep myCall:myCall myGrid:myGrid dxCall:self.activeDXCall dxGrid:self.activeDXGrid myReport:self.sentReport rcvdReport:self.rcvdReport];
                 [self.audioEngine armTransmitWithText:msg parity:nextParity];
 
-                self.qsoPhase = (nextStep == 4) ? TX500FT8QSOPhaseSendingRR73 : TX500FT8QSOPhaseSendingRogerRpt;
+                self.qsoPhase = TX500FT8QSOPhaseSendingRogerRpt;
                 if (self.logHandler) {
                     self.logHandler([NSString stringWithFormat:@"[QSO State] Report received (%@ dB). Sending Tx %ld: '%@'", self.rcvdReport, (long)nextStep, msg]);
                 }
@@ -475,32 +596,44 @@
         } else {
             // Did not hear DX station this slot
             _txRetryCount++;
-            if (_txRetryCount <= self.maxReplyAttempts) {
-                NSInteger phaseStep = (NSInteger)self.qsoPhase;
+            if (_txRetryCount < self.maxReplyAttempts) {
+                NSInteger phaseStep = 0;
+                switch (self.qsoPhase) {
+                    case TX500FT8QSOPhaseAnsweringCQ: phaseStep = 1; break;
+                    case TX500FT8QSOPhaseSendingReport: phaseStep = 2; break;
+                    case TX500FT8QSOPhaseSendingRogerRpt: phaseStep = 3; break;
+                    case TX500FT8QSOPhaseSendingRR73: phaseStep = 4; break;
+                    case TX500FT8QSOPhaseSending73: phaseStep = 5; break;
+                    default: break;
+                }
                 if (phaseStep >= 1 && phaseStep <= 5) {
                     NSString *retryMsg = [TX500FT8Message messageForPhase:phaseStep myCall:myCall myGrid:myGrid dxCall:self.activeDXCall dxGrid:self.activeDXGrid myReport:self.sentReport rcvdReport:self.rcvdReport];
                     [self.audioEngine armTransmitWithText:retryMsg parity:nextParity];
                 }
                 if (self.logHandler) {
-                    self.logHandler([NSString stringWithFormat:@"[Auto-Hunter] No reply from %@ (attempt %ld/%ld). Retrying...",
-                                     self.activeDXCall, (long)_txRetryCount, (long)self.maxReplyAttempts]);
+                self.logHandler([NSString stringWithFormat:@"[QSO] No reply from %@; scheduling transmission %ld/%ld.",
+                                     self.activeDXCall, (long)(_txRetryCount + 1), (long)self.maxReplyAttempts]);
                 }
             } else {
                 // Exceeded retry limit — protect radio duty cycle, abort and return to hunt
                 if (self.logHandler) {
-                    self.logHandler([NSString stringWithFormat:@"[Auto-Hunter] ⚠️ Timeout: No response from %@ after %ld attempt(s). Aborting to protect radio duty cycle.",
-                                     self.activeDXCall, (long)_txRetryCount]);
+                    self.logHandler([NSString stringWithFormat:@"[QSO] ⚠️ Timeout: No response from %@ after %ld transmission(s). Returning to CQ.",
+                                     self.activeDXCall, (long)self.maxReplyAttempts]);
                 }
                 self.unansweringCalls[self.activeDXCall] = [NSDate dateWithTimeIntervalSinceNow:300.0];
                 [self.audioEngine disarmTransmit];
                 self.qsoPhase = TX500FT8QSOPhaseIdle;
                 self.activeDXCall = @"";
                 self.activeDXGrid = @"";
+                _pendingCompletionText = nil;
                 [self notifyStatus];
 
                 if (self.isAutoHunterActive) {
                     // Hunt for another candidate from this slot
                     [self runAutoHunterEvaluationWithMessages:messages parity:parity];
+                } else if (_resumeCQAfterCurrentQSO) {
+                    _resumeCQWhenRadioReturnsToRX = YES;
+                    [self resumeCQIfSafe];
                 }
             }
         }
@@ -512,7 +645,9 @@
     BOOL isCallingCQ = self.isAutoCQActive ||
                        (self.qsoPhase == TX500FT8QSOPhaseCallingCQ) ||
                        (self.audioEngine.isTransmitArmed && [self.audioEngine.queuedTxMessage hasPrefix:@"CQ"]);
-    BOOL shouldCheckCallers = isCallingCQ || (!self.isQSOActive && self.autoSeqEnabled);
+    // Auto sequencing advances an explicitly started QSO. It must never turn
+    // an unsolicited decode into a new transmission while Auto-Hunter is off.
+    BOOL shouldCheckCallers = isCallingCQ;
 
     if (shouldCheckCallers) {
         NSMutableArray<TX500FT8Message *> *callers = [NSMutableArray array];
@@ -529,6 +664,7 @@
                 if (c.snrDb > bestCaller.snrDb) bestCaller = c;
             }
 
+            _resumeCQAfterCurrentQSO = self.isAutoCQActive || self.qsoPhase == TX500FT8QSOPhaseCallingCQ;
             if (self.isAutoCQActive) {
                 self.isAutoCQActive = NO;
                 self.autoCQStatus = [NSString stringWithFormat:@"📡 Auto-CQ: Answered by %@ (%+d dB)! Engaging...", bestCaller.callerCall, (int)bestCaller.snrDb];
@@ -542,22 +678,19 @@
             [self engageCaller:bestCaller inReplyToSlotParity:parity];
             return;
         } else if (self.isAutoCQActive) {
-            // No callers in this slot during Auto-CQ loop
+            // CQ remains armed on its original parity. Counting only actual
+            // keyed transmissions avoids skipped/decode-empty slot drift.
             if (self.autoCQTargetCount > 0 && self.autoCQCurrentCount >= self.autoCQTargetCount) {
                 [self stopAutoCQ];
                 self.autoCQStatus = [NSString stringWithFormat:@"📡 Auto-CQ: Reached target count of %ld. Listening.", (long)self.autoCQTargetCount];
                 return;
             }
 
-            // Repeat CQ on the next matching parity slot
-            self.autoCQCurrentCount++;
-            NSString *cqMsg = [TX500FT8Message messageForPhase:6 myCall:myCall myGrid:myGrid dxCall:@"" dxGrid:nil myReport:nil rcvdReport:nil];
-            TX500FT8SlotParity cqParity = (parity == 0) ? TX500FT8SlotParityOdd : TX500FT8SlotParityEven;
-            [self.audioEngine armTransmitWithText:cqMsg parity:cqParity];
-
-            NSString *limitStr = (self.autoCQTargetCount > 0) ? [NSString stringWithFormat:@"%ld", (long)self.autoCQTargetCount] : @"∞";
-            self.autoCQStatus = [NSString stringWithFormat:@"📡 Auto-CQ: Calling cycle %ld of %@", (long)self.autoCQCurrentCount, limitStr];
-            [self notifyStatus];
+            if (!self.audioEngine.isTransmitArmed && !self.audioEngine.isTransmitting) {
+                [self stopAutoCQ];
+                self.autoCQStatus = @"Auto-CQ paused: transmitter was disarmed; check the diagnostic log.";
+                [self notifyStatus];
+            }
             return;
         }
     }
@@ -648,7 +781,7 @@
                          target.callerCall, target.countryName, target.distanceKm, (int)target.snrDb]);
     }
 
-    [self engageStation:target];
+    [self engageStation:target automaticHunter:YES];
 }
 
 #pragma mark - QSO Completion & Logging
@@ -658,8 +791,8 @@
 
     TX500FT8LoggedQSO *qso = [[TX500FT8LoggedQSO alloc] init];
     qso.callsign = self.activeDXCall;
-    qso.band = @"20m"; // Based on dial frequency
     qso.freqHz = self.audioEngine.dialFrequencyHz;
+    qso.band = [TX500LogRecord bandForFrequencyHz:qso.freqHz];
     qso.rstSent = self.sentReport;
     qso.rstRcvd = self.rcvdReport;
     qso.grid = self.activeDXGrid;
@@ -676,10 +809,14 @@
     }
 
     self.qsoPhase = TX500FT8QSOPhaseComplete;
+    _qsoStartedByAutoHunter = NO;
     self.activeDXCall = @"";
     self.activeDXGrid = @"";
+    _pendingCompletionText = nil;
 
-    [self logCompletedQSOToADIF:qso];
+    id autoLogValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"TX500_AutoLogQSO"];
+    BOOL autoLogEnabled = (autoLogValue == nil || [autoLogValue boolValue]);
+    if (autoLogEnabled) [self logCompletedQSOToADIF:qso];
 
     if (self.logHandler) {
         self.logHandler([NSString stringWithFormat:@"[QSO LOGGED] ★ Contact with %@ successfully completed and logged to session & ADIF logbook!", qso.callsign]);
@@ -690,14 +827,77 @@
     }
     [self notifyStatus];
 
-    // Check if Auto-CQ should resume
-    if (self.resumeAutoCQAfterQSO) {
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(3.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            if (!self.isQSOActive && !self.isAutoHunterActive) {
-                [self startAutoCQWithLimit:self.autoCQTargetCount];
-            }
-        });
+    if (_resumeCQAfterCurrentQSO || self.resumeAutoCQAfterQSO) {
+        _resumeCQWhenRadioReturnsToRX = YES;
+        [self resumeCQIfSafe];
     }
+}
+
+- (void)resumeCQIfSafe {
+    if (!_resumeCQWhenRadioReturnsToRX || self.isAutoHunterActive ||
+        self.audioEngine.isTransmitting || self.audioEngine.isReceiveRecoveryPending) return;
+    if ([self engageWaitingCallerIfSafe]) return;
+    _resumeCQWhenRadioReturnsToRX = NO;
+    _resumeCQAfterCurrentQSO = NO;
+    NSString *text = _lastCQText.length > 0 ? _lastCQText :
+        [TX500FT8Message messageForPhase:6
+                                  myCall:self.audioEngine.myCallsign ?: @"EP2AES"
+                                  myGrid:self.audioEngine.myGrid ?: @"KM35"
+                                  dxCall:@"" dxGrid:nil myReport:nil rcvdReport:nil];
+    BOOL resumed = [self startCQWithText:text parity:_lastCQParity limit:_lastCQLimit];
+    if (!resumed) {
+        self.autoCQStatus = @"Auto-CQ paused: unable to arm the next CQ.";
+        [self notifyStatus];
+    }
+    if (self.logHandler) self.logHandler(@"[Auto-CQ] QSO cycle finished; CQ loop resumed from the first call.");
+}
+
+- (void)rememberWaitingCallerFromMessages:(NSArray<TX500FT8Message *> *)messages
+                              excludingCall:(NSString *)excludedCall
+                                     parity:(NSInteger)parity {
+    TX500FT8Message *best = nil;
+    NSString *myCall = self.audioEngine.myCallsign ?: @"EP2AES";
+    for (TX500FT8Message *message in messages) {
+        if (!message.isDirectedToMe || message.callerCall.length == 0 ||
+            [message.callerCall isEqualToString:myCall] ||
+            [message.callerCall isEqualToString:excludedCall]) continue;
+        if (!best || message.snrDb > best.snrDb) best = message;
+    }
+    if (!best) return;
+
+    // Keep the first waiting station for fairness, but refresh a repeated call
+    // from that same station with its newest report/grid and signal level.
+    if (_pendingCaller && ![_pendingCaller.callerCall isEqualToString:best.callerCall]) return;
+    _pendingCaller = [best copy];
+    _pendingCallerParity = parity;
+    _pendingCallerReceivedAt = [NSDate date];
+    if (self.logHandler) {
+        self.logHandler([NSString stringWithFormat:
+            @"[Auto-CQ] %@ also called us; queued ahead of the next CQ.", best.callerCall]);
+    }
+}
+
+- (BOOL)engageWaitingCallerIfSafe {
+    if (!_pendingCaller || self.audioEngine.isTransmitting ||
+        self.audioEngine.isReceiveRecoveryPending || self.isAutoHunterActive) return NO;
+    if (!_pendingCallerReceivedAt || -[_pendingCallerReceivedAt timeIntervalSinceNow] > 45.0) {
+        if (self.logHandler) self.logHandler(@"[Auto-CQ] A queued caller expired before a safe reply slot; resuming CQ.");
+        _pendingCaller = nil;
+        _pendingCallerReceivedAt = nil;
+        return NO;
+    }
+
+    TX500FT8Message *caller = _pendingCaller;
+    NSInteger parity = _pendingCallerParity;
+    _pendingCaller = nil;
+    _pendingCallerReceivedAt = nil;
+    _resumeCQWhenRadioReturnsToRX = NO;
+    if (self.logHandler) {
+        self.logHandler([NSString stringWithFormat:
+            @"[Auto-CQ] Answering queued caller %@ before sending another CQ.", caller.callerCall]);
+    }
+    [self engageCaller:caller inReplyToSlotParity:parity];
+    return YES;
 }
 
 - (void)notifyStatus {
@@ -712,6 +912,10 @@
             case TX500FT8QSOPhaseSending73: phaseDesc = @"Sending 73"; break;
             case TX500FT8QSOPhaseComplete: phaseDesc = @"QSO Complete"; break;
             default: break;
+        }
+        if (self.isQSOActive && self.activeDXCall.length > 0) {
+            self.autoCQStatus = [NSString stringWithFormat:@"🔒 QSO locked: %@ · %@",
+                                 self.activeDXCall, phaseDesc];
         }
         self.onQSOStateChanged(self.qsoPhase, phaseDesc);
     }
@@ -739,8 +943,6 @@
 
 - (void)logCompletedQSOToADIF:(TX500FT8LoggedQSO *)qso {
     if (!qso || qso.callsign.length == 0) return;
-    id enabledVal = [[NSUserDefaults standardUserDefaults] objectForKey:@"TX500_AutoLogQSO"];
-    if (enabledVal != nil && ![enabledVal boolValue]) return;
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
         NSString *filePath = [TX500FT8AutoEngine qsoLogbookADIFPath];
         if (![[NSFileManager defaultManager] fileExistsAtPath:filePath]) {

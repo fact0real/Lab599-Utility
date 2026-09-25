@@ -520,7 +520,7 @@ static NSBox *VoiceCard(NSView *content) {
 - (void)activate {
     NSDictionary *p=[NSUserDefaults.standardUserDefaults dictionaryForKey:@"TX500_ActiveStationProfile"];
     NSDictionary *mapping=@{@"radioOutput":@"Voice.output",@"radioInput":@"Voice.input",@"microphone":@"Voice.microphone",@"headphones":@"Voice.headphones"};
-    for(NSString *k in mapping) if([p[k] length]) [NSUserDefaults.standardUserDefaults setObject:p[k] forKey:mapping[k]];
+    for(NSString *k in mapping) if([p[k] isKindOfClass:NSString.class]) [NSUserDefaults.standardUserDefaults setObject:p[k] forKey:mapping[k]];
     [_radioOutput selectItemAtIndex:0]; [_radioInput selectItemAtIndex:0]; [_microphone selectItemAtIndex:0]; [_headphones selectItemAtIndex:0];
     _visible=YES; [self refreshDevices]; [self updateUI]; }
 - (BOOL)deactivate {

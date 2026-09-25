@@ -16,7 +16,7 @@ static NSDictionary *LegacyKeys(void) { return @{@"call":@"TX500_OperatorCallsig
     if((self=[super init])) {
         _URL=URL; _defaults=defaults;
         NSData *raw=[NSData dataWithContentsOfURL:URL]; NSDictionary *saved=raw ? [NSJSONSerialization JSONObjectWithData:raw options:0 error:nil] : nil;
-        if(raw && (![saved isKindOfClass:NSDictionary.class] || [saved[@"version"] integerValue]!=1 || ![saved[@"profiles"] isKindOfClass:NSArray.class] || ![saved[@"frequencies"] isKindOfClass:NSArray.class] || ![saved[@"shortcuts"] isKindOfClass:NSDictionary.class])) _loadError=StoreError(@"Station data could not be loaded. The original file was preserved; restore it before saving.");
+        if(raw && (![saved isKindOfClass:NSDictionary.class] || (![saved[@"version"] isKindOfClass:NSNumber.class] || [saved[@"version"] integerValue]!=1) || ![saved[@"profiles"] isKindOfClass:NSArray.class] || ![saved[@"frequencies"] isKindOfClass:NSArray.class] || ![saved[@"shortcuts"] isKindOfClass:NSDictionary.class] || ![saved[@"active"] isKindOfClass:NSString.class])) _loadError=StoreError(@"Station data could not be loaded. The original file was preserved; restore it before saving.");
         if(saved && !_loadError) {
             for(id p in saved[@"profiles"]) if(![p isKindOfClass:NSDictionary.class] || ![p[@"id"] isKindOfClass:NSString.class] || ![p[@"name"] isKindOfClass:NSString.class]) _loadError=StoreError(@"Invalid profile data; original file preserved.");
             for(id f in saved[@"frequencies"]) if(![f isKindOfClass:NSDictionary.class] || ![f[@"id"] isKindOfClass:NSString.class] || ![f[@"name"] isKindOfClass:NSString.class] || ![f[@"hz"] isKindOfClass:NSNumber.class]) _loadError=StoreError(@"Invalid frequency data; original file preserved.");
@@ -25,6 +25,17 @@ static NSDictionary *LegacyKeys(void) { return @{@"call":@"TX500_OperatorCallsig
             for(NSDictionary *p in saved[@"profiles"]) for(id value in p.allValues) if(![value isKindOfClass:NSString.class]) _loadError=StoreError(@"Invalid profile field type; original file preserved.");
             for(NSDictionary *f in saved[@"frequencies"]) if(![f[@"mode"] isKindOfClass:NSNumber.class] || (f[@"tags"] && ![f[@"tags"] isKindOfClass:NSString.class])) _loadError=StoreError(@"Invalid frequency field type; original file preserved.");
             for(id value in [saved[@"shortcuts"] allValues]) if(![value isKindOfClass:NSString.class]) _loadError=StoreError(@"Invalid shortcut field type; original file preserved.");
+        }
+        if(saved && !_loadError) {
+            NSMutableSet *ids=[NSMutableSet set];
+            for(NSDictionary *p in saved[@"profiles"]) {
+                if(![p[@"id"] length] || ![p[@"name"] length] || [ids containsObject:p[@"id"]]) _loadError=StoreError(@"Invalid or duplicate station profile; original file preserved.");
+                [ids addObject:p[@"id"]];
+            }
+            if(![ids containsObject:saved[@"active"]]) _loadError=StoreError(@"Active station profile is missing; original file preserved.");
+            for(NSDictionary *f in saved[@"frequencies"]) {
+                if([f[@"hz"] doubleValue]<500000 || [f[@"hz"] doubleValue]>56000000 || ![@[@1,@2,@3,@4,@5,@6,@7,@9] containsObject:f[@"mode"]] || (f[@"favorite"] && ![f[@"favorite"] isKindOfClass:NSNumber.class])) _loadError=StoreError(@"Invalid frequency value; original file preserved.");
+            }
         }
         if(saved && !_loadError) _data=[saved mutableCopy];
         else {
@@ -63,7 +74,7 @@ static NSDictionary *LegacyKeys(void) { return @{@"call":@"TX500_OperatorCallsig
     for(NSString *key in @[@"name",@"call",@"operatorCall",@"grid",@"operatorName",@"rig",@"antenna",@"country",@"city",@"state",@"county",@"cqZone",@"ituZone",@"iota",@"sig",@"sigInfo",@"region",@"radioInput",@"radioOutput",@"microphone",@"headphones"]) {
         id v=p[key]; if(v && ![v isKindOfClass:NSString.class]) { if(error) *error=StoreError(@"Profile fields must be text."); return NO; }
         NSString *s=[(v ?: @"") stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
-        if(s.length>254) { if(error) *error=StoreError(@"Profile fields must be shorter than 255 characters."); return NO; } p[key]=s;
+        if([s lengthOfBytesUsingEncoding:NSUTF8StringEncoding]>254) { if(error) *error=StoreError(@"Profile fields must be shorter than 255 characters."); return NO; } p[key]=s;
     }
     for(NSString *key in @[@"call",@"operatorCall",@"grid",@"iota",@"sig"]) p[key]=[p[key] uppercaseString];
     NSString *why=nil;

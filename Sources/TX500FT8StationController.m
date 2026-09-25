@@ -7,6 +7,7 @@
 //
 
 #import "TX500FT8StationController.h"
+#import "TX500LogbookManager.h"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 static NSString * const kColTime     = @"colTime";
@@ -52,6 +53,21 @@ static struct {
     {"6m",   50318000},
     {NULL, 0}
 };
+
+static NSInteger TX500ThreeDigitCATValue(NSString *reply, NSString *prefix) {
+    if (![reply hasPrefix:prefix] || reply.length < prefix.length + 4 || ![reply hasSuffix:@";"]) return NSNotFound;
+    NSString *digits = [reply substringWithRange:NSMakeRange(prefix.length, 3)];
+    if ([digits rangeOfCharacterFromSet:NSCharacterSet.decimalDigitCharacterSet.invertedSet].location != NSNotFound) return NSNotFound;
+    return digits.integerValue;
+}
+
+static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
+    if (reply.length != 14 || ![reply hasPrefix:@"FA"] || ![reply hasSuffix:@";"]) return 0;
+    NSString *digits = [reply substringWithRange:NSMakeRange(2, 11)];
+    if ([digits rangeOfCharacterFromSet:NSCharacterSet.decimalDigitCharacterSet.invertedSet].location != NSNotFound) return 0;
+    uint64_t hz = (uint64_t)digits.longLongValue;
+    return (hz >= 500000 && hz <= 56000000) ? hz : 0;
+}
 
 @interface TX500FT8SlotProgressView : NSView
 @property (nonatomic, assign) double slotSecond;
@@ -126,13 +142,31 @@ static struct {
     NSString *text = [NSString stringWithFormat:@"%@ · %@ · %.1fs / %.1fs · %@",
                       self.isFT4 ? @"FT4" : @"FT8", phaseStr, self.slotSecond, slotTotal, parityStr];
 
+    NSShadow *textShadow = [NSShadow new];
+    textShadow.shadowColor = [NSColor colorWithCalibratedWhite:0.0 alpha:0.85];
+    textShadow.shadowBlurRadius = 2.0;
+    textShadow.shadowOffset = NSMakeSize(0, -1);
     NSDictionary *attrs = @{
         NSFontAttributeName: [NSFont monospacedSystemFontOfSize:10.5 weight:NSFontWeightBold],
-        NSForegroundColorAttributeName: [NSColor labelColor]
+        NSForegroundColorAttributeName: NSColor.whiteColor,
+        NSStrokeColorAttributeName: [NSColor colorWithCalibratedWhite:0.0 alpha:0.85],
+        NSStrokeWidthAttributeName: @(-2.2),
+        NSShadowAttributeName: textShadow
     };
 
     NSSize sz = [text sizeWithAttributes:attrs];
-    [text drawAtPoint:NSMakePoint((bounds.size.width - sz.width) / 2.0, (bounds.size.height - sz.height) / 2.0) withAttributes:attrs];
+    NSRect capsule = NSMakeRect((bounds.size.width - sz.width) / 2.0 - 10.0,
+                                (bounds.size.height - sz.height) / 2.0 - 2.0,
+                                sz.width + 20.0, sz.height + 4.0);
+    NSBezierPath *glass = [NSBezierPath bezierPathWithRoundedRect:capsule xRadius:capsule.size.height / 2.0 yRadius:capsule.size.height / 2.0];
+    [[NSColor colorWithCalibratedWhite:0.02 alpha:0.56] setFill];
+    [glass fill];
+    [[NSColor colorWithCalibratedWhite:1.0 alpha:0.24] setStroke];
+    glass.lineWidth = 0.75;
+    [glass stroke];
+    [text drawAtPoint:NSMakePoint((bounds.size.width - sz.width) / 2.0,
+                                  (bounds.size.height - sz.height) / 2.0)
+        withAttributes:attrs];
 }
 
 @end
@@ -163,8 +197,10 @@ static struct {
     (void)dirtyRect;
     NSRect bounds = self.bounds;
 
-    // Track Background
-    [[NSColor colorWithCalibratedWhite:0.92 alpha:1.0] setFill];
+    // A consistently dark track keeps the overlaid label readable in both
+    // Aqua and Dark Aqua. The old near-white track combined with dynamic
+    // labelColor could produce white-on-white text.
+    [[NSColor colorWithCalibratedWhite:0.11 alpha:1.0] setFill];
     NSRectFill(bounds);
 
     // Fraction 0.0 (-60dB) to 1.0 (0dB)
@@ -195,10 +231,84 @@ static struct {
     NSString *text = (_levelDb <= -58.0f) ? @"IN: — dB" : [NSString stringWithFormat:@"IN: %+.0f dB", _levelDb];
     NSDictionary *attrs = @{
         NSFontAttributeName: [NSFont monospacedSystemFontOfSize:9.5 weight:NSFontWeightBold],
-        NSForegroundColorAttributeName: [NSColor labelColor]
+        NSForegroundColorAttributeName: [NSColor whiteColor]
     };
     NSSize sz = [text sizeWithAttributes:attrs];
+    NSRect labelPlate = NSMakeRect(round((bounds.size.width - sz.width) / 2.0) - 3.0,
+                                   round((bounds.size.height - sz.height) / 2.0) - 1.0,
+                                   sz.width + 6.0, sz.height + 2.0);
+    [[NSColor colorWithCalibratedWhite:0.02 alpha:0.86] setFill];
+    [[NSBezierPath bezierPathWithRoundedRect:labelPlate xRadius:3.0 yRadius:3.0] fill];
     [text drawAtPoint:NSMakePoint((bounds.size.width - sz.width) / 2.0, (bounds.size.height - sz.height) / 2.0) withAttributes:attrs];
+}
+
+@end
+
+// AppKit may mute standard bezel colours when the window is inactive. Draw the
+// operational states ourselves so monitoring and TX readiness remain obvious
+// in both appearances and during focus changes.
+@interface TX500FT8StateButton : NSButton
+@property (nonatomic, assign) BOOL transmitControl;
+@end
+
+@implementation TX500FT8StateButton
+- (void)setTitle:(NSString *)title {
+    [super setTitle:title];
+    [self setNeedsDisplay:YES];
+}
+
+- (void)drawRect:(NSRect)dirtyRect {
+    (void)dirtyRect;
+    BOOL recovery = self.transmitControl && [self.title isEqualToString:@"WAIT RX"];
+    BOOL active = self.transmitControl ? ([self.title hasPrefix:@"STOP CQ"] || [self.title hasPrefix:@"TX "])
+                                       : [self.title hasPrefix:@"Stop"];
+    NSColor *fill = recovery ? [NSColor colorWithCalibratedRed:0.64 green:0.39 blue:0.06 alpha:1.0] :
+                    active ? [NSColor colorWithCalibratedRed:0.74 green:0.17 blue:0.16 alpha:1.0] :
+                             [NSColor colorWithCalibratedRed:0.12 green:0.35 blue:0.66 alpha:1.0];
+    if (!self.isEnabled) fill = [fill colorWithAlphaComponent:0.40];
+    if (self.isHighlighted) fill = [fill blendedColorWithFraction:0.16 ofColor:NSColor.blackColor];
+    NSRect rect = NSInsetRect(self.bounds, 0.5, 0.5);
+    NSBezierPath *shape = [NSBezierPath bezierPathWithRoundedRect:rect xRadius:6.0 yRadius:6.0];
+    [fill setFill];
+    [shape fill];
+    [[NSColor colorWithCalibratedWhite:1.0 alpha:active ? 0.27 : 0.19] setStroke];
+    shape.lineWidth = 1.0;
+    [shape stroke];
+
+    NSString *label = self.title ?: @"";
+    NSDictionary *attributes = @{
+        NSFontAttributeName: [NSFont systemFontOfSize:11.5 weight:NSFontWeightBold],
+        NSForegroundColorAttributeName: [NSColor whiteColor]
+    };
+    NSSize labelSize = [label sizeWithAttributes:attributes];
+    [label drawAtPoint:NSMakePoint(round((NSWidth(self.bounds) - labelSize.width) / 2.0),
+                                  round((NSHeight(self.bounds) - labelSize.height) / 2.0))
+       withAttributes:attributes];
+}
+@end
+
+// NSSplitView keeps drawing its divider when a subview is hidden.  In Wide
+// View that divider otherwise remains over the expanded decode tables as a
+// stray full-height line.
+@interface TX500FT8WorkstationSplitView : NSSplitView
+@property (nonatomic, assign) BOOL suppressDivider;
+@end
+
+@implementation TX500FT8WorkstationSplitView
+
+- (CGFloat)dividerThickness {
+    return self.suppressDivider ? 0.0 : [super dividerThickness];
+}
+
+- (void)drawDividerInRect:(NSRect)rect {
+    if (!self.suppressDivider) [super drawDividerInRect:rect];
+}
+
+- (void)setSuppressDivider:(BOOL)suppressDivider {
+    if (_suppressDivider == suppressDivider) return;
+    _suppressDivider = suppressDivider;
+    [self adjustSubviews];
+    [self setNeedsDisplay:YES];
 }
 
 @end
@@ -212,9 +322,15 @@ static struct {
 
 // UI Components - Top Ribbon
 @property (nonatomic, strong) NSButton *startStopButton;
+@property (nonatomic, assign) BOOL monitoringStartInProgress;
+@property (nonatomic, assign) NSUInteger monitoringStartGeneration;
 @property (nonatomic, strong) NSSegmentedControl *modeSegment;
 @property (nonatomic, strong) NSPopUpButton *bandPopup;
 @property (nonatomic, strong) NSTextField *dialFreqLabel;
+@property (nonatomic, assign) NSUInteger frequencyRequestGeneration;
+@property (nonatomic, assign) BOOL frequencyOperationPending;
+@property (nonatomic, assign) NSUInteger frequencyPollFailures;
+@property (nonatomic, strong) NSTimer *frequencyPollTimer;
 @property (nonatomic, strong) NSPopUpButton *audioInPopup;
 @property (nonatomic, strong) TX500AudioLevelMeterView *audioLevelMeter;
 @property (nonatomic, strong) NSPopUpButton *audioOutPopup;
@@ -225,6 +341,14 @@ static struct {
 @property (nonatomic, strong) NSButton *armTxButton;
 @property (nonatomic, strong) NSButton *fakeItCheckbox;
 @property (nonatomic, strong) NSButton *tuneButton;
+@property (nonatomic, strong) NSPopUpButton *rfPowerPopup;
+@property (nonatomic, strong) NSSlider *digGainSlider;
+@property (nonatomic, strong) NSTextField *digGainValueLabel;
+@property (nonatomic, assign) NSInteger pendingRFPowerTenths;
+@property (nonatomic, assign) NSInteger pendingDIGGain;
+@property (nonatomic, assign) BOOL hasPendingRFPower;
+@property (nonatomic, assign) BOOL hasPendingDIGGain;
+@property (nonatomic, assign) BOOL settingsWriteInFlight;
 @property (nonatomic, strong) TX500FT8SlotProgressView *slotProgressView;
 @property (nonatomic, strong) NSTextField *panUtcBadge;
 
@@ -281,7 +405,23 @@ static struct {
 @property (nonatomic, strong) NSTextView *qsoConsoleTextView;
 
 // UI Components - Bottom Session Log & ADIF Export
-@property (nonatomic, strong) NSTextField *sessionLogCountLabel;
+@property (nonatomic, strong) NSButton *sessionLogCountButton;
+@property (nonatomic, strong) NSPanel *sessionLogWindow;
+@property (nonatomic, strong) NSTableView *sessionLogTableView;
+@property (nonatomic, strong) NSMutableArray<TX500LogRecord *> *successfulLogRecords;
+@property (nonatomic, strong) NSSearchField *sessionLogSearchField;
+@property (nonatomic, strong) NSPopUpButton *sessionLogModeFilter;
+@property (nonatomic, strong) NSTextField *sessionLogSummaryLabel;
+@property (nonatomic, strong) NSTextField *sessionLogEditorStatusLabel;
+@property (nonatomic, strong) NSTextField *sessionLogCallField;
+@property (nonatomic, strong) NSTextField *sessionLogNameField;
+@property (nonatomic, strong) NSTextField *sessionLogGridField;
+@property (nonatomic, strong) NSTextField *sessionLogCountryField;
+@property (nonatomic, strong) NSTextField *sessionLogQTHField;
+@property (nonatomic, strong) NSTextField *sessionLogSentField;
+@property (nonatomic, strong) NSTextField *sessionLogRcvdField;
+@property (nonatomic, strong) NSTextField *sessionLogPowerField;
+@property (nonatomic, strong) NSTextField *sessionLogNotesField;
 @property (nonatomic, strong) NSButton *exportADIFButton;
 @property (nonatomic, strong) NSButton *openLogsButton;
 @property (nonatomic, strong) NSButton *clearLogButton;
@@ -289,6 +429,9 @@ static struct {
 // TX Slot Parity Selector & SWR Indicator
 @property (nonatomic, strong) NSSegmentedControl *txParitySegment;
 @property (nonatomic, strong) NSTextField *swrLabel;
+@property (nonatomic, strong) NSTextField *alcLabel;
+@property (nonatomic, strong) NSTextField *powerMeterLabel;
+@property (nonatomic, assign) NSUInteger consecutiveHighSWRReadings;
 @property (nonatomic, strong) NSTextField *snrMinField;
 @property (nonatomic, strong) NSTextField *snrMaxField;
 @property (nonatomic, strong) NSPopUpButton *alertCountryPopup;
@@ -315,6 +458,8 @@ static struct {
 @property (nonatomic, strong) NSTextField *cycleDetailLabel;
 @property (nonatomic, strong) NSTextField *cycleClockLabel;
 @property (nonatomic, assign) NSUInteger lastDecodesCount;
+
+- (void)manuallyEngageMessage:(TX500FT8Message *)message;
 
 @end
 
@@ -387,12 +532,16 @@ static struct {
         _protocol = TX500_FT8_PROTOCOL_FT8;
         _audioEngine = [[TX500FT8AudioEngine alloc] init];
         _audioEngine.protocol = _protocol;
+        _audioEngine.requiresVerifiedCATDial = YES;
         _autoEngine = [[TX500FT8AutoEngine alloc] init];
         _autoEngine.audioEngine = _audioEngine;
+        _pendingRFPowerTenths = NSNotFound;
+        _pendingDIGGain = NSNotFound;
 
         _allDecodes = [NSMutableArray array];
         _filteredDecodes = [NSMutableArray array];
         _rxFreqDecodes = [NSMutableArray array];
+        _successfulLogRecords = [NSMutableArray array];
         _txMessageButtons = [NSMutableArray array];
         _txMessageLabels = [NSMutableArray array];
 
@@ -401,13 +550,23 @@ static struct {
 
         [self setupBindings];
         [self buildUserInterface];
+        __weak typeof(self) weakSelf = self;
+        _frequencyPollTimer = [NSTimer scheduledTimerWithTimeInterval:4.0 repeats:YES block:^(__unused NSTimer *timer) {
+            [weakSelf pollRadioFrequency];
+        }];
         [self reloadStationPreferences];
         [self setupKeyboardShortcuts];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(successfulLogbookDidChange:)
+                                                     name:TX500LogbookDidChangeNotification
+                                                   object:nil];
+        [self reloadSuccessfulContacts];
     }
     return self;
 }
 
 - (void)dealloc {
+    [_frequencyPollTimer invalidate];
     if (_keyEventMonitor) {
         [NSEvent removeMonitor:_keyEventMonitor];
         _keyEventMonitor = nil;
@@ -460,6 +619,7 @@ static struct {
 
         // Update Live Cycle Status Banner
         [strongSelf updateLiveCycleStatusBannerWithSlotSec:slotSec parity:parity];
+        [strongSelf refreshTransmitButtonState];
     };
 
     // Slot Transition
@@ -480,6 +640,8 @@ static struct {
         [strongSelf.waterfallView setNeedsDisplay:YES];
 
         if (transmitting) {
+            [strongSelf.autoEngine noteTransmittedText:txText];
+            strongSelf.consecutiveHighSWRReadings = 0;
             strongSelf.armTxButton.state = NSControlStateValueOn;
             [strongSelf appendToQSOConsole:[NSString stringWithFormat:@"[TX Slot] Transmitting: %@", txText]];
 
@@ -510,10 +672,29 @@ static struct {
                 [strongSelf.rxFreqTableView reloadData];
             }
         } else {
-            if (!strongSelf.audioEngine.isTransmitArmed) {
+            [strongSelf.autoEngine noteTransmissionEnded];
+            [strongSelf applyPendingRadioSettings];
+            if (strongSelf.audioEngine.swrMeterValid) {
+                double lastSWR = [TX500FT8AudioEngine swrRatioFromMeterDots:strongSelf.audioEngine.lastSWRMeterDots];
+                strongSelf.swrLabel.stringValue = [NSString stringWithFormat:@"Last SWR: %.1f:1 (%ld/30)",
+                                                   lastSWR, (long)strongSelf.audioEngine.lastSWRMeterDots];
+                strongSelf.swrLabel.toolTip = @"Last CAT-confirmed RM1 antenna reading from the preceding transmission. It remains visible while receiving.";
+            }
+            if (strongSelf.audioEngine.alcMeterValid) {
+                strongSelf.alcLabel.stringValue = [NSString stringWithFormat:@"Last ALC: %ld/30 · CAT ✓",
+                                                   (long)strongSelf.audioEngine.lastALCMeterDots];
+                strongSelf.alcLabel.toolTip = [NSString stringWithFormat:
+                    @"The radio returned %lu valid RM3 ALC sample%@ during the preceding transmission. 0/30 is a real CAT reading and means ALC did not reduce drive.",
+                    (unsigned long)strongSelf.audioEngine.alcMeterSampleCount,
+                    strongSelf.audioEngine.alcMeterSampleCount == 1 ? @"" : @"s"];
+            }
+            if (!strongSelf.audioEngine.isTransmitArmed &&
+                !strongSelf.autoEngine.isQSOActive &&
+                !strongSelf.autoEngine.isAutoCQActive) {
                 strongSelf.armTxButton.state = NSControlStateValueOff;
             }
         }
+        [strongSelf refreshTransmitButtonState];
         [strongSelf updateLiveCycleStatusBannerWithSlotSec:strongSelf.audioEngine.currentSlotSecond parity:strongSelf.audioEngine.currentSlotParity];
     };
 
@@ -592,8 +773,7 @@ static struct {
             strongSelf.dxGridField.stringValue = dxGrid ?: @"";
             [strongSelf dxCallEdited:nil];
             [strongSelf updateTransmitMatrixLabels];
-            strongSelf.armTxButton.title = @"ARMED (TX)";
-            strongSelf.armTxButton.bezelColor = [NSColor colorWithCalibratedRed:0.8 green:0.2 blue:0.2 alpha:1.0];
+            [strongSelf refreshTransmitButtonState];
             if (strongSelf.audioEngine.lockTxRxFrequencies) {
                 strongSelf.txFreqField.stringValue = strongSelf.rxFreqField.stringValue;
                 strongSelf.waterfallView.txFrequencyHz = strongSelf.audioEngine.txAudioFrequencyHz;
@@ -619,13 +799,7 @@ static struct {
                 [strongSelf dxCallEdited:nil];
             }
             [strongSelf updateTransmitMatrixLabels];
-            if (strongSelf.audioEngine.isTransmitArmed) {
-                strongSelf.armTxButton.title = @"ARMED (TX)";
-                strongSelf.armTxButton.bezelColor = [NSColor colorWithCalibratedRed:0.8 green:0.2 blue:0.2 alpha:1.0];
-            } else {
-                strongSelf.armTxButton.title = @"ENABLE TX";
-                strongSelf.armTxButton.bezelColor = nil;
-            }
+            [strongSelf refreshTransmitButtonState];
             NSInteger step = (NSInteger)phase;
             if (step >= 1 && step <= (NSInteger)strongSelf.txMessageButtons.count) {
                 for (NSUInteger i = 0; i < strongSelf.txMessageButtons.count; i++) {
@@ -639,18 +813,35 @@ static struct {
     self.autoEngine.onAlgorithmStatusUpdated = ^(NSString *cqStatus, NSString *hunterStatus) {
         typeof(self) strongSelf = weakSelf;
         if (!strongSelf) return;
-        strongSelf.autoCQStatusLabel.stringValue = cqStatus;
-        strongSelf.autoHunterStatusLabel.stringValue = hunterStatus;
+        // Decode and slot callbacks are delivered from the audio worker.  UI
+        // controls must be updated on AppKit's main queue; otherwise a late
+        // worker callback can leave the Auto-CQ banner showing an old caller
+        // even though the engine has already resumed CQ.
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(strongSelf) uiSelf = strongSelf;
+            if (!uiSelf) return;
+            uiSelf.autoCQStatusLabel.stringValue = cqStatus ?: @"Auto-CQ: Idle";
+            uiSelf.autoHunterStatusLabel.stringValue = hunterStatus ?: @"Auto-Hunter: Inactive";
+        });
     };
 
     self.autoEngine.onQSOLogged = ^(TX500FT8LoggedQSO *qso) {
         typeof(self) strongSelf = weakSelf;
         if (!strongSelf) return;
         [strongSelf appendToQSOConsole:[NSString stringWithFormat:@"★ QSO WITH %@ LOGGED! (Grid: %@, Band: %@)", qso.callsign, qso.grid ?: @"-", qso.band]];
-        strongSelf.sessionLogCountLabel.stringValue = [NSString stringWithFormat:@"Session QSOs: %lu", (unsigned long)strongSelf.autoEngine.sessionLog.count];
+        [strongSelf reloadSuccessfulContacts];
 
-        // Prompt user with WSJT-X style QSO Confirmation Dialog
-        [strongSelf promptAutoLogQSO:qso];
+        id autoLogValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"TX500_AutoLogQSO"];
+        BOOL autoLogEnabled = (autoLogValue == nil || [autoLogValue boolValue]);
+        if (autoLogEnabled) {
+            if (qso.callsign.length > 0) [strongSelf.workedCallsigns addObject:qso.callsign.uppercaseString];
+            if (qso.grid.length >= 4) [strongSelf.workedGrids addObject:qso.grid.uppercaseString];
+            [strongSelf saveWorkedStationHistory];
+            [strongSelf appendToQSOConsole:[NSString stringWithFormat:@"★ QSO WITH %@ AUTO-LOGGED — operator confirmation disabled in Settings.", qso.callsign]];
+            [strongSelf applyTableFilters];
+        } else {
+            [strongSelf promptAutoLogQSO:qso];
+        }
     };
 
     // Waterfall Click-to-Tune
@@ -693,12 +884,23 @@ static struct {
         strongSelf.swrLabel.stringValue = swrStr;
         strongSelf.swrLabel.textColor = swrColor;
 
-        // SWR protection: abort TX if over threshold
+        // Reject one isolated relay/ADC transient.  A genuine mismatch is
+        // confirmed one second later and still trips promptly; the TX-500's
+        // own hardware protection remains active throughout.
         double maxSWR = strongSelf.audioEngine.maxSWRThreshold;
-        if (maxSWR > 0.0 && swr > maxSWR && strongSelf.audioEngine.isTransmitting) {
+        BOOL highDuringTX = maxSWR > 0.0 && swr > maxSWR && strongSelf.audioEngine.isTransmitting;
+        if (!highDuringTX) {
+            strongSelf.consecutiveHighSWRReadings = 0;
+        } else {
+            strongSelf.consecutiveHighSWRReadings++;
+        }
+        if (strongSelf.consecutiveHighSWRReadings >= 2) {
+            strongSelf.consecutiveHighSWRReadings = 0;
+            [strongSelf.autoEngine stopAutoCQ];
+            [strongSelf.autoEngine stopAutoHunter];
+            if (strongSelf.autoEngine.isQSOActive) [strongSelf.autoEngine abortQSO];
             [strongSelf.audioEngine disarmTransmit];
-            strongSelf.armTxButton.title = @"ENABLE TX";
-            strongSelf.armTxButton.bezelColor = nil;
+            [strongSelf refreshTransmitButtonState];
             [strongSelf appendToQSOConsole:[NSString stringWithFormat:@"⚠ TX ABORTED: SWR %.1f:1 exceeded threshold %.1f:1", swr, maxSWR]];
         }
     };
@@ -706,6 +908,7 @@ static struct {
         typeof(self) strongSelf = weakSelf;
         if (!strongSelf) return;
         if (!valid) {
+            strongSelf.consecutiveHighSWRReadings = 0;
             strongSelf.swrLabel.stringValue = @"SWR: —";
             strongSelf.swrLabel.textColor = [NSColor secondaryLabelColor];
             return;
@@ -725,6 +928,34 @@ static struct {
         }
         strongSelf.swrLabel.stringValue = swrStr;
         strongSelf.swrLabel.textColor = swrColor;
+    };
+    self.audioEngine.onALCMeterUpdated = ^(NSInteger rawDots, BOOL valid) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        if (!valid) {
+            strongSelf.alcLabel.stringValue = @"ALC: —";
+            strongSelf.alcLabel.textColor = [NSColor secondaryLabelColor];
+            return;
+        }
+        strongSelf.alcLabel.stringValue = [NSString stringWithFormat:@"ALC: %ld/30 · CAT ✓", (long)rawDots];
+        strongSelf.alcLabel.toolTip = [NSString stringWithFormat:
+            @"Verified from the radio's documented RM3 ALC response (%lu valid sample%@ in this transmission). 0/30 means no ALC reduction; a dash means no valid CAT reply.",
+            (unsigned long)strongSelf.audioEngine.alcMeterSampleCount,
+            strongSelf.audioEngine.alcMeterSampleCount == 1 ? @"" : @"s"];
+        if (rawDots <= 5) {
+            strongSelf.alcLabel.textColor = [NSColor colorWithCalibratedRed:0.2 green:0.8 blue:0.3 alpha:1.0];
+        } else if (rawDots <= 12) {
+            strongSelf.alcLabel.textColor = [NSColor colorWithCalibratedRed:1.0 green:0.75 blue:0.1 alpha:1.0];
+        } else {
+            strongSelf.alcLabel.textColor = [NSColor colorWithCalibratedRed:1.0 green:0.2 blue:0.2 alpha:1.0];
+        }
+    };
+    self.audioEngine.onPowerMeterUpdated = ^(NSInteger rawDots, BOOL valid) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        strongSelf.powerMeterLabel.stringValue = valid ?
+            [NSString stringWithFormat:@"OUT: %ld/30", (long)rawDots] : @"OUT: —";
+        strongSelf.powerMeterLabel.textColor = valid ? [NSColor labelColor] : [NSColor secondaryLabelColor];
     };
 
     // Forward Audio Engine Logging
@@ -780,16 +1011,11 @@ static struct {
     // Refresh Band presets popup with appropriate dial frequencies
     [self refreshBandPopupForCurrentProtocol];
 
-    // Select the current band preset frequency
+    // A protocol change also selects its dial preset, but the displayed dial
+    // must come from CAT readback rather than the requested value.
     NSString *selectedBand = self.bandPopup.titleOfSelectedItem ?: @"20m";
     uint64_t newDialHz = [self defaultFrequencyForBand:selectedBand protocol:proto];
-    if (newDialHz > 0) {
-        [self updateFrequencyHz:newDialHz mode:@"DIG"];
-        if (self.serialCommandSender) {
-            self.serialCommandSender([NSString stringWithFormat:@"FA%011llu;", (unsigned long long)newDialHz]);
-            self.serialCommandSender(@"MD6;");
-        }
-    }
+    if (newDialHz > 0) [self requestRadioFrequencyHz:newDialHz];
 
     [self appendToQSOConsole:[NSString stringWithFormat:@"[Protocol Switched] Active mode: %@ (%.1fs slot).",
                               mName, self.audioEngine.currentSlotPeriod]];
@@ -852,47 +1078,457 @@ static struct {
     self.audioEngine.catQueryHandler = _catQueryHandler;
 }
 
+- (void)prepareRadioForDigitalMode {
+    if (self.audioEngine.isSimulationMode || !self.serialCommandSender) return;
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) return;
+
+        BOOL modeWritten = strongSelf.serialCommandSender(@"MD6;");
+        BOOL squelchWritten = strongSelf.serialCommandSender(@"SQ0000;");
+        BOOL widthWritten = strongSelf.serialCommandSender(@"FW3000;");
+        NSString *mdReply = strongSelf.catQueryHandler ? strongSelf.catQueryHandler(@"MD;", 0.5) : nil;
+        NSString *fwReply = strongSelf.catQueryHandler ? strongSelf.catQueryHandler(@"FW;", 0.5) : nil;
+        BOOL modeVerified = [mdReply isEqualToString:@"MD6;"];
+        BOOL widthVerified = [fwReply hasPrefix:@"FW3000"];
+
+        // New LAB599 firmware documents filter selection (FL), while some
+        // TS-2000 compatible firmware accepts a direct FW3000 width. Select
+        // FIL-1 as a deterministic fallback; its width remains user-adjustable
+        // on the radio when FW is unavailable.
+        if (!widthVerified) strongSelf.serialCommandSender(@"FL00;");
+
+        NSString *pcReply = strongSelf.catQueryHandler ? strongSelf.catQueryHandler(@"PC;", 0.5) : nil;
+        NSString *maReply = strongSelf.catQueryHandler ? strongSelf.catQueryHandler(@"MA;", 0.5) : nil;
+        NSInteger powerTenths = TX500ThreeDigitCATValue(pcReply, @"PC");
+        NSInteger digGain = TX500ThreeDigitCATValue(maReply, @"MA");
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) mainSelf = weakSelf;
+            if (!mainSelf) return;
+            if (powerTenths != NSNotFound) {
+                NSString *title = [NSString stringWithFormat:@"%ld W", (long)lround((double)powerTenths / 10.0)];
+                if ([mainSelf.rfPowerPopup itemWithTitle:title]) [mainSelf.rfPowerPopup selectItemWithTitle:title];
+            }
+            if (digGain != NSNotFound && digGain >= 0 && digGain <= 100) {
+                mainSelf.digGainSlider.doubleValue = digGain;
+                mainSelf.digGainValueLabel.stringValue = [NSString stringWithFormat:@"%ld", (long)digGain];
+            }
+            if (modeVerified && mainSelf.audioEngine.dialFrequencyHz > 0)
+                mainSelf.audioEngine.catDialAndModeVerified = YES;
+            NSString *filterStatus = widthVerified ? @"3000 Hz" : @"FIL-1 fallback";
+            [mainSelf appendToQSOConsole:[NSString stringWithFormat:
+                @"[Digital Setup] DIG %@ · filter %@ · squelch %@ · frequency unchanged.",
+                (modeWritten && modeVerified) ? @"verified" : @"requested",
+                widthWritten ? filterStatus : @"FIL-1 requested",
+                squelchWritten ? @"open" : @"unchanged"]];
+        });
+    });
+}
+
+- (void)rfPowerChanged:(NSPopUpButton *)sender {
+    double watts = sender.titleOfSelectedItem.doubleValue;
+    NSInteger tenths = (NSInteger)lround(watts * 10.0);
+    if (tenths < 10 || tenths > 100 || !self.serialCommandSender) return;
+    self.pendingRFPowerTenths = tenths;
+    self.hasPendingRFPower = YES;
+    if (self.audioEngine.isTransmitting || self.audioEngine.isReceiveRecoveryPending) {
+        [self appendToQSOConsole:[NSString stringWithFormat:
+            @"[RF Power] %.0f W queued; it will be written and read back as soon as RX is confirmed.", watts]];
+    }
+    [self applyPendingRadioSettings];
+}
+
+- (void)digGainChanged:(NSSlider *)sender {
+    NSInteger gain = (NSInteger)lround(sender.doubleValue);
+    gain = MAX(0, MIN(100, gain));
+    self.digGainValueLabel.stringValue = [NSString stringWithFormat:@"%ld", (long)gain];
+    if (!self.serialCommandSender) return;
+    self.pendingDIGGain = gain;
+    self.hasPendingDIGGain = YES;
+    if (self.audioEngine.isTransmitting || self.audioEngine.isReceiveRecoveryPending) {
+        [self appendToQSOConsole:[NSString stringWithFormat:
+            @"[DIG Gain] %ld queued; it will be written and read back as soon as RX is confirmed.", (long)gain]];
+    }
+    [self applyPendingRadioSettings];
+}
+
+- (void)applyPendingRadioSettings {
+    if (self.settingsWriteInFlight || self.audioEngine.isSimulationMode || !self.serialCommandSender ||
+        self.audioEngine.isTransmitting || self.audioEngine.isReceiveRecoveryPending ||
+        (!self.hasPendingRFPower && !self.hasPendingDIGGain)) return;
+
+    BOOL applyPower = self.hasPendingRFPower;
+    BOOL applyGain = self.hasPendingDIGGain;
+    NSInteger requestedPower = self.pendingRFPowerTenths;
+    NSInteger requestedGain = self.pendingDIGGain;
+    self.settingsWriteInFlight = YES;
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        BOOL powerVerified = NO, gainVerified = NO;
+        NSInteger actualPower = NSNotFound, actualGain = NSNotFound;
+        if (applyPower) {
+            NSString *command = [NSString stringWithFormat:@"PC%03ld;", (long)requestedPower];
+            BOOL wrote = strongSelf.serialCommandSender(command);
+            // TX-500 persists PC asynchronously. An immediate PC; query can
+            // still return the previous value even though the write succeeded.
+            if (wrote) [NSThread sleepForTimeInterval:0.18];
+            NSString *reply = (wrote && strongSelf.catQueryHandler) ? strongSelf.catQueryHandler(@"PC;", 0.8) : nil;
+            actualPower = TX500ThreeDigitCATValue(reply, @"PC");
+            powerVerified = (actualPower == requestedPower);
+        }
+        if (applyGain) {
+            NSString *command = [NSString stringWithFormat:@"MA%03ld;", (long)requestedGain];
+            BOOL wrote = strongSelf.serialCommandSender(command);
+            // MA uses the same deferred hardware commit path as PC.
+            if (wrote) [NSThread sleepForTimeInterval:0.18];
+            NSString *reply = (wrote && strongSelf.catQueryHandler) ? strongSelf.catQueryHandler(@"MA;", 0.8) : nil;
+            actualGain = TX500ThreeDigitCATValue(reply, @"MA");
+            gainVerified = (actualGain == requestedGain);
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) mainSelf = weakSelf;
+            if (!mainSelf) return;
+            mainSelf.settingsWriteInFlight = NO;
+            if (applyPower && mainSelf.pendingRFPowerTenths == requestedPower) {
+                mainSelf.hasPendingRFPower = !powerVerified;
+                if (actualPower != NSNotFound) {
+                    NSString *actualTitle = [NSString stringWithFormat:@"%ld W", (long)lround((double)actualPower / 10.0)];
+                    if ([mainSelf.rfPowerPopup itemWithTitle:actualTitle]) [mainSelf.rfPowerPopup selectItemWithTitle:actualTitle];
+                }
+                [mainSelf appendToQSOConsole:powerVerified ?
+                    [NSString stringWithFormat:@"[RF Power] Radio confirmed PC%03ld (%.1f W).", (long)actualPower, actualPower / 10.0] :
+                    [NSString stringWithFormat:@"[RF Power] Requested %.1f W but radio readback was %@; change remains queued.",
+                        requestedPower / 10.0, actualPower == NSNotFound ? @"unavailable" : [NSString stringWithFormat:@"%.1f W", actualPower / 10.0]]];
+            }
+            if (applyGain && mainSelf.pendingDIGGain == requestedGain) {
+                mainSelf.hasPendingDIGGain = !gainVerified;
+                if (actualGain != NSNotFound) {
+                    mainSelf.digGainSlider.integerValue = actualGain;
+                    mainSelf.digGainValueLabel.stringValue = [NSString stringWithFormat:@"%ld", (long)actualGain];
+                }
+                [mainSelf appendToQSOConsole:gainVerified ?
+                    [NSString stringWithFormat:@"[DIG Gain] Radio confirmed MA%03ld. Use ALC during TX for final adjustment.", (long)actualGain] :
+                    [NSString stringWithFormat:@"[DIG Gain] Requested %ld but radio readback was %@; change remains queued.",
+                        (long)requestedGain, actualGain == NSNotFound ? @"unavailable" : [NSString stringWithFormat:@"%ld", (long)actualGain]]];
+            }
+            BOOL newerPowerRequest = mainSelf.hasPendingRFPower && mainSelf.pendingRFPowerTenths != requestedPower;
+            BOOL newerGainRequest = mainSelf.hasPendingDIGGain && mainSelf.pendingDIGGain != requestedGain;
+            if (newerPowerRequest || newerGainRequest) [mainSelf applyPendingRadioSettings];
+        });
+    });
+}
+
 - (void)startStation {
+    if (self.audioEngine.isMonitoring || self.monitoringStartInProgress) return;
+    if (self.diagnosticSessionStateChangedHandler) self.diagnosticSessionStateChangedHandler(YES);
     // Connect serial port command sender & PTT handler
     self.audioEngine.serialCommandSender = self.serialCommandSender;
     self.audioEngine.pttControlHandler = self.pttControlHandler;
     self.audioEngine.catQueryHandler = self.catQueryHandler;
+    [self.audioEngine resetSWRReading];
 
     // In live radio mode, place transceiver in DIG mode once at station startup
-    if (!self.audioEngine.isSimulationMode && self.serialCommandSender) {
-        self.serialCommandSender(@"MD6;");
-    }
+    [self prepareRadioForDigitalMode];
 
     // Load SWR protection threshold from preferences
     double swrThreshold = [[NSUserDefaults standardUserDefaults] doubleForKey:@"TX500_SWRThreshold"];
     self.audioEngine.maxSWRThreshold = (swrThreshold > 0.0) ? swrThreshold : 0.0;
 
-    NSError *err = nil;
-    if ([self.audioEngine startMonitoring:&err]) {
-        NSString *mName = (self.protocol == TX500_FT8_PROTOCOL_FT4) ? @"FT4" : @"FT8";
-        self.startStopButton.title = [NSString stringWithFormat:@"Stop %@", mName];
-        self.startStopButton.bezelColor = [NSColor colorWithCalibratedRed:0.8 green:0.2 blue:0.2 alpha:1.0];
-        [self appendToQSOConsole:[NSString stringWithFormat:@"[%@ Engine] Monitoring active. %.1f-second slot synchronized.",
-                                  mName, self.audioEngine.currentSlotPeriod]];
-        if (self.stationStateChangedHandler) self.stationStateChangedHandler(YES);
+    self.monitoringStartInProgress = YES;
+    NSUInteger generation = ++self.monitoringStartGeneration;
+    self.startStopButton.title = @"Opening AD-508…";
+    self.startStopButton.enabled = NO;
+    [self appendToQSOConsole:@"[FT8 Audio] Opening the selected radio audio devices…"];
+
+    // CoreAudio can wait indefinitely inside AudioQueueStart when a USB audio
+    // device stops answering. Never let that OS call freeze AppKit or make an
+    // unready station appear safe to transmit.
+    TX500FT8AudioEngine *engine = self.audioEngine;
+    if (engine.isSimulationMode) {
+        NSError *simulationError = nil;
+        BOOL started = [engine startMonitoring:&simulationError];
+        self.monitoringStartInProgress = NO;
+        self.startStopButton.enabled = YES;
+        NSString *simulationModeName = (self.protocol == TX500_FT8_PROTOCOL_FT4) ? @"FT4" : @"FT8";
+        self.startStopButton.title = [NSString stringWithFormat:@"%@ %@", started ? @"Stop" : @"Start", simulationModeName];
+        self.startStopButton.bezelColor = started ? [NSColor colorWithCalibratedRed:0.8 green:0.2 blue:0.2 alpha:1.0] : nil;
+        if (started && self.stationStateChangedHandler) self.stationStateChangedHandler(YES);
+        if (!started) {
+            [self appendToQSOConsole:[NSString stringWithFormat:@"[FT8 Audio] Simulation could not start: %@",
+                                      simulationError.localizedDescription ?: @"unknown error"]];
+            if (self.diagnosticSessionStateChangedHandler) self.diagnosticSessionStateChangedHandler(NO);
+        }
+        return;
     }
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSError *err = nil;
+        BOOL started = [engine startMonitoring:&err];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) mainSelf = weakSelf;
+            if (!mainSelf || generation != mainSelf.monitoringStartGeneration) {
+                if (started) dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{ [engine stopMonitoring]; });
+                return;
+            }
+            mainSelf.monitoringStartInProgress = NO;
+            mainSelf.startStopButton.enabled = YES;
+            NSString *mName = (mainSelf.protocol == TX500_FT8_PROTOCOL_FT4) ? @"FT4" : @"FT8";
+            if (started) {
+                mainSelf.startStopButton.title = [NSString stringWithFormat:@"Stop %@", mName];
+                mainSelf.startStopButton.bezelColor = [NSColor colorWithCalibratedRed:0.8 green:0.2 blue:0.2 alpha:1.0];
+                [mainSelf appendToQSOConsole:[NSString stringWithFormat:@"[%@ Engine] Monitoring active. %.1f-second slot synchronized.",
+                                              mName, engine.currentSlotPeriod]];
+                if (mainSelf.stationStateChangedHandler) mainSelf.stationStateChangedHandler(YES);
+            } else {
+                mainSelf.startStopButton.title = [NSString stringWithFormat:@"Start %@", mName];
+                mainSelf.startStopButton.bezelColor = nil;
+                [mainSelf appendToQSOConsole:[NSString stringWithFormat:@"[FT8 Audio] Could not open AD-508: %@",
+                                              err.localizedDescription ?: @"device unavailable"]];
+                if (mainSelf.diagnosticSessionStateChangedHandler) mainSelf.diagnosticSessionStateChangedHandler(NO);
+            }
+            [mainSelf refreshTransmitButtonState];
+        });
+    });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 8 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+        typeof(self) mainSelf = weakSelf;
+        if (!mainSelf || generation != mainSelf.monitoringStartGeneration || !mainSelf.monitoringStartInProgress) return;
+        mainSelf.startStopButton.title = @"Audio stalled";
+        [mainSelf appendToQSOConsole:@"[FT8 Audio] AD-508 is not responding to CoreAudio. The interface remains usable; RF transmission is blocked until audio opens."];
+    });
 }
 
 - (void)stopStation {
+    ++self.monitoringStartGeneration;
+    self.monitoringStartInProgress = NO;
+    self.startStopButton.enabled = YES;
     [self.autoEngine stopAutoCQ];
     [self.autoEngine stopAutoHunter];
+    if (self.autoEngine.isQSOActive) [self.autoEngine abortQSO];
+    [self.audioEngine disarmTransmit];
     [self.audioEngine stopMonitoring];
     NSString *mName = (self.protocol == TX500_FT8_PROTOCOL_FT4) ? @"FT4" : @"FT8";
     self.startStopButton.title = [NSString stringWithFormat:@"Start %@", mName];
     self.startStopButton.bezelColor = nil;
     [self appendToQSOConsole:[NSString stringWithFormat:@"[%@ Engine] Monitoring stopped.", mName]];
     if (self.stationStateChangedHandler) self.stationStateChangedHandler(NO);
+    if (self.diagnosticSessionStateChangedHandler) self.diagnosticSessionStateChangedHandler(NO);
+    [self refreshTransmitButtonState];
+}
+
+- (void)refreshTransmitButtonState {
+    NSString *title = @"ENABLE TX";
+    BOOL txWorkflowActive = self.audioEngine.isTransmitArmed ||
+                            self.audioEngine.isTransmitting ||
+                            self.audioEngine.isReceiveRecoveryPending ||
+                            self.autoEngine.isAutoCQActive ||
+                            self.autoEngine.isQSOActive;
+    if (self.audioEngine.isReceiveRecoveryPending) title = @"WAIT RX";
+    else if (self.audioEngine.isTransmitting) title = @"TX ACTIVE";
+    else if (self.audioEngine.isTransmitArmed)
+        title = (self.autoEngine.isAutoCQActive && self.autoEngine.qsoPhase == TX500FT8QSOPhaseCallingCQ) ? @"STOP CQ" : @"TX ARMED";
+    else if (self.autoEngine.isQSOActive) title = @"TX ENABLED";
+    else if (self.autoEngine.isAutoCQActive) title = @"STOP CQ";
+    if (![self.armTxButton.title isEqualToString:title]) self.armTxButton.title = title;
+    self.armTxButton.state = txWorkflowActive ? NSControlStateValueOn : NSControlStateValueOff;
+    self.armTxButton.bezelColor = self.audioEngine.isReceiveRecoveryPending ?
+        [NSColor colorWithCalibratedRed:0.85 green:0.56 blue:0.12 alpha:1.0] :
+        (self.armTxButton.state == NSControlStateValueOn ?
+         [NSColor colorWithCalibratedRed:0.8 green:0.2 blue:0.2 alpha:1.0] : nil);
+    NSString *cqTitle = self.autoEngine.isAutoCQActive ? @"Stop CQ" : @"Auto-CQ";
+    if (![self.autoCQButton.title isEqualToString:cqTitle]) self.autoCQButton.title = cqTitle;
 }
 
 - (void)updateFrequencyHz:(uint64_t)freqHz mode:(NSString *)mode {
+    if (freqHz < 500000 || freqHz > 56000000) return;
     self.audioEngine.dialFrequencyHz = freqHz;
     double mhz = (double)freqHz / 1000000.0;
     self.dialFreqLabel.stringValue = [NSString stringWithFormat:@"%.6f MHz %@", mhz, mode ?: @"DIG"];
+    self.dialFreqLabel.textColor = [NSColor colorWithCalibratedRed:0.80 green:0.48 blue:0.0 alpha:1.0];
+    self.dialFreqLabel.toolTip = @"Frequency confirmed by the connected radio.";
+    // Reading a manually tuned radio must also update the band selector.
+    struct { uint64_t low, high; const char *name; } bands[] = {
+        {1800000, 2000000, "160m"}, {3500000, 4000000, "80m"},
+        {7000000, 7300000, "40m"}, {10100000, 10150000, "30m"},
+        {14000000, 14350000, "20m"}, {18068000, 18168000, "17m"},
+        {21000000, 21450000, "15m"}, {24890000, 24990000, "12m"},
+        {28000000, 29700000, "10m"}, {50000000, 54000000, "6m"}
+    };
+    for (NSUInteger i = 0; i < sizeof(bands) / sizeof(bands[0]); i++) {
+        if (freqHz >= bands[i].low && freqHz <= bands[i].high) {
+            NSString *band = [NSString stringWithUTF8String:bands[i].name];
+            if ([self.bandPopup itemWithTitle:band]) [self.bandPopup selectItemWithTitle:band];
+            break;
+        }
+    }
+}
+
+- (void)showRadioFrequencyUnavailable {
+    self.audioEngine.dialFrequencyHz = 0;
+    self.audioEngine.catDialAndModeVerified = NO;
+    self.dialFreqLabel.stringValue = @"Radio frequency unavailable";
+    self.dialFreqLabel.textColor = [NSColor systemRedColor];
+    self.dialFreqLabel.toolTip = @"Check the selected CAT port and radio CAT mode. Frequency and TX are unverified.";
+}
+
+- (void)refreshRadioFrequency {
+    if (self.audioEngine.isSimulationMode || self.audioEngine.isTransmitting || self.audioEngine.isTuning || self.frequencyOperationPending) return;
+    NSUInteger generation = ++self.frequencyRequestGeneration;
+    self.frequencyOperationPending = YES;
+    self.dialFreqLabel.stringValue = @"Reading radio…";
+    self.audioEngine.dialFrequencyHz = 0;
+    self.audioEngine.catDialAndModeVerified = NO;
+    if (!self.catQueryHandler) {
+        self.frequencyOperationPending = NO;
+        [self showRadioFrequencyUnavailable];
+        return;
+    }
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        uint64_t actual = TX500FrequencyFromCATReply(strongSelf.catQueryHandler(@"FA;", 0.8));
+        NSString *modeReply = strongSelf.catQueryHandler(@"MD;", 0.8);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) mainSelf = weakSelf;
+            if (!mainSelf || generation != mainSelf.frequencyRequestGeneration) return;
+            mainSelf.frequencyOperationPending = NO;
+            if (actual) {
+                mainSelf.frequencyPollFailures = 0;
+                NSString *mode = [modeReply isEqualToString:@"MD6;"] ? @"DIG" :
+                                 [modeReply isEqualToString:@"MD8;"] || [modeReply isEqualToString:@"MD9;"] ? @"DIG-R" : @"MD?";
+                [mainSelf updateFrequencyHz:actual mode:mode];
+                mainSelf.audioEngine.catDialAndModeVerified = [modeReply isEqualToString:@"MD6;"];
+            } else {
+                [mainSelf showRadioFrequencyUnavailable];
+                [mainSelf appendToQSOConsole:@"[CAT] Cannot read the radio frequency. Check the selected serial port and CAT mode."];
+            }
+        });
+    });
+}
+
+- (void)pollRadioFrequency {
+    NSString *port = self.selectedPortProvider ? self.selectedPortProvider() : nil;
+    if (self.audioEngine.isSimulationMode || self.audioEngine.isTransmitting ||
+        self.audioEngine.isTuning ||
+        self.frequencyOperationPending || !self.catQueryHandler || !port.length ||
+        (self.view.hidden && !self.audioEngine.isMonitoring)) return;
+    NSUInteger generation = ++self.frequencyRequestGeneration;
+    self.frequencyOperationPending = YES;
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        uint64_t actual = TX500FrequencyFromCATReply(strongSelf.catQueryHandler(@"FA;", 0.8));
+        NSString *modeReply = actual ? strongSelf.catQueryHandler(@"MD;", 0.8) : nil;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) mainSelf = weakSelf;
+            if (!mainSelf || generation != mainSelf.frequencyRequestGeneration) return;
+            mainSelf.frequencyOperationPending = NO;
+            if (mainSelf.audioEngine.isTransmitting || mainSelf.audioEngine.isTuning) return;
+            if (actual) {
+                mainSelf.frequencyPollFailures = 0;
+                BOOL ready = [modeReply isEqualToString:@"MD6;"];
+                BOOL changed = mainSelf.audioEngine.dialFrequencyHz != actual;
+                BOOL modeChanged = mainSelf.audioEngine.catDialAndModeVerified != ready;
+                if (changed || (modeChanged && !ready)) {
+                    if (mainSelf.audioEngine.isTransmitArmed) [mainSelf.audioEngine disarmTransmit];
+                    if (mainSelf.autoEngine.isQSOActive) [mainSelf.autoEngine abortQSO];
+                    if (mainSelf.autoEngine.isAutoCQActive) [mainSelf.autoEngine stopAutoCQ];
+                }
+                mainSelf.audioEngine.catDialAndModeVerified = ready;
+                if (changed || modeChanged) {
+                    NSString *mode = [modeReply isEqualToString:@"MD6;"] ? @"DIG" :
+                        ([modeReply isEqualToString:@"MD8;"] || [modeReply isEqualToString:@"MD9;"]) ? @"DIG-R" : @"MD?";
+                    [mainSelf updateFrequencyHz:actual mode:mode];
+                    [mainSelf appendToQSOConsole:[NSString stringWithFormat:@"[CAT] Radio dial is now %.6f MHz.", actual / 1e6]];
+                }
+            } else if (++mainSelf.frequencyPollFailures >= 2) {
+                if (mainSelf.audioEngine.isTransmitArmed) [mainSelf.audioEngine disarmTransmit];
+                if (mainSelf.autoEngine.isQSOActive) [mainSelf.autoEngine abortQSO];
+                if (mainSelf.autoEngine.isAutoCQActive) [mainSelf.autoEngine stopAutoCQ];
+                [mainSelf showRadioFrequencyUnavailable];
+                [mainSelf refreshTransmitButtonState];
+            }
+        });
+    });
+}
+
+- (void)requestRadioFrequencyHz:(uint64_t)requested {
+    if (self.audioEngine.isSimulationMode) {
+        [self updateFrequencyHz:requested mode:@"DIG · SIM"];
+        return;
+    }
+    if (self.audioEngine.isTransmitting || self.audioEngine.isTuning) {
+        [self appendToQSOConsole:@"[CAT] Stop the current transmission before changing bands."];
+        if (self.audioEngine.dialFrequencyHz)
+            [self updateFrequencyHz:self.audioEngine.dialFrequencyHz mode:@"DIG"];
+        return;
+    }
+    if (self.audioEngine.isTransmitArmed) [self.audioEngine disarmTransmit];
+    if (self.autoEngine.isQSOActive) [self.autoEngine abortQSO];
+    if (self.autoEngine.isAutoCQActive) [self.autoEngine stopAutoCQ];
+    NSUInteger generation = ++self.frequencyRequestGeneration;
+    self.frequencyOperationPending = YES;
+    self.bandPopup.enabled = NO;
+    self.modeSegment.enabled = NO;
+    self.armTxButton.enabled = NO;
+    self.dialFreqLabel.stringValue = @"Tuning radio…";
+    self.audioEngine.dialFrequencyHz = 0;
+    self.audioEngine.catDialAndModeVerified = NO;
+    if (!self.serialCommandSender || !self.catQueryHandler) {
+        self.frequencyOperationPending = NO;
+        self.bandPopup.enabled = YES;
+        self.modeSegment.enabled = YES;
+        self.armTxButton.enabled = YES;
+        [self showRadioFrequencyUnavailable];
+        [self appendToQSOConsole:@"[CAT] No radio control connection is available for band selection."];
+        return;
+    }
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        NSString *command = [NSString stringWithFormat:@"FA%011llu;", (unsigned long long)requested];
+        BOOL written = strongSelf.serialCommandSender(command);
+        uint64_t actual = 0;
+        for (NSUInteger attempt = 0; attempt < (written ? 4u : 1u); attempt++) {
+            if (written) [NSThread sleepForTimeInterval:0.18];
+            actual = TX500FrequencyFromCATReply(strongSelf.catQueryHandler(@"FA;", 0.8));
+            if (actual == requested) break;
+        }
+        BOOL frequencyVerified = written && actual == requested;
+        BOOL modeWritten = frequencyVerified && strongSelf.serialCommandSender(@"MD6;");
+        NSString *modeReply = modeWritten ? strongSelf.catQueryHandler(@"MD;", 0.8) : nil;
+        BOOL modeVerified = [modeReply isEqualToString:@"MD6;"];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) mainSelf = weakSelf;
+            if (!mainSelf || generation != mainSelf.frequencyRequestGeneration) return;
+            mainSelf.frequencyOperationPending = NO;
+            mainSelf.frequencyPollFailures = 0;
+            mainSelf.bandPopup.enabled = YES;
+            mainSelf.modeSegment.enabled = YES;
+            mainSelf.armTxButton.enabled = YES;
+            if (actual) {
+                [mainSelf updateFrequencyHz:actual mode:modeVerified ? @"DIG" : @"MD?"];
+                mainSelf.audioEngine.catDialAndModeVerified = frequencyVerified && modeVerified;
+            } else {
+                [mainSelf showRadioFrequencyUnavailable];
+            }
+            if (frequencyVerified && modeVerified) {
+                [mainSelf appendToQSOConsole:[NSString stringWithFormat:@"[CAT] Radio confirmed %.6f MHz DIG.", requested / 1e6]];
+            } else {
+                [mainSelf appendToQSOConsole:[NSString stringWithFormat:
+                    @"[CAT] Band change not confirmed. Requested %.6f MHz; radio %@. Check CAT port, RX state and radio mode.",
+                    requested / 1e6, actual ? [NSString stringWithFormat:@"reports %.6f MHz", actual / 1e6] : @"did not answer"]];
+                mainSelf.dialFreqLabel.textColor = [NSColor systemRedColor];
+                mainSelf.dialFreqLabel.toolTip = @"The requested frequency or DIG mode was not confirmed. The displayed value is the last CAT readback.";
+            }
+        });
+    });
 }
 
 #pragma mark - User Interface Construction
@@ -911,7 +1547,7 @@ static struct {
     topRibbon.cornerRadius = 8.0;
     [self.view addSubview:topRibbon];
 
-    self.startStopButton = [NSButton buttonWithTitle:@"Start FT8" target:self action:@selector(toggleMonitoring:)];
+    self.startStopButton = [TX500FT8StateButton buttonWithTitle:@"Start FT8" target:self action:@selector(toggleMonitoring:)];
     self.startStopButton.bezelStyle = NSBezelStyleRounded;
     [self.startStopButton.widthAnchor constraintEqualToConstant:82].active = YES;
 
@@ -968,9 +1604,32 @@ static struct {
     self.tuneButton.bezelStyle = NSBezelStyleInline;
     [self.tuneButton.widthAnchor constraintEqualToConstant:46].active = YES;
 
-    self.armTxButton = [NSButton buttonWithTitle:@"ENABLE TX" target:self action:@selector(toggleArmTx:)];
+    self.armTxButton = [TX500FT8StateButton buttonWithTitle:@"ENABLE TX" target:self action:@selector(toggleArmTx:)];
+    ((TX500FT8StateButton *)self.armTxButton).transmitControl = YES;
     self.armTxButton.bezelStyle = NSBezelStyleRounded;
     [self.armTxButton.widthAnchor constraintEqualToConstant:86].active = YES;
+
+    NSTextField *rfPowerLabel = [NSTextField labelWithString:@"RF:"];
+    self.rfPowerPopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+    [self.rfPowerPopup addItemsWithTitles:@[@"1 W", @"2 W", @"3 W", @"5 W", @"7 W", @"10 W"]];
+    [self.rfPowerPopup selectItemWithTitle:@"5 W"];
+    self.rfPowerPopup.controlSize = NSControlSizeSmall;
+    self.rfPowerPopup.target = self;
+    self.rfPowerPopup.action = @selector(rfPowerChanged:);
+    self.rfPowerPopup.toolTip = @"TX-500 RF output setpoint (CAT PC). Actual output also depends on DIG gain and audio level.";
+    [self.rfPowerPopup.widthAnchor constraintEqualToConstant:66].active = YES;
+
+    NSTextField *digGainLabel = [NSTextField labelWithString:@"DIG:"];
+    self.digGainSlider = [NSSlider sliderWithValue:20.0 minValue:0.0 maxValue:100.0 target:self action:@selector(digGainChanged:)];
+    self.digGainSlider.continuous = NO;
+    self.digGainSlider.numberOfTickMarks = 11;
+    self.digGainSlider.allowsTickMarkValuesOnly = NO;
+    self.digGainSlider.toolTip = @"Radio line-input gain (CAT MA). Raise gradually while Tune is active; keep ALC low for a clean FT8 signal.";
+    [self.digGainSlider.widthAnchor constraintEqualToConstant:78].active = YES;
+    self.digGainValueLabel = [NSTextField labelWithString:@"20"];
+    self.digGainValueLabel.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightSemibold];
+    self.digGainValueLabel.alignment = NSTextAlignmentRight;
+    [self.digGainValueLabel.widthAnchor constraintEqualToConstant:26].active = YES;
 
     // TX Slot Parity: Even / Auto / Odd
     self.txParitySegment = [NSSegmentedControl segmentedControlWithLabels:@[@"Even", @"Auto", @"Odd"]
@@ -985,6 +1644,14 @@ static struct {
     self.swrLabel = [NSTextField labelWithString:@"SWR: —"];
     self.swrLabel.font = [NSFont monospacedSystemFontOfSize:11.5 weight:NSFontWeightBold];
     self.swrLabel.textColor = [NSColor secondaryLabelColor];
+    self.alcLabel = [NSTextField labelWithString:@"ALC: —"];
+    self.alcLabel.font = [NSFont monospacedSystemFontOfSize:11.5 weight:NSFontWeightBold];
+    self.alcLabel.textColor = [NSColor secondaryLabelColor];
+    self.alcLabel.toolTip = @"Live CAT-confirmed TX-500 RM3 reading. 0/30 is valid and means ALC is not reducing drive; a dash means no valid reply.";
+    self.powerMeterLabel = [NSTextField labelWithString:@"OUT: —"];
+    self.powerMeterLabel.font = [NSFont monospacedSystemFontOfSize:11.5 weight:NSFontWeightSemibold];
+    self.powerMeterLabel.textColor = [NSColor secondaryLabelColor];
+    self.powerMeterLabel.toolTip = @"TX-500 live output meter in 0–30 radio display dots (SM0), not calibrated watts.";
 
     // Row 1: Session Control, Mode, Band, Dial VFO, Audio Interface & Audio Input VU Meter
     NSBox *sepRow1_1 = [NSBox new]; sepRow1_1.boxType = NSBoxSeparator; [sepRow1_1.heightAnchor constraintEqualToConstant:16].active = YES;
@@ -1020,7 +1687,9 @@ static struct {
     NSStackView *row2Stack = [NSStackView stackViewWithViews:@[
         rxLbl, self.rxFreqField, txLbl, self.txFreqField,
         self.lockFreqsButton, self.tuneButton, self.armTxButton, sepRow2_1,
-        self.txParitySegment, self.fakeItCheckbox, sepRow2_2, self.swrLabel, spacerR2
+        rfPowerLabel, self.rfPowerPopup, digGainLabel, self.digGainSlider, self.digGainValueLabel,
+        self.txParitySegment, self.fakeItCheckbox, sepRow2_2,
+        self.powerMeterLabel, self.alcLabel, self.swrLabel, spacerR2
     ]];
     row2Stack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     row2Stack.alignment = NSLayoutAttributeCenterY;
@@ -1228,7 +1897,7 @@ static struct {
     ]];
 
     // --- 5. Main Workstation Container (Split Left / Right) ---
-    self.workstationSplitView = [[NSSplitView alloc] initWithFrame:NSZeroRect];
+    self.workstationSplitView = [[TX500FT8WorkstationSplitView alloc] initWithFrame:NSZeroRect];
     self.workstationSplitView.vertical = YES;
     self.workstationSplitView.dividerStyle = NSSplitViewDividerStyleThin;
     self.workstationSplitView.translatesAutoresizingMaskIntoConstraints = NO;
@@ -1383,6 +2052,7 @@ static struct {
     NSScrollView *bandScrollView = [[NSScrollView alloc] initWithFrame:NSZeroRect];
     bandScrollView.translatesAutoresizingMaskIntoConstraints = NO;
     bandScrollView.hasVerticalScroller = YES;
+    bandScrollView.hasHorizontalScroller = YES;
     bandScrollView.borderType = NSNoBorder;
     bandScrollView.autohidesScrollers = YES;
 
@@ -1396,16 +2066,21 @@ static struct {
     self.bandActivityTableView.action = @selector(tableRowClicked:);
     self.bandActivityTableView.doubleAction = @selector(tableRowDoubleClicked:);
     self.bandActivityTableView.columnAutoresizingStyle = NSTableViewUniformColumnAutoresizingStyle;
+    self.bandActivityTableView.allowsColumnReordering = YES;
+    self.bandActivityTableView.allowsColumnResizing = YES;
+    self.bandActivityTableView.toolTip = @"Double-click a decoded CQ to call that station manually. An unfinished QSO is never interrupted.";
     [self setupTableContextMenu:self.bandActivityTableView];
 
-    [self addColumnToTable:self.bandActivityTableView title:@"Time" identifier:kColTime width:58];
-    [self addColumnToTable:self.bandActivityTableView title:@"dB" identifier:kColSNR width:34];
-    [self addColumnToTable:self.bandActivityTableView title:@"DT" identifier:kColDT width:34];
-    [self addColumnToTable:self.bandActivityTableView title:@"Freq" identifier:kColFreq width:44];
-    [self addColumnToTable:self.bandActivityTableView title:@"Message" identifier:kColMsg width:160];
-    [self addColumnToTable:self.bandActivityTableView title:@"Country" identifier:kColCountry width:110];
-    [self addColumnToTable:self.bandActivityTableView title:@"Grid" identifier:kColGrid width:48];
-    [self addColumnToTable:self.bandActivityTableView title:@"Dist" identifier:kColDistance width:50];
+    [self addColumnToTable:self.bandActivityTableView title:@"Time" identifier:kColTime width:72];
+    [self addColumnToTable:self.bandActivityTableView title:@"dB" identifier:kColSNR width:44];
+    [self addColumnToTable:self.bandActivityTableView title:@"DT" identifier:kColDT width:48];
+    [self addColumnToTable:self.bandActivityTableView title:@"Freq" identifier:kColFreq width:58];
+    [self addColumnToTable:self.bandActivityTableView title:@"Message" identifier:kColMsg width:180];
+    [self addColumnToTable:self.bandActivityTableView title:@"Country" identifier:kColCountry width:120];
+    [self addColumnToTable:self.bandActivityTableView title:@"Grid" identifier:kColGrid width:58];
+    [self addColumnToTable:self.bandActivityTableView title:@"Dist" identifier:kColDistance width:70];
+    self.bandActivityTableView.autosaveName = @"TX500.FT8.BandActivity.Columns.v2";
+    self.bandActivityTableView.autosaveTableColumns = YES;
     bandScrollView.documentView = self.bandActivityTableView;
     [bandBox.contentView addSubview:bandScrollView];
 
@@ -1436,6 +2111,7 @@ static struct {
     NSScrollView *rxScrollView = [[NSScrollView alloc] initWithFrame:NSZeroRect];
     rxScrollView.translatesAutoresizingMaskIntoConstraints = NO;
     rxScrollView.hasVerticalScroller = YES;
+    rxScrollView.hasHorizontalScroller = YES;
     rxScrollView.borderType = NSNoBorder;
     rxScrollView.autohidesScrollers = YES;
 
@@ -1447,13 +2123,18 @@ static struct {
     self.rxFreqTableView.target = self;
     self.rxFreqTableView.action = @selector(tableRowClicked:);
     self.rxFreqTableView.doubleAction = @selector(tableRowDoubleClicked:);
+    self.rxFreqTableView.toolTip = @"Double-click a decoded station to begin a manual QSO. An unfinished QSO remains locked.";
     self.rxFreqTableView.columnAutoresizingStyle = NSTableViewUniformColumnAutoresizingStyle;
+    self.rxFreqTableView.allowsColumnReordering = YES;
+    self.rxFreqTableView.allowsColumnResizing = YES;
     [self setupTableContextMenu:self.rxFreqTableView];
 
-    [self addColumnToTable:self.rxFreqTableView title:@"Time" identifier:kColTime width:58];
-    [self addColumnToTable:self.rxFreqTableView title:@"dB" identifier:kColSNR width:34];
-    [self addColumnToTable:self.rxFreqTableView title:@"Freq" identifier:kColFreq width:44];
-    [self addColumnToTable:self.rxFreqTableView title:@"Message" identifier:kColMsg width:160];
+    [self addColumnToTable:self.rxFreqTableView title:@"Time" identifier:kColTime width:72];
+    [self addColumnToTable:self.rxFreqTableView title:@"dB" identifier:kColSNR width:44];
+    [self addColumnToTable:self.rxFreqTableView title:@"Freq" identifier:kColFreq width:58];
+    [self addColumnToTable:self.rxFreqTableView title:@"Message" identifier:kColMsg width:180];
+    self.rxFreqTableView.autosaveName = @"TX500.FT8.RXFrequency.Columns.v2";
+    self.rxFreqTableView.autosaveTableColumns = YES;
     rxScrollView.documentView = self.rxFreqTableView;
     [rxBox.contentView addSubview:rxScrollView];
 
@@ -1668,9 +2349,13 @@ static struct {
     [self.workstationSplitView setHoldingPriority:NSLayoutPriorityDefaultHigh forSubviewAtIndex:1];
 
     // --- 6. Bottom Status Bar ---
-    self.sessionLogCountLabel = [NSTextField labelWithString:@"Session QSOs: 0"];
-    self.sessionLogCountLabel.font = [NSFont systemFontOfSize:11.0 weight:NSFontWeightBold];
-    self.sessionLogCountLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    self.sessionLogCountButton = [NSButton buttonWithTitle:@"Successful QSOs: 0  ›" target:self action:@selector(showSessionLogClicked:)];
+    self.sessionLogCountButton.bezelStyle = NSBezelStyleInline;
+    self.sessionLogCountButton.bordered = NO;
+    self.sessionLogCountButton.font = [NSFont systemFontOfSize:11.0 weight:NSFontWeightBold];
+    self.sessionLogCountButton.contentTintColor = [NSColor controlAccentColor];
+    self.sessionLogCountButton.toolTip = @"Open all saved FT8 / FT4 contacts";
+    self.sessionLogCountButton.translatesAutoresizingMaskIntoConstraints = NO;
 
     self.openLogsButton = [NSButton buttonWithTitle:@"Open Logs Folder" target:self action:@selector(openLogsFolderClicked:)];
     self.openLogsButton.bezelStyle = NSBezelStyleRounded;
@@ -1680,8 +2365,9 @@ static struct {
     self.exportADIFButton.bezelStyle = NSBezelStyleRounded;
     self.exportADIFButton.translatesAutoresizingMaskIntoConstraints = NO;
 
-    self.clearLogButton = [NSButton buttonWithTitle:@"Clear Log" target:self action:@selector(clearLogClicked:)];
+    self.clearLogButton = [NSButton buttonWithTitle:@"Clear Session" target:self action:@selector(clearLogClicked:)];
     self.clearLogButton.bezelStyle = NSBezelStyleRounded;
+    self.clearLogButton.toolTip = @"Clear this run's temporary contact list; saved Logbook contacts are retained";
     self.clearLogButton.translatesAutoresizingMaskIntoConstraints = NO;
 
     NSView *bottomSpacer = [NSView new];
@@ -1689,7 +2375,7 @@ static struct {
     [bottomSpacer setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
 
     NSStackView *bottomStack = [NSStackView stackViewWithViews:@[
-        self.sessionLogCountLabel, bottomSpacer, self.openLogsButton, self.exportADIFButton, self.clearLogButton
+        self.sessionLogCountButton, bottomSpacer, self.openLogsButton, self.exportADIFButton, self.clearLogButton
     ]];
     bottomStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     bottomStack.alignment = NSLayoutAttributeCenterY;
@@ -1742,7 +2428,11 @@ static struct {
     NSTableColumn *col = [[NSTableColumn alloc] initWithIdentifier:ident];
     col.title = title;
     col.width = w;
-    col.minWidth = w * 0.7;
+    NSDictionary<NSString *, NSNumber *> *minimumWidths = @{
+        kColTime: @64, kColSNR: @40, kColDT: @44, kColFreq: @52,
+        kColMsg: @120, kColCountry: @80, kColGrid: @46, kColDistance: @55
+    };
+    col.minWidth = minimumWidths[ident] ? minimumWidths[ident].doubleValue : w * 0.7;
     col.resizingMask = NSTableColumnAutoresizingMask | NSTableColumnUserResizingMask;
     [table addTableColumn:col];
 }
@@ -1763,14 +2453,7 @@ static struct {
     NSString *band = self.bandPopup.titleOfSelectedItem;
     if (band.length > 0) {
         uint64_t freq = [self defaultFrequencyForBand:band protocol:self.protocol];
-        if (freq > 0) {
-            self.audioEngine.dialFrequencyHz = freq;
-            [self updateFrequencyHz:freq mode:@"DIG"];
-            if (self.serialCommandSender) {
-                self.serialCommandSender([NSString stringWithFormat:@"FA%011llu;", (unsigned long long)freq]);
-                self.serialCommandSender(@"MD6;");
-            }
-        }
+        if (freq > 0) [self requestRadioFrequencyHz:freq];
     }
 }
 
@@ -1788,16 +2471,27 @@ static struct {
     [[NSUserDefaults standardUserDefaults] synchronize];
 
     if (enabled) {
+        ++self.frequencyRequestGeneration;
+        self.frequencyOperationPending = NO;
+        uint64_t simulatedHz = [self defaultFrequencyForBand:self.bandPopup.titleOfSelectedItem ?: @"20m" protocol:self.protocol];
+        [self updateFrequencyHz:simulatedHz mode:@"DIG · SIM"];
         [self appendToQSOConsole:@"⚠️ [Simulation Mode] Activated: Synthetic FT8 signals generated. Physical RF transmission is INHIBITED for bench testing."];
         if (self.allDecodes.count == 0) {
             [self.audioEngine injectSimulatedBandActivity];
         }
     } else {
+        [self refreshRadioFrequency];
         [self appendToQSOConsole:@"✓ [Live Radio Mode] Monitoring live audio. Hardware RTS & CAT PTT are ACTIVE for connected TX-500."];
         [self.allDecodes removeAllObjects];
         [self applyTableFilters];
     }
     [self updateLiveCycleStatusBannerWithSlotSec:self.audioEngine.currentSlotSecond parity:self.audioEngine.currentSlotParity];
+}
+
+- (void)startSimulationPreview {
+    [self setSimulationEnabled:YES];
+    [self startStation];
+    if (self.audioEngine.isMonitoring) [self toggleArmTx:nil];
 }
 
 - (void)frequenciesEdited:(id)sender {
@@ -1826,6 +2520,10 @@ static struct {
 - (void)toggleTune:(id)sender {
     (void)sender;
     if ([self.tuneButton.title isEqualToString:@"Tune"]) {
+        if (!self.audioEngine.isSimulationMode && !self.audioEngine.catDialAndModeVerified) {
+            [self appendToQSOConsole:@"[Tune blocked] Confirm the radio frequency and DIG mode before transmitting."];
+            return;
+        }
         if (self.audioEngine.isSimulationMode) {
             [self appendToQSOConsole:@"⚠️ Note: 'Simulation Mode' is active. Tune tone is simulated (no RF sent to radio). Uncheck 'Simulation Mode' to key transmitter."];
         }
@@ -1839,33 +2537,40 @@ static struct {
 
 - (void)toggleArmTx:(id)sender {
     (void)sender;
-    if (self.audioEngine.isTransmitArmed) {
+    if (self.audioEngine.isTransmitArmed || self.autoEngine.isAutoCQActive ||
+        self.autoEngine.isAutoHunterActive || self.autoEngine.isQSOActive ||
+        self.audioEngine.isTransmitting) {
+        [self.autoEngine stopAutoCQ];
+        [self.autoEngine stopAutoHunter];
+        if (self.autoEngine.isQSOActive) [self.autoEngine abortQSO];
         [self.audioEngine disarmTransmit];
-        self.armTxButton.title = @"ENABLE TX";
-        self.armTxButton.bezelColor = nil;
-        if (self.autoEngine.qsoPhase == TX500FT8QSOPhaseCallingCQ) {
-            [self.autoEngine setCallingCQState:NO];
-        }
+        [self refreshTransmitButtonState];
     } else {
+        if (!self.audioEngine.isSimulationMode && !self.audioEngine.catDialAndModeVerified) {
+            [self appendToQSOConsole:@"[TX blocked] Radio frequency or DIG mode is unverified. Check CAT and select the band again."];
+            return;
+        }
         if (self.audioEngine.isSimulationMode) {
             [self appendToQSOConsole:@"⚠️ Note: 'Simulation Mode' is active. Transmit will be simulated and will NOT key your radio. Uncheck 'Simulation Mode' to transmit on the air."];
         }
 
-        // Arm transmit with currently selected or active message
+        if (!self.audioEngine.isMonitoring) [self startStation];
+        if (!self.audioEngine.isMonitoring) {
+            [self appendToQSOConsole:@"[TX blocked] Start FT8 monitoring and select working audio devices first."];
+            return;
+        }
+
+        // The main Enable TX control calls CQ when there is no active DX QSO.
+        // A populated DX field alone must not silently select Tx 1.
         NSString *msg = nil;
-        if (self.autoEngine.isQSOActive) {
+        if (self.autoEngine.isQSOActive && self.autoEngine.activeDXCall.length > 0) {
             NSInteger phase = (NSInteger)self.autoEngine.qsoPhase;
             if (phase >= 1 && phase <= 6 && self.txMessageLabels.count >= (NSUInteger)phase) {
                 msg = self.txMessageLabels[phase - 1].stringValue;
             }
         }
-        if (!msg || msg.length == 0 || [msg isEqualToString:@"-"] || [msg containsString:@"<DX>"] || [msg hasPrefix:@" "]) {
-            if (self.dxCallField.stringValue.length > 0 && self.txMessageLabels.count >= 1) {
-                msg = self.txMessageLabels[0].stringValue;
-            } else if (self.txMessageLabels.count >= 6) {
-                msg = self.txMessageLabels[5].stringValue; // Tx 6: CQ MyCall MyGrid
-            }
-        }
+        if ((!msg || msg.length == 0) && self.txMessageLabels.count >= 6)
+            msg = self.txMessageLabels[5].stringValue; // Tx 6: CQ MyCall MyGrid
         if (!msg || msg.length == 0 || [msg isEqualToString:@"-"] || [msg containsString:@"<DX>"] || [msg hasPrefix:@" "]) {
             NSString *myCall = self.myCallField.stringValue.length > 0 ? self.myCallField.stringValue.uppercaseString : @"EP2AES";
             NSString *myGrid = self.myGridField.stringValue.length > 0 ? self.myGridField.stringValue.uppercaseString : @"KM35";
@@ -1879,12 +2584,16 @@ static struct {
         else if (seg == 2) parity = TX500FT8SlotParityOdd;
         else parity = TX500FT8SlotParityAuto;
 
-        [self.audioEngine armTransmitWithText:msg parity:parity];
-        self.armTxButton.title = @"ARMED (TX)";
-        self.armTxButton.bezelColor = [NSColor colorWithCalibratedRed:0.8 green:0.2 blue:0.2 alpha:1.0];
-        if ([msg hasPrefix:@"CQ"]) {
-            [self.autoEngine setCallingCQState:YES];
+        if ([msg.uppercaseString hasPrefix:@"CQ "]) {
+            if (![self.autoEngine startCQWithText:msg parity:parity limit:0]) {
+                [self appendToQSOConsole:@"[CQ] Could not arm the repeat cycle; check FT8 monitoring and audio devices."];
+                return;
+            }
+            [self appendToQSOConsole:@"[CQ] Repeats on the selected even or odd slot until a caller answers or you press STOP CQ."];
+        } else {
+            [self.audioEngine armTransmitWithText:msg parity:parity];
         }
+        [self refreshTransmitButtonState];
     }
 }
 
@@ -1899,6 +2608,8 @@ static struct {
         else if (seg == 2) parity = TX500FT8SlotParityOdd;
         else parity = TX500FT8SlotParityAuto;
         [self.audioEngine armTransmitWithText:currentMsg parity:parity];
+        if (self.autoEngine.isAutoCQActive) self.audioEngine.repeatArmedTransmission = YES;
+        [self refreshTransmitButtonState];
     }
 }
 
@@ -1906,11 +2617,11 @@ static struct {
     (void)sender;
     if (self.autoEngine.isAutoCQActive) {
         [self.autoEngine stopAutoCQ];
-        self.autoCQButton.title = @"Auto-CQ";
-        self.armTxButton.state = NSControlStateValueOff;
-        self.armTxButton.title = @"ENABLE TX";
-        self.armTxButton.bezelColor = nil;
     } else {
+        if (!self.audioEngine.isSimulationMode && !self.audioEngine.catDialAndModeVerified) {
+            [self appendToQSOConsole:@"[Auto-CQ] Confirm the radio frequency and DIG mode before starting CQ."];
+            return;
+        }
         if (self.autoEngine.isAutoHunterActive) {
             [self.autoEngine stopAutoHunter];
             self.autoHunterButton.title = @"Auto-Hunter";
@@ -1918,12 +2629,18 @@ static struct {
         if (!self.audioEngine.isMonitoring) {
             [self startStation];
         }
+        if (!self.audioEngine.isMonitoring) {
+            [self appendToQSOConsole:@"[Auto-CQ] Monitoring could not start; CQ remains off."];
+            return;
+        }
         [self.autoEngine startAutoCQWithLimit:self.autoCQStepper.integerValue];
-        self.autoCQButton.title = @"Stop CQ";
-        self.armTxButton.state = NSControlStateValueOn;
-        self.armTxButton.title = @"ARMED (TX)";
-        self.armTxButton.bezelColor = [NSColor colorWithCalibratedRed:0.8 green:0.2 blue:0.2 alpha:1.0];
+        if (!self.autoEngine.isAutoCQActive) {
+            [self appendToQSOConsole:@"[Auto-CQ] Could not arm CQ; see the diagnostic log."];
+            [self refreshTransmitButtonState];
+            return;
+        }
     }
+    [self refreshTransmitButtonState];
 }
 
 - (void)autoCQStepperChanged:(id)sender {
@@ -1937,9 +2654,6 @@ static struct {
     if (self.autoEngine.isAutoHunterActive) {
         [self.autoEngine stopAutoHunter];
         self.autoHunterButton.title = @"Auto-Hunter";
-        self.armTxButton.state = NSControlStateValueOff;
-        self.armTxButton.title = @"ENABLE TX";
-        self.armTxButton.bezelColor = nil;
     } else {
         if (self.autoEngine.isAutoCQActive) {
             [self.autoEngine stopAutoCQ];
@@ -1950,12 +2664,8 @@ static struct {
         }
         [self.autoEngine startAutoHunter];
         self.autoHunterButton.title = @"Stop Hunter";
-        if (self.audioEngine.isTransmitArmed) {
-            self.armTxButton.state = NSControlStateValueOn;
-            self.armTxButton.title = @"ARMED (TX)";
-            self.armTxButton.bezelColor = [NSColor colorWithCalibratedRed:0.8 green:0.2 blue:0.2 alpha:1.0];
-        }
     }
+    [self refreshTransmitButtonState];
 }
 
 - (void)hunterCriteriaChanged:(id)sender {
@@ -2076,7 +2786,10 @@ static struct {
 
 - (void)sendPSKReporterSpots:(NSArray<TX500FT8Message *> *)messages {
     if(!self.pskReporterEnabled || self.audioEngine.isSimulationMode) return;
-    NSDictionary *receiver=@{@"call":self.audioEngine.myCallsign ?: @"",@"grid":self.audioEngine.myGrid ?: @"",@"antenna":[NSUserDefaults.standardUserDefaults stringForKey:@"TX500_StationAntenna"] ?: @""};
+    NSDictionary *receiver=@{@"call":self.audioEngine.myCallsign ?: @"",
+                             @"grid":self.audioEngine.myGrid ?: @"",
+                             @"antenna":[NSUserDefaults.standardUserDefaults stringForKey:@"TX500_StationAntenna"] ?: @"",
+                             @"rig":@"Lab599 TX-500"};
     uint64_t dial=self.audioEngine.dialFrequencyHz;
     NSString *mode=self.protocol==TX500_FT8_PROTOCOL_FT4 ? @"FT4" : @"FT8";
     for(TX500FT8Message *m in messages) {
@@ -2197,7 +2910,42 @@ static struct {
     engageItem.target = self;
     [menu addItem:engageItem];
 
+    [menu addItem:[NSMenuItem separatorItem]];
+    NSMenuItem *resetColumnsItem = [[NSMenuItem alloc] initWithTitle:@"Reset Column Layout" action:@selector(resetColumnLayout:) keyEquivalent:@""];
+    resetColumnsItem.target = self;
+    resetColumnsItem.representedObject = table;
+    [menu addItem:resetColumnsItem];
+
     table.menu = menu;
+
+    NSMenu *headerMenu = [[NSMenu alloc] initWithTitle:@"Columns"];
+    NSMenuItem *headerResetItem = [[NSMenuItem alloc] initWithTitle:@"Reset Column Layout" action:@selector(resetColumnLayout:) keyEquivalent:@""];
+    headerResetItem.target = self;
+    headerResetItem.representedObject = table;
+    [headerMenu addItem:headerResetItem];
+    table.headerView.menu = headerMenu;
+}
+
+- (void)resetColumnLayout:(NSMenuItem *)sender {
+    NSTableView *table = [sender.representedObject isKindOfClass:NSTableView.class] ? sender.representedObject : nil;
+    if (!table) return;
+
+    NSArray<NSString *> *order = (table == self.bandActivityTableView)
+        ? @[kColTime, kColSNR, kColDT, kColFreq, kColMsg, kColCountry, kColGrid, kColDistance]
+        : @[kColTime, kColSNR, kColFreq, kColMsg];
+    NSDictionary<NSString *, NSNumber *> *widths = @{
+        kColTime: @72, kColSNR: @44, kColDT: @48, kColFreq: @58,
+        kColMsg: @180, kColCountry: @120, kColGrid: @58, kColDistance: @70
+    };
+
+    for (NSInteger destination = 0; destination < (NSInteger)order.count; destination++) {
+        NSString *identifier = order[destination];
+        NSInteger source = [table columnWithIdentifier:identifier];
+        if (source >= 0 && source != destination) [table moveColumn:source toColumn:destination];
+        NSTableColumn *column = [table tableColumnWithIdentifier:identifier];
+        if (column) column.width = widths[identifier].doubleValue;
+    }
+    [table tile];
 }
 
 - (TX500FT8Message *)messageForMenuAction:(id)sender {
@@ -2241,8 +2989,31 @@ static struct {
         self.dxCallField.stringValue = m.callerCall ?: @"";
         self.dxGridField.stringValue = m.grid ?: @"";
         [self dxCallEdited:nil];
-        [self.autoEngine engageStation:m];
+        [self manuallyEngageMessage:m];
     }
+}
+
+- (void)manuallyEngageMessage:(TX500FT8Message *)message {
+    if (!message || message.isMyTransmission || message.callerCall.length == 0) return;
+    if (self.autoEngine.isQSOActive && self.autoEngine.activeDXCall.length > 0) {
+        [self appendToQSOConsole:[NSString stringWithFormat:
+            @"[Manual Call] %@ was not selected because the QSO with %@ is still in progress.",
+            message.callerCall, self.autoEngine.activeDXCall]];
+        return;
+    }
+
+    // A deliberate table action takes ownership from autonomous calling, but
+    // never interrupts an unfinished contact (guarded above).
+    if (self.autoEngine.isAutoCQActive) [self.autoEngine stopAutoCQ];
+    if (self.autoEngine.isAutoHunterActive) [self.autoEngine stopAutoHunter];
+    if (!self.audioEngine.isMonitoring) [self startStation];
+    [self.autoEngine engageStation:message];
+    [self refreshTransmitButtonState];
+
+    NSString *kind = message.isCQ ? @"CQ" : @"decoded station";
+    [self appendToQSOConsole:[NSString stringWithFormat:
+        @"[Manual Call] Double-clicked %@ from %@ at %.0f Hz; Tx 1 armed on the opposite slot.",
+        message.callerCall, kind, message.freqHz]];
 }
 
 #pragma mark - QSO Auto-Logging Dialog / Sheet
@@ -2314,6 +3085,12 @@ static struct {
                 if (savedGrid.length >= 4) {
                     [self.workedGrids addObject:savedGrid];
                 }
+                qso.callsign = savedCall;
+                qso.grid = savedGrid;
+                qso.rstSent = rstSentField.stringValue;
+                qso.rstRcvd = rstRcvdField.stringValue;
+                qso.band = bandField.stringValue;
+                [self.autoEngine logCompletedQSOToADIF:qso];
                 [self saveWorkedStationHistory];
                 [self appendToQSOConsole:[NSString stringWithFormat:@"★ QSO WITH %@ CONFIRMED & ARCHIVED TO ADIF LOGBOOK.", savedCall]];
                 [self applyTableFilters];
@@ -2338,6 +3115,314 @@ static struct {
     [[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:dir]];
 }
 
+- (void)showSessionLogClicked:(id)sender {
+    (void)sender;
+    if (!self.sessionLogWindow) {
+        NSPanel *panel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 1220, 680)
+                                                      styleMask:(NSWindowStyleMaskTitled |
+                                                                 NSWindowStyleMaskClosable |
+                                                                 NSWindowStyleMaskResizable)
+                                                        backing:NSBackingStoreBuffered
+                                                          defer:NO];
+        panel.title = @"Digital Contacts · FT8 / FT4 Logbook";
+        panel.minSize = NSMakeSize(900, 540);
+        panel.releasedWhenClosed = NO;
+        panel.collectionBehavior = NSWindowCollectionBehaviorFullScreenAuxiliary;
+
+        NSView *content = panel.contentView;
+        NSVisualEffectView *toolbar = [[NSVisualEffectView alloc] initWithFrame:NSZeroRect];
+        toolbar.translatesAutoresizingMaskIntoConstraints = NO;
+        toolbar.material = NSVisualEffectMaterialHeaderView;
+        toolbar.blendingMode = NSVisualEffectBlendingModeWithinWindow;
+        toolbar.state = NSVisualEffectStateFollowsWindowActiveState;
+        [content addSubview:toolbar];
+
+        NSTextField *heading = [NSTextField labelWithString:@"Successful Digital Contacts"];
+        heading.translatesAutoresizingMaskIntoConstraints = NO;
+        heading.font = [NSFont systemFontOfSize:17 weight:NSFontWeightSemibold];
+        [toolbar addSubview:heading];
+
+        self.sessionLogSummaryLabel = [NSTextField labelWithString:@"Loading logbook…"];
+        self.sessionLogSummaryLabel.translatesAutoresizingMaskIntoConstraints = NO;
+        self.sessionLogSummaryLabel.textColor = NSColor.secondaryLabelColor;
+        self.sessionLogSummaryLabel.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
+        [toolbar addSubview:self.sessionLogSummaryLabel];
+
+        self.sessionLogSearchField = [[NSSearchField alloc] initWithFrame:NSZeroRect];
+        self.sessionLogSearchField.translatesAutoresizingMaskIntoConstraints = NO;
+        self.sessionLogSearchField.placeholderString = @"Search call, grid, country, name or notes";
+        self.sessionLogSearchField.delegate = (id<NSSearchFieldDelegate>)self;
+        [toolbar addSubview:self.sessionLogSearchField];
+
+        self.sessionLogModeFilter = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+        self.sessionLogModeFilter.translatesAutoresizingMaskIntoConstraints = NO;
+        [self.sessionLogModeFilter addItemsWithTitles:@[@"FT8 + FT4", @"FT8", @"FT4"]];
+        self.sessionLogModeFilter.target = self;
+        self.sessionLogModeFilter.action = @selector(sessionLogFilterChanged:);
+        [toolbar addSubview:self.sessionLogModeFilter];
+
+        NSButton *refresh = [NSButton buttonWithTitle:@"Refresh" target:self action:@selector(sessionLogFilterChanged:)];
+        refresh.translatesAutoresizingMaskIntoConstraints = NO;
+        refresh.bezelStyle = NSBezelStyleRounded;
+        [toolbar addSubview:refresh];
+
+        NSTableView *table = [[NSTableView alloc] initWithFrame:NSZeroRect];
+        table.dataSource = self;
+        table.delegate = self;
+        table.rowHeight = 24.0;
+        table.usesAlternatingRowBackgroundColors = YES;
+        table.allowsColumnReordering = YES;
+        table.allowsColumnResizing = YES;
+        table.allowsMultipleSelection = NO;
+        table.columnAutoresizingStyle = NSTableViewNoColumnAutoresizing;
+        table.headerView = [[NSTableHeaderView alloc] initWithFrame:NSZeroRect];
+
+        NSArray<NSArray<NSString *> *> *columns = @[
+            @[@"qsoDate", @"Date", @"92"],
+            @[@"qsoTime", @"UTC", @"70"],
+            @[@"qsoCall", @"Callsign", @"92"],
+            @[@"qsoBand", @"Band", @"58"],
+            @[@"qsoFreq", @"Frequency", @"92"],
+            @[@"qsoMode", @"Mode", @"58"],
+            @[@"qsoSent", @"Sent", @"58"],
+            @[@"qsoRcvd", @"Rcvd", @"58"],
+            @[@"qsoGrid", @"Grid", @"72"],
+            @[@"qsoCountry", @"Country", @"145"],
+            @[@"qsoName", @"Name", @"150"],
+            @[@"qsoPower", @"Power", @"62"],
+            @[@"qsoNotes", @"Notes", @"220"]
+        ];
+        for (NSArray<NSString *> *spec in columns) {
+            NSTableColumn *column = [[NSTableColumn alloc] initWithIdentifier:spec[0]];
+            column.title = spec[1];
+            column.width = spec[2].doubleValue;
+            column.minWidth = 45.0;
+            column.resizingMask = NSTableColumnUserResizingMask | NSTableColumnAutoresizingMask;
+            [table addTableColumn:column];
+        }
+
+        NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSZeroRect];
+        scroll.translatesAutoresizingMaskIntoConstraints = NO;
+        scroll.hasVerticalScroller = YES;
+        scroll.hasHorizontalScroller = YES;
+        scroll.autohidesScrollers = YES;
+        scroll.borderType = NSBezelBorder;
+        scroll.documentView = table;
+        [content addSubview:scroll];
+
+        NSBox *editor = [[NSBox alloc] initWithFrame:NSZeroRect];
+        editor.translatesAutoresizingMaskIntoConstraints = NO;
+        editor.boxType = NSBoxCustom;
+        editor.cornerRadius = 8;
+        editor.borderWidth = 1;
+        editor.borderColor = [NSColor.separatorColor colorWithAlphaComponent:0.7];
+        editor.fillColor = [NSColor.controlBackgroundColor colorWithAlphaComponent:0.78];
+        [content addSubview:editor];
+
+        NSTextField *(^makeField)(void) = ^NSTextField *{
+            NSTextField *field = [[NSTextField alloc] initWithFrame:NSZeroRect];
+            field.translatesAutoresizingMaskIntoConstraints = NO;
+            field.font = [NSFont systemFontOfSize:12];
+            return field;
+        };
+        NSTextField *(^makeCaption)(NSString *) = ^NSTextField *(NSString *title) {
+            NSTextField *label = [NSTextField labelWithString:title];
+            label.font = [NSFont systemFontOfSize:11 weight:NSFontWeightSemibold];
+            label.textColor = NSColor.secondaryLabelColor;
+            return label;
+        };
+        self.sessionLogCallField = makeField();
+        self.sessionLogNameField = makeField();
+        self.sessionLogGridField = makeField();
+        self.sessionLogCountryField = makeField();
+        self.sessionLogQTHField = makeField();
+        self.sessionLogSentField = makeField();
+        self.sessionLogRcvdField = makeField();
+        self.sessionLogPowerField = makeField();
+        self.sessionLogNotesField = makeField();
+
+        NSGridView *grid = [NSGridView gridViewWithViews:@[
+            @[makeCaption(@"Callsign"), self.sessionLogCallField, makeCaption(@"Name"), self.sessionLogNameField],
+            @[makeCaption(@"Grid"), self.sessionLogGridField, makeCaption(@"Country"), self.sessionLogCountryField],
+            @[makeCaption(@"QTH"), self.sessionLogQTHField, makeCaption(@"Power (W)"), self.sessionLogPowerField],
+            @[makeCaption(@"Sent"), self.sessionLogSentField, makeCaption(@"Received"), self.sessionLogRcvdField],
+            @[makeCaption(@"Notes"), self.sessionLogNotesField, [NSView new], [NSView new]]
+        ]];
+        grid.translatesAutoresizingMaskIntoConstraints = NO;
+        grid.rowSpacing = 7;
+        grid.columnSpacing = 8;
+        [grid mergeCellsInHorizontalRange:NSMakeRange(1, 3) verticalRange:NSMakeRange(4, 1)];
+        [editor.contentView addSubview:grid];
+
+        NSButton *save = [NSButton buttonWithTitle:@"Save Contact Details" target:self action:@selector(saveSuccessfulContactDetails:)];
+        save.translatesAutoresizingMaskIntoConstraints = NO;
+        save.bezelStyle = NSBezelStyleRounded;
+        save.keyEquivalent = @"\r";
+        [editor.contentView addSubview:save];
+
+        self.sessionLogEditorStatusLabel = [NSTextField labelWithString:@"Select a contact to review or edit its details."];
+        self.sessionLogEditorStatusLabel.translatesAutoresizingMaskIntoConstraints = NO;
+        self.sessionLogEditorStatusLabel.textColor = NSColor.secondaryLabelColor;
+        self.sessionLogEditorStatusLabel.font = [NSFont systemFontOfSize:11];
+        [editor.contentView addSubview:self.sessionLogEditorStatusLabel];
+
+        [NSLayoutConstraint activateConstraints:@[
+            [toolbar.leadingAnchor constraintEqualToAnchor:content.leadingAnchor],
+            [toolbar.trailingAnchor constraintEqualToAnchor:content.trailingAnchor],
+            [toolbar.topAnchor constraintEqualToAnchor:content.topAnchor],
+            [toolbar.heightAnchor constraintEqualToConstant:64],
+            [heading.leadingAnchor constraintEqualToAnchor:toolbar.leadingAnchor constant:16],
+            [heading.topAnchor constraintEqualToAnchor:toolbar.topAnchor constant:9],
+            [self.sessionLogSummaryLabel.leadingAnchor constraintEqualToAnchor:heading.leadingAnchor],
+            [self.sessionLogSummaryLabel.topAnchor constraintEqualToAnchor:heading.bottomAnchor constant:2],
+            [refresh.trailingAnchor constraintEqualToAnchor:toolbar.trailingAnchor constant:-14],
+            [refresh.centerYAnchor constraintEqualToAnchor:toolbar.centerYAnchor],
+            [self.sessionLogModeFilter.trailingAnchor constraintEqualToAnchor:refresh.leadingAnchor constant:-8],
+            [self.sessionLogModeFilter.centerYAnchor constraintEqualToAnchor:toolbar.centerYAnchor],
+            [self.sessionLogModeFilter.widthAnchor constraintEqualToConstant:112],
+            [self.sessionLogSearchField.trailingAnchor constraintEqualToAnchor:self.sessionLogModeFilter.leadingAnchor constant:-8],
+            [self.sessionLogSearchField.centerYAnchor constraintEqualToAnchor:toolbar.centerYAnchor],
+            [self.sessionLogSearchField.widthAnchor constraintEqualToConstant:285],
+            [scroll.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:12],
+            [scroll.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-12],
+            [scroll.topAnchor constraintEqualToAnchor:toolbar.bottomAnchor constant:10],
+            [scroll.bottomAnchor constraintEqualToAnchor:editor.topAnchor constant:-10],
+            [editor.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:12],
+            [editor.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-12],
+            [editor.bottomAnchor constraintEqualToAnchor:content.bottomAnchor constant:-12],
+            [editor.heightAnchor constraintEqualToConstant:190],
+            [grid.leadingAnchor constraintEqualToAnchor:editor.contentView.leadingAnchor constant:12],
+            [grid.topAnchor constraintEqualToAnchor:editor.contentView.topAnchor constant:10],
+            [grid.trailingAnchor constraintEqualToAnchor:editor.contentView.trailingAnchor constant:-12],
+            [save.trailingAnchor constraintEqualToAnchor:editor.contentView.trailingAnchor constant:-12],
+            [save.bottomAnchor constraintEqualToAnchor:editor.contentView.bottomAnchor constant:-10],
+            [self.sessionLogEditorStatusLabel.leadingAnchor constraintEqualToAnchor:editor.contentView.leadingAnchor constant:12],
+            [self.sessionLogEditorStatusLabel.centerYAnchor constraintEqualToAnchor:save.centerYAnchor],
+            [self.sessionLogEditorStatusLabel.trailingAnchor constraintLessThanOrEqualToAnchor:save.leadingAnchor constant:-12]
+        ]];
+
+        self.sessionLogWindow = panel;
+        self.sessionLogTableView = table;
+    }
+
+    [self reloadSuccessfulContacts];
+    [self.sessionLogWindow center];
+    [self.sessionLogWindow makeKeyAndOrderFront:nil];
+    [NSApp activateIgnoringOtherApps:YES];
+}
+
+- (void)successfulLogbookDidChange:(NSNotification *)notification {
+    (void)notification;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [self reloadSuccessfulContacts];
+    });
+}
+
+- (void)sessionLogFilterChanged:(id)sender {
+    (void)sender;
+    [self reloadSuccessfulContacts];
+}
+
+- (void)controlTextDidChange:(NSNotification *)notification {
+    if (notification.object == self.sessionLogSearchField) {
+        [self reloadSuccessfulContacts];
+    }
+}
+
+- (void)reloadSuccessfulContacts {
+    NSString *query = self.sessionLogSearchField.stringValue;
+    NSString *mode = self.sessionLogModeFilter.selectedItem.title;
+    if (![mode isEqualToString:@"FT8"] && ![mode isEqualToString:@"FT4"]) mode = nil;
+
+    // Filter protocol locally because imported ADIF can represent FT4 as
+    // MODE=MFSK, SUBMODE=FT4 while locally logged contacts use MODE=FT4.
+    NSArray<TX500LogRecord *> *records = [[TX500LogbookManager sharedManager]
+        searchContactsWithQuery:(query.length > 0 ? query : nil) band:nil mode:nil];
+    NSMutableArray<TX500LogRecord *> *digital = [NSMutableArray array];
+    for (TX500LogRecord *record in records) {
+        NSString *recordMode = record.mode.uppercaseString;
+        NSString *submode = record.submode.uppercaseString;
+        BOOL isFT8 = [recordMode isEqualToString:@"FT8"] || [submode isEqualToString:@"FT8"];
+        BOOL isFT4 = [recordMode isEqualToString:@"FT4"] || [submode isEqualToString:@"FT4"];
+        if ((mode == nil && (isFT8 || isFT4)) ||
+            ([mode isEqualToString:@"FT8"] && isFT8) ||
+            ([mode isEqualToString:@"FT4"] && isFT4)) {
+            [digital addObject:record];
+        }
+    }
+    [self.successfulLogRecords setArray:digital];
+
+    NSUInteger totalDigital = 0;
+    for (TX500LogRecord *record in [[TX500LogbookManager sharedManager] allContacts]) {
+        NSString *recordMode = record.mode.uppercaseString;
+        NSString *submode = record.submode.uppercaseString;
+        if ([recordMode isEqualToString:@"FT8"] || [recordMode isEqualToString:@"FT4"] ||
+            [submode isEqualToString:@"FT8"] || [submode isEqualToString:@"FT4"]) totalDigital++;
+    }
+
+    self.sessionLogCountButton.title = [NSString stringWithFormat:@"Successful QSOs: %lu  ›", (unsigned long)totalDigital];
+    self.sessionLogCountButton.toolTip = @"Open the persistent FT8 / FT4 contact logbook";
+    [self.sessionLogTableView reloadData];
+    self.sessionLogSummaryLabel.stringValue = [NSString stringWithFormat:@"%lu shown · %lu saved in the persistent logbook",
+                                                (unsigned long)digital.count, (unsigned long)totalDigital];
+    self.sessionLogWindow.title = [NSString stringWithFormat:@"Digital Contacts · %lu saved", (unsigned long)totalDigital];
+}
+
+- (void)populateSuccessfulContactEditor {
+    NSInteger row = self.sessionLogTableView.selectedRow;
+    TX500LogRecord *record = (row >= 0 && row < (NSInteger)self.successfulLogRecords.count)
+        ? self.successfulLogRecords[(NSUInteger)row] : nil;
+    NSArray<NSTextField *> *fields = @[
+        self.sessionLogCallField, self.sessionLogNameField, self.sessionLogGridField,
+        self.sessionLogCountryField, self.sessionLogQTHField, self.sessionLogSentField,
+        self.sessionLogRcvdField, self.sessionLogPowerField, self.sessionLogNotesField
+    ];
+    if (!record) {
+        for (NSTextField *field in fields) field.stringValue = @"";
+        self.sessionLogEditorStatusLabel.stringValue = @"Select a contact to review or edit its details.";
+        return;
+    }
+    self.sessionLogCallField.stringValue = record.callsign ?: @"";
+    self.sessionLogNameField.stringValue = record.name ?: @"";
+    self.sessionLogGridField.stringValue = record.grid ?: @"";
+    self.sessionLogCountryField.stringValue = record.country ?: @"";
+    self.sessionLogQTHField.stringValue = record.qth ?: @"";
+    self.sessionLogSentField.stringValue = record.rstSent ?: @"";
+    self.sessionLogRcvdField.stringValue = record.rstRcvd ?: @"";
+    self.sessionLogPowerField.stringValue = record.powerWatts > 0 ? [NSString stringWithFormat:@"%ld", (long)record.powerWatts] : @"";
+    self.sessionLogNotesField.stringValue = record.notes ?: @"";
+    self.sessionLogEditorStatusLabel.stringValue = [NSString stringWithFormat:@"Editing %@ · %@ %@ UTC",
+                                                     record.callsign, record.formattedDate, record.formattedTime];
+}
+
+- (void)saveSuccessfulContactDetails:(id)sender {
+    (void)sender;
+    NSInteger row = self.sessionLogTableView.selectedRow;
+    if (row < 0 || row >= (NSInteger)self.successfulLogRecords.count) {
+        self.sessionLogEditorStatusLabel.stringValue = @"Select a contact before saving.";
+        NSBeep();
+        return;
+    }
+    TX500LogRecord *record = [self.successfulLogRecords[(NSUInteger)row] copy];
+    record.callsign = self.sessionLogCallField.stringValue.uppercaseString;
+    record.name = self.sessionLogNameField.stringValue;
+    record.grid = self.sessionLogGridField.stringValue.uppercaseString;
+    record.country = self.sessionLogCountryField.stringValue;
+    record.qth = self.sessionLogQTHField.stringValue;
+    record.rstSent = self.sessionLogSentField.stringValue;
+    record.rstRcvd = self.sessionLogRcvdField.stringValue;
+    record.powerWatts = MAX(0, self.sessionLogPowerField.integerValue);
+    record.notes = self.sessionLogNotesField.stringValue;
+    NSError *error = nil;
+    if ([[TX500LogbookManager sharedManager] saveContact:record error:&error]) {
+        self.sessionLogEditorStatusLabel.stringValue = [NSString stringWithFormat:@"Saved %@ to the persistent logbook.", record.callsign];
+        [self appendToQSOConsole:[NSString stringWithFormat:@"[Logbook] Updated details for %@.", record.callsign]];
+    } else {
+        self.sessionLogEditorStatusLabel.stringValue = [NSString stringWithFormat:@"Could not save: %@", error.localizedDescription ?: @"Unknown error"];
+        NSBeep();
+    }
+}
+
 - (void)dxCallEdited:(id)sender {
     (void)sender;
     NSString *dx = [self.dxCallField.stringValue uppercaseString];
@@ -2352,14 +3437,24 @@ static struct {
 - (void)txMatrixButtonClicked:(NSButton *)sender {
     NSInteger phase = sender.tag;
     if (phase >= 1 && phase <= 6) {
+        if (!self.audioEngine.isSimulationMode && !self.audioEngine.catDialAndModeVerified) {
+            [self appendToQSOConsole:@"[TX blocked] Confirm the radio frequency and DIG mode before transmitting."];
+            return;
+        }
+        if (!self.audioEngine.isMonitoring) [self startStation];
+        if (!self.audioEngine.isMonitoring) return;
         NSString *msg = self.txMessageLabels[phase - 1].stringValue;
         if (msg.length > 0 && ![msg isEqualToString:@"-"]) {
-            [self.audioEngine armTransmitWithText:msg parity:TX500FT8SlotParityAuto];
-            self.armTxButton.title = @"ARMED (TX)";
-            self.armTxButton.bezelColor = [NSColor colorWithCalibratedRed:0.8 green:0.2 blue:0.2 alpha:1.0];
             if (phase == 6) {
-                [self.autoEngine setCallingCQState:YES];
+                NSInteger seg = self.txParitySegment.selectedSegment;
+                TX500FT8SlotParity parity = seg == 0 ? TX500FT8SlotParityEven :
+                                             seg == 2 ? TX500FT8SlotParityOdd : TX500FT8SlotParityAuto;
+                if (![self.autoEngine startCQWithText:msg parity:parity limit:0]) return;
+            } else {
+                if (self.autoEngine.isAutoCQActive) [self.autoEngine stopAutoCQ];
+                [self.audioEngine armTransmitWithText:msg parity:TX500FT8SlotParityAuto];
             }
+            [self refreshTransmitButtonState];
         }
     }
 }
@@ -2373,8 +3468,7 @@ static struct {
     (void)sender;
     [self.autoEngine abortQSO];
     [self.audioEngine disarmTransmit];
-    self.armTxButton.title = @"ENABLE TX";
-    self.armTxButton.bezelColor = nil;
+    [self refreshTransmitButtonState];
 }
 
 - (void)updateTransmitMatrixLabels {
@@ -2453,6 +3547,10 @@ static struct {
 
     if (selectedItem) {
         [self.audioInPopup selectItem:selectedItem];
+    } else if(self.audioEngine.preserveDeviceSelection) {
+        NSMenuItem *missing=[[NSMenuItem alloc] initWithTitle:@"Station input unavailable — select device" action:nil keyEquivalent:@""];
+        missing.representedObject=self.audioEngine.selectedInputDeviceUID ?: @"";
+        [menu insertItem:missing atIndex:0]; [self.audioInPopup selectItem:missing];
     } else if (menu.itemArray.count > 0) {
         NSMenuItem *firstReal = menu.itemArray.firstObject;
         [self.audioInPopup selectItem:firstReal];
@@ -2507,6 +3605,7 @@ static struct {
 - (void)toggleWideTables:(id)sender {
     (void)sender;
     self.isWideTables = !self.isWideTables;
+    ((TX500FT8WorkstationSplitView *)self.workstationSplitView).suppressDivider = self.isWideTables;
     self.rightBox.hidden = self.isWideTables;
     self.wideTablesBtn.title = self.isWideTables ? @"⤡ Split View" : @"⤢ Wide View";
     self.wideTablesBtn.state = self.isWideTables ? NSControlStateValueOn : NSControlStateValueOff;
@@ -2900,6 +3999,7 @@ static struct {
 }
 
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView {
+    if (tableView == self.sessionLogTableView) return self.successfulLogRecords.count;
     if (tableView == self.rxFreqTableView) {
         return self.rxFreqDecodes.count;
     }
@@ -2907,6 +4007,7 @@ static struct {
 }
 
 - (NSTableRowView *)tableView:(NSTableView *)tableView rowViewForRow:(NSInteger)row {
+    if (tableView == self.sessionLogTableView) return nil;
     static NSString *const kRowIdent = @"FT8TableRowView";
     FT8TableRowView *rowView = [tableView makeViewWithIdentifier:kRowIdent owner:self];
     if (!rowView) {
@@ -2927,6 +4028,45 @@ static struct {
 }
 
 - (NSView *)tableView:(NSTableView *)tableView viewForTableColumn:(NSTableColumn *)tableColumn row:(NSInteger)row {
+    if (tableView == self.sessionLogTableView) {
+        if (row < 0 || row >= (NSInteger)self.successfulLogRecords.count) return nil;
+        TX500LogRecord *qso = self.successfulLogRecords[(NSUInteger)row];
+        NSString *ident = tableColumn.identifier;
+        NSView *reused = [tableView makeViewWithIdentifier:ident owner:self];
+        NSTableCellView *cell = [reused isKindOfClass:NSTableCellView.class] ? (NSTableCellView *)reused : nil;
+        if (!cell) {
+            cell = [[NSTableCellView alloc] initWithFrame:NSZeroRect];
+            cell.identifier = ident;
+            NSTextField *field = [NSTextField labelWithString:@""];
+            field.font = [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular];
+            field.lineBreakMode = NSLineBreakByTruncatingTail;
+            field.translatesAutoresizingMaskIntoConstraints = NO;
+            cell.textField = field;
+            [cell addSubview:field];
+            [NSLayoutConstraint activateConstraints:@[
+                [field.leadingAnchor constraintEqualToAnchor:cell.leadingAnchor constant:5],
+                [field.trailingAnchor constraintEqualToAnchor:cell.trailingAnchor constant:-5],
+                [field.centerYAnchor constraintEqualToAnchor:cell.centerYAnchor]
+            ]];
+        }
+        if (![cell.textField isKindOfClass:NSTextField.class]) return nil;
+        NSString *value = @"";
+        if ([ident isEqualToString:@"qsoDate"]) value = qso.formattedDate ?: @"";
+        else if ([ident isEqualToString:@"qsoTime"]) value = qso.formattedTime ?: @"";
+        else if ([ident isEqualToString:@"qsoCall"]) value = qso.callsign ?: @"";
+        else if ([ident isEqualToString:@"qsoGrid"]) value = qso.grid ?: @"—";
+        else if ([ident isEqualToString:@"qsoBand"]) value = qso.band ?: @"";
+        else if ([ident isEqualToString:@"qsoMode"]) value = qso.mode ?: @"FT8";
+        else if ([ident isEqualToString:@"qsoSent"]) value = qso.rstSent ?: @"";
+        else if ([ident isEqualToString:@"qsoRcvd"]) value = qso.rstRcvd ?: @"";
+        else if ([ident isEqualToString:@"qsoCountry"]) value = qso.country ?: @"";
+        else if ([ident isEqualToString:@"qsoFreq"]) value = qso.frequencyHz > 0 ? [NSString stringWithFormat:@"%.6f", qso.frequencyMHz] : @"—";
+        else if ([ident isEqualToString:@"qsoName"]) value = qso.name ?: @"";
+        else if ([ident isEqualToString:@"qsoPower"]) value = qso.powerWatts > 0 ? [NSString stringWithFormat:@"%ld W", (long)qso.powerWatts] : @"—";
+        else if ([ident isEqualToString:@"qsoNotes"]) value = qso.notes ?: @"";
+        cell.textField.stringValue = value;
+        return cell;
+    }
     NSArray<TX500FT8Message *> *list = (tableView == self.rxFreqTableView) ? self.rxFreqDecodes : self.filteredDecodes;
     if (row < 0 || row >= (NSInteger)list.count) return nil;
     TX500FT8Message *m = list[row];
@@ -3041,7 +4181,10 @@ static struct {
 
 
 - (void)tableViewSelectionDidChange:(NSNotification *)notification {
-    (void)notification;
+    if (notification.object == self.sessionLogTableView) {
+        [self populateSuccessfulContactEditor];
+        return;
+    }
     [self.bandActivityTableView reloadData];
     [self.rxFreqTableView reloadData];
 }
@@ -3087,6 +4230,11 @@ static struct {
             } else {
                 self.cycleDetailLabel.stringValue = @"Listening · TX armed for next cycle";
             }
+            self.cycleDetailLabel.textColor = [NSColor colorWithCalibratedRed:0.80 green:0.45 blue:0.0 alpha:1.0];
+        } else if (self.autoEngine.isQSOActive) {
+            self.cycleDetailLabel.stringValue = [NSString stringWithFormat:
+                @"Listening · TX enabled; QSO locked to %@ and waiting for its reply",
+                self.autoEngine.activeDXCall.length > 0 ? self.autoEngine.activeDXCall : @"current station"];
             self.cycleDetailLabel.textColor = [NSColor colorWithCalibratedRed:0.80 green:0.45 blue:0.0 alpha:1.0];
         } else {
             if (self.lastDecodesCount > 0) {
@@ -3158,12 +4306,14 @@ static struct {
 - (void)tableRowDoubleClicked:(id)sender {
     TX500FT8Message *target = nil;
     if (sender == self.rxFreqTableView) {
-        NSInteger row = self.rxFreqTableView.selectedRow;
+        NSInteger row = self.rxFreqTableView.clickedRow >= 0 ?
+            self.rxFreqTableView.clickedRow : self.rxFreqTableView.selectedRow;
         if (row >= 0 && row < (NSInteger)self.rxFreqDecodes.count) {
             target = self.rxFreqDecodes[row];
         }
     } else {
-        NSInteger row = self.bandActivityTableView.selectedRow;
+        NSInteger row = self.bandActivityTableView.clickedRow >= 0 ?
+            self.bandActivityTableView.clickedRow : self.bandActivityTableView.selectedRow;
         if (row >= 0 && row < (NSInteger)self.filteredDecodes.count) {
             target = self.filteredDecodes[row];
         }
@@ -3173,14 +4323,9 @@ static struct {
     // Single-click setup first (frequencies, callsign, alternate parity)
     [self tableRowClicked:sender];
 
-    // Immediate auto-copilot engagement
-    if (!self.audioEngine.isMonitoring) {
-        [self startStation];
-    }
-    [self.autoEngine engageStation:target];
-    self.armTxButton.state = NSControlStateValueOn;
-    self.armTxButton.title = @"ARMED (TX)";
-    self.armTxButton.bezelColor = [NSColor colorWithCalibratedRed:0.8 green:0.2 blue:0.2 alpha:1.0];
+    // Immediate manual engagement; autonomous CQ/Hunter yields to the
+    // operator, while an unfinished QSO remains protected by its lock.
+    [self manuallyEngageMessage:target];
 }
 
 #pragma mark - QSO Console & ADIF Export
@@ -3231,7 +4376,7 @@ static struct {
 - (void)clearLogClicked:(id)sender {
     (void)sender;
     [self.autoEngine clearSessionLog];
-    self.sessionLogCountLabel.stringValue = @"Session QSOs: 0";
+    [self reloadSuccessfulContacts];
 }
 
 @end

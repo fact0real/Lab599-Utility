@@ -8,6 +8,8 @@
 #import "TX500CWStationController.h"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
+static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
+
 @interface TX500CWStationController ()
 
 @property (nonatomic, strong, readwrite) NSView *view;
@@ -18,6 +20,7 @@
 // UI Controls - Top Bar
 @property (nonatomic, strong) NSButton *startStopDecoderButton;
 @property (nonatomic, strong) NSPopUpButton *audioDevicePopup;
+@property (nonatomic) BOOL hasLocalAudioSelection;
 @property (nonatomic, strong) NSButton *simulationCheckbox;
 @property (nonatomic, strong) NSSlider *pitchSlider;
 @property (nonatomic, strong) NSTextField *pitchValueLabel;
@@ -65,6 +68,14 @@
     self = [super init];
     if (self) {
         _decoder = [[TX500CWAudioDecoder alloc] init];
+        NSString *savedInput = [NSUserDefaults.standardUserDefaults stringForKey:CWInputPreferenceKey];
+        _hasLocalAudioSelection = savedInput.length > 0;
+        if (_hasLocalAudioSelection) {
+            _decoder.selectedAudioDeviceUID = savedInput;
+        } else if (@available(macOS 14.2, *)) {
+            _decoder.selectedAudioDeviceUID = TX500CWSystemAudioDeviceUID;
+        }
+        _decoder.preserveDeviceSelection = YES;
         _keyer = [[TX500CWKeyer alloc] init];
         _assistant = [[TX500CWQSOAssistant alloc] init];
         _macroButtons = [NSMutableArray array];
@@ -185,6 +196,7 @@
     // Keyer -> Serial Sender & Log
     self.keyer.serialCommandSender = ^BOOL(NSString *catCommand) {
         typeof(self) strongSelf = weakSelf;
+        if (strongSelf.decoder.isSimulationActive) return YES;
         if (strongSelf && strongSelf.serialCommandSender) {
             return strongSelf.serialCommandSender(catCommand);
         }
@@ -304,7 +316,7 @@
     [self.startStopDecoderButton.widthAnchor constraintEqualToConstant:130].active = YES;
 
     self.audioDevicePopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
-    self.audioDevicePopup.toolTip = @"System Audio (Direct) receives audio playing on this Mac. Microphone and USB inputs receive external audio. macOS may ask for system audio recording permission.";
+    self.audioDevicePopup.toolTip = @"Choose and save the CW input here; Station Profiles are not required. System Audio (Direct) receives audio playing on this Mac. Microphone and USB inputs receive external audio. macOS may ask for recording permission.";
     self.audioDevicePopup.controlSize = NSControlSizeSmall;
     self.audioDevicePopup.font = [NSFont systemFontOfSize:11];
     self.audioDevicePopup.target = self;
@@ -867,6 +879,7 @@
 }
 
 - (void)toggleSimulation:(NSButton *)sender {
+    [self.keyer stopAutoCQ]; [self.keyer abortTransmission];
     if (sender.state == NSControlStateValueOn) {
         [self.decoder startSimulation];
         self.startStopDecoderButton.title = @"STOP SIMULATION";
@@ -904,14 +917,6 @@
     if (!self.audioDevicePopup) return;
     [self.audioDevicePopup removeAllItems];
     NSArray<NSDictionary<NSString *, NSString *> *> *devices = self.decoder.availableAudioInputDevices;
-    if (devices.count == 0) {
-        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:@"Default Audio Input" action:nil keyEquivalent:@""];
-        item.representedObject = @"default";
-        [self.audioDevicePopup.menu addItem:item];
-        [self.audioDevicePopup selectItem:item];
-        self.audioDevicePopup.enabled = YES;
-        return;
-    }
     self.audioDevicePopup.enabled = YES;
     NSMenuItem *selectedItem = nil;
     for (NSInteger i = 0; i < (NSInteger)devices.count; i++) {
@@ -934,9 +939,23 @@
 
     if (selectedItem) {
         [self.audioDevicePopup selectItem:selectedItem];
-    } else if (self.audioDevicePopup.numberOfItems > 0) {
-        [self.audioDevicePopup selectItemAtIndex:0];
+    } else {
+        // Never display a different device as selected when the saved route is absent.
+        NSString *title = self.decoder.selectedAudioDeviceUID.length ? @"Selected input unavailable — choose input…" : @"Choose audio input…";
+        NSMenuItem *missing = [[NSMenuItem alloc] initWithTitle:title action:nil keyEquivalent:@""];
+        missing.enabled = NO;
+        [self.audioDevicePopup.menu insertItem:missing atIndex:0];
+        [self.audioDevicePopup selectItem:missing];
     }
+}
+
+- (void)applyStationInputDeviceUID:(NSString *)uid {
+    if (self.hasLocalAudioSelection || !uid.length || self.decoder.isListening || self.decoder.isSimulationActive) return;
+    // Cancel any pending permission request before replacing an inherited route.
+    if (![self.decoder.selectedAudioDeviceUID isEqualToString:uid]) [self.decoder stopListening];
+    self.decoder.preserveDeviceSelection = YES;
+    self.decoder.selectedAudioDeviceUID = uid;
+    [self updateAudioDeviceMenu];
 }
 
 - (void)refreshAudioDevicesClicked:(id)sender {
@@ -948,24 +967,28 @@
     }
 }
 
-- (void)audioDeviceChanged:(NSPopUpButton *)sender {
-    NSMenuItem *item = sender.selectedItem;
+- (void)audioDeviceChanged:(id)sender {
+    NSMenuItem *item = [sender isKindOfClass:NSMenuItem.class] ? sender :
+        ([sender isKindOfClass:NSPopUpButton.class] ? [sender selectedItem] : nil);
     if (!item) return;
     NSString *uid = item.representedObject;
     if ([uid isEqualToString:@"__REFRESH__"]) {
         [self refreshAudioDevicesClicked:sender];
         return;
     }
-    if (uid) {
+    if (uid.length) {
+        BOOL changed = ![self.decoder.selectedAudioDeviceUID isEqualToString:uid];
+        BOOL resume = self.decoder.isListening && !self.decoder.isSimulationActive;
+        if (changed && !self.decoder.isSimulationActive) [self.decoder stopListening];
+        self.hasLocalAudioSelection = YES;
+        self.decoder.preserveDeviceSelection = YES;
         self.decoder.selectedAudioDeviceUID = uid;
+        [NSUserDefaults.standardUserDefaults setObject:uid forKey:CWInputPreferenceKey];
         if (self.logHandler) {
             self.logHandler([NSString stringWithFormat:@"Selected audio input device: %@", item.title]);
         }
-        if (self.decoder.isListening) {
-            // Re-open audio stream on the newly selected hardware device
-            [self.decoder stopListening];
-            [self.decoder startListening];
-        }
+        if (changed && resume) [self.decoder startListening];
+        [self updateAudioDeviceMenu];
     }
 }
 

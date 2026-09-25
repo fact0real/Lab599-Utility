@@ -388,7 +388,7 @@ static OSStatus CWAudioHardwareDevicesListener(AudioObjectID inObjectID,
         if ([d[@"isUSB"] isEqualToString:@"YES"] && !bestUSBUID) bestUSBUID = d[@"uid"];
     }
 
-    if (!selectedValid || !self.selectedAudioDeviceUID) {
+    if (!self.preserveDeviceSelection && (!selectedValid || !self.selectedAudioDeviceUID)) {
         if (bestAD508UID) {
             self.selectedAudioDeviceUID = bestAD508UID;
         } else if (bestUSBUID) {
@@ -562,6 +562,7 @@ static OSStatus CWSystemAudioFormatChanged(AudioObjectID object, UInt32 count,
 
 - (void)startListening {
     if (self.isListening) return;
+    if(self.preserveDeviceSelection && !self.selectedAudioDeviceUID.length) { [self reportAudioError:@"Choose an audio input next to Start Decoder in CW Station."]; return; }
     NSUInteger request = ++_listeningRequest;
 
     [self stopSimulation];
@@ -622,7 +623,9 @@ static OSStatus CWSystemAudioFormatChanged(AudioObjectID object, UInt32 count,
         CFStringRef uid = (__bridge CFStringRef)self.selectedAudioDeviceUID;
         OSStatus devErr = AudioQueueSetProperty(queue, kAudioQueueProperty_CurrentDevice, &uid, sizeof(uid));
         if (devErr != noErr) {
-            NSLog(@"TX500CWAudioDecoder: AudioQueueSetProperty CurrentDevice failed (%d) for UID '%@'", (int)devErr, self.selectedAudioDeviceUID);
+            AudioQueueDispose(queue,true);
+            [self reportAudioError:@"The selected audio input is unavailable. Choose a connected input or System Audio (Direct) next to Start Decoder in CW Station."];
+            return;
         }
     }
 

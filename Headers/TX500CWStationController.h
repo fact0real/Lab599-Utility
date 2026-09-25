@@ -34,6 +34,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)startStation;
 - (void)stopStation;
 - (void)updateFrequencyHz:(uint64_t)freqHz mode:(NSString *)mode;
+/// Supplies a default only until the operator chooses an input in CW Station.
+- (void)applyStationInputDeviceUID:(nullable NSString *)uid;
 
 @end
 

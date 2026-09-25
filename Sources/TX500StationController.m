@@ -5,6 +5,23 @@ static NSStackView *Stack(NSArray *a,BOOL vertical,CGFloat gap) { NSStackView *s
 static NSView *Spacer(void) { NSView *s=[NSView new]; s.translatesAutoresizingMaskIntoConstraints=NO; [s setContentHuggingPriority:1 forOrientation:NSLayoutConstraintOrientationHorizontal]; return s; }
 static NSBox *Card(NSView *content) { NSBox *b=[NSBox new]; b.boxType=NSBoxCustom; b.titlePosition=NSNoTitle; b.cornerRadius=12; b.fillColor=NSColor.controlBackgroundColor; b.borderColor=NSColor.separatorColor; b.borderWidth=1; b.translatesAutoresizingMaskIntoConstraints=NO; [b.contentView addSubview:content]; [NSLayoutConstraint activateConstraints:@[[content.leadingAnchor constraintEqualToAnchor:b.contentView.leadingAnchor constant:14],[content.trailingAnchor constraintEqualToAnchor:b.contentView.trailingAnchor constant:-14],[content.topAnchor constraintEqualToAnchor:b.contentView.topAnchor constant:14],[content.bottomAnchor constraintEqualToAnchor:b.contentView.bottomAnchor constant:-14]]]; return b; }
 static NSString *Mode(NSInteger m) { return @{@1:@"LSB",@2:@"USB",@3:@"CW",@4:@"FM",@5:@"AM",@6:@"DIG",@7:@"CW-R",@9:@"DIG-L"}[@(m)] ?: @"—"; }
+@interface TXStationTableScroll : NSScrollView
+@end
+@implementation TXStationTableScroll
+- (void)layout {
+    [super layout];
+    NSTableView *table=(NSTableView *)self.documentView;
+    CGFloat width=self.contentView.bounds.size.width;
+    if(width<=0) return;
+    NSDictionary *weights=@{@"favorite":@0.055,@"name":@0.31,@"hz":@0.22,@"mode":@0.13,@"tags":@0.285,@"range":@0.37,@"usage":@0.43,@"bandwidth":@0.20};
+    for(NSTableColumn *column in table.tableColumns) {
+        CGFloat usable=MAX(1,width-32-table.intercellSpacing.width*table.tableColumns.count);
+        CGFloat target=usable*[weights[column.identifier] doubleValue];
+        if(fabs(column.width-target)>0.5) column.width=target;
+    }
+    NSRect frame=table.frame; frame.size.width=width; table.frame=frame;
+}
+@end
 @interface TXStationBandView : NSView
 @property(nonatomic,copy) NSArray *segments;
 @property(nonatomic) uint64_t low,high,frequency;
@@ -35,9 +52,9 @@ static NSString *Mode(NSInteger m) { return @{@1:@"LSB",@2:@"USB",@3:@"CW",@4:@"
 - (NSTextField *)field:(NSString *)placeholder { NSTextField *f=[NSTextField textFieldWithString:@""]; f.placeholderString=placeholder; f.translatesAutoresizingMaskIntoConstraints=NO; [f.widthAnchor constraintGreaterThanOrEqualToConstant:100].active=YES; return f; }
 - (NSPopUpButton *)menu:(NSArray *)items { NSPopUpButton *p=[[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO]; p.translatesAutoresizingMaskIntoConstraints=NO; [p addItemsWithTitles:items]; [p setContentCompressionResistancePriority:1 forOrientation:NSLayoutConstraintOrientationHorizontal]; return p; }
 - (NSView *)table:(NSTableView * __strong *)result columns:(NSArray *)columns height:(CGFloat)height {
-    NSTableView *t=[NSTableView new]; t.delegate=self; t.dataSource=self; t.rowHeight=34; t.style=NSTableViewStyleFullWidth; t.usesAlternatingRowBackgroundColors=YES; t.columnAutoresizingStyle=NSTableViewUniformColumnAutoresizingStyle;
+    NSTableView *t=[NSTableView new]; t.delegate=self; t.dataSource=self; t.rowHeight=34; t.style=NSTableViewStyleFullWidth; t.usesAlternatingRowBackgroundColors=YES; t.columnAutoresizingStyle=NSTableViewNoColumnAutoresizing;
     for(NSArray *def in columns) { NSTableColumn *c=[[NSTableColumn alloc] initWithIdentifier:def[0]]; c.title=def[1]; c.width=[def[2] doubleValue]; c.minWidth=25; [t addTableColumn:c]; }
-    NSScrollView *s=[NSScrollView new]; s.documentView=t; s.hasVerticalScroller=YES; s.autohidesScrollers=YES; s.translatesAutoresizingMaskIntoConstraints=NO; [s.heightAnchor constraintEqualToConstant:height].active=YES; *result=t; return s;
+    NSScrollView *s=[TXStationTableScroll new]; s.documentView=t; s.hasVerticalScroller=YES; s.autohidesScrollers=YES; s.translatesAutoresizingMaskIntoConstraints=NO; [s.heightAnchor constraintEqualToConstant:height].active=YES; *result=t; return s;
 }
 - (instancetype)init { if((self=[super init])) { _store=TX500StationStore.sharedStore; _worker=dispatch_queue_create("ir.factoreal.station.ui",DISPATCH_QUEUE_SERIAL); [self build];
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(changed:) name:TXStationStoreChanged object:nil]; [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(changed:) name:TXStationRadioChanged object:nil]; [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(changed:) name:TXPSKReporterChanged object:nil]; [self refresh]; } return self; }
@@ -79,7 +96,7 @@ static NSString *Mode(NSInteger m) { return @{@1:@"LSB",@2:@"USB",@3:@"CW",@4:@"
     _band=[self menu:@[@"160m",@"80m",@"60m",@"40m",@"30m",@"20m",@"17m",@"15m",@"12m",@"10m"]]; [_band selectItemAtIndex:5]; _band.target=self; _band.action=@selector(bandChanged:);
     _bandView=[TXStationBandView new]; _bandView.translatesAutoresizingMaskIntoConstraints=NO; [_bandView.heightAnchor constraintEqualToConstant:90].active=YES; [_bandView setAccessibilityLabel:@"Band plan segments. Select a segment to inspect it."];
     __weak typeof(self) weakSelf=self; _bandView.picked=^(NSDictionary *segment) { typeof(self) self=weakSelf; if(!self) return; NSUInteger i=[self->_segments indexOfObject:segment]; [self->_bandTable selectRowIndexes:[NSIndexSet indexSetWithIndex:i] byExtendingSelection:NO]; [self->_bandTable scrollRowToVisible:i]; };
-    NSView *table=[self table:&_bandTable columns:@[@[@"range",@"Frequency range · MHz",@190],@[@"usage",@"Recommended use",@270],@[@"bandwidth",@"Max bandwidth",@100]] height:230];
+    NSView *table=[self table:&_bandTable columns:@[@[@"range",@"Frequency range · MHz",@190],@[@"usage",@"Recommended use",@270],@[@"bandwidth",@"Max BW",@100]] height:230];
     _planInfo=Label(@"",11,NSFontWeightRegular); _planInfo.maximumNumberOfLines=4; _planInfo.lineBreakMode=NSLineBreakByWordWrapping;
     NSStackView *head=Stack(@[Label(@"BAND REFERENCE",11,NSFontWeightBold),Spacer(),_band,[self button:@"Official source" symbol:@"arrow.up.right" action:@selector(source:) ]],NO,10);
     NSStackView *body=Stack(@[head,_bandView,table,_planInfo],YES,12); for(NSView *v in body.arrangedSubviews) [v.widthAnchor constraintEqualToAnchor:body.widthAnchor].active=YES; [self bandChanged:nil]; return Card(body);
@@ -90,7 +107,7 @@ static NSString *Mode(NSInteger m) { return @{@1:@"LSB",@2:@"USB",@3:@"CW",@4:@"
     NSArray *defs=@[@[@"name",@"Profile name"],@[@"call",@"Station callsign"],@[@"operatorCall",@"Operator callsign"],@[@"grid",@"Maidenhead grid"],@[@"operatorName",@"Operator name"],@[@"country",@"Country"],@[@"city",@"City"],@[@"state",@"State / province"],@[@"county",@"County"],@[@"cqZone",@"CQ zone (1–40)"],@[@"ituZone",@"ITU zone (1–90)"],@[@"iota",@"IOTA reference"],@[@"sig",@"Activity (POTA, SOTA…)"],@[@"sigInfo",@"Activity reference"],@[@"rig",@"Radio"],@[@"antenna",@"Antenna"]];
     for(NSArray *d in defs) { NSTextField *f=[self field:d[1]]; _fields[d[0]]=f; [rows addObject:@[Label(d[1],11,NSFontWeightMedium),f]]; }
     _region=[self menu:@[@"1 · Europe / Africa / Middle East",@"2 · Americas",@"3 · Asia / Pacific"]]; [rows addObject:@[Label(@"IARU region",11,NSFontWeightMedium),_region]];
-    NSGridView *form=[NSGridView gridViewWithViews:rows]; form.translatesAutoresizingMaskIntoConstraints=NO; form.rowSpacing=8; form.columnSpacing=14; [form columnAtIndex:1].xPlacement=NSGridCellPlacementFill;
+    NSGridView *form=[NSGridView gridViewWithViews:rows]; form.translatesAutoresizingMaskIntoConstraints=NO; form.rowSpacing=8; form.columnSpacing=14; [form columnAtIndex:0].width=155; [form columnAtIndex:1].xPlacement=NSGridCellPlacementFill;
     for(NSArray *d in @[@[@"radioInput",@"Radio receive input"],@[@"radioOutput",@"Radio transmit output"],@[@"microphone",@"Your microphone"],@[@"headphones",@"Headphones"]]) { NSPopUpButton *m=[self menu:@[]]; _routeMenus[d[0]]=m; [form addRowWithViews:@[Label(d[1],11,NSFontWeightMedium),m]]; }
     NSStackView *head=Stack(@[_profileMenu,[self button:@"New profile" symbol:@"plus" action:@selector(newProfile:)],[self button:@"Remove" symbol:@"trash" action:@selector(removeProfile:)]],NO,8);
     NSStackView *buttons=Stack(@[[self button:@"Save & use profile" symbol:@"checkmark.circle" action:@selector(saveProfile:)],[self button:@"Refresh audio devices" symbol:@"arrow.clockwise" action:@selector(refreshRoutes:)]],NO,10);
@@ -104,21 +121,25 @@ static NSString *Mode(NSInteger m) { return @{@1:@"LSB",@2:@"USB",@3:@"CW",@4:@"
     NSTextField *note=Label(@"Reports are grouped every five minutes. Callsign, grid and antenna come from the active profile. Simulated decodes stay local.",11,NSFontWeightRegular); note.maximumNumberOfLines=3; note.lineBreakMode=NSLineBreakByWordWrapping;
     _shortcutFields=[NSMutableDictionary dictionary]; NSMutableArray *rows=[NSMutableArray array];
     for(NSArray *d in @[@[@"station",@"Open station"],@[@"read",@"Read radio"],@[@"favorite",@"Save current VFO"],@[@"voice",@"Open Voice Keyer"],@[@"cw",@"Open CW"],@[@"digital",@"Open FT8 / FT4"]]) { NSTextField *f=[self field:@"Key"]; f.stringValue=_store.shortcuts[d[0]] ?: @""; _shortcutFields[d[0]]=f; [rows addObject:@[Label(d[1],12,NSFontWeightMedium),Label(@"⌘⌥",13,NSFontWeightMedium),f]]; }
-    NSGridView *keys=[NSGridView gridViewWithViews:rows]; keys.translatesAutoresizingMaskIntoConstraints=NO; keys.rowSpacing=8; keys.columnSpacing=12;
-    NSStackView *body=Stack(@[Label(@"CONNECTION HEALTH",11,NSFontWeightBold),_health,Label(@"RECEPTION REPORTS",11,NSFontWeightBold),_reportEnabled,_reportStatus,note,Label(@"COMMAND SHORTCUTS",11,NSFontWeightBold),keys,[self button:@"Save shortcuts" symbol:@"keyboard" action:@selector(saveShortcuts:)],Label(@"Esc always stops station activity. Plain typing keys are reserved for text entry.",11,NSFontWeightRegular)],YES,14);
-    for(NSView *v in body.arrangedSubviews) [v.widthAnchor constraintEqualToAnchor:body.widthAnchor].active=YES; return Card(body);
+    NSGridView *keys=[NSGridView gridViewWithViews:rows]; keys.translatesAutoresizingMaskIntoConstraints=NO; keys.rowSpacing=8; keys.columnSpacing=12; [keys columnAtIndex:0].width=165; [keys columnAtIndex:1].width=30; [keys columnAtIndex:2].width=100;
+    NSButton *saveKeys=[self button:@"Save shortcuts" symbol:@"keyboard" action:@selector(saveShortcuts:)];
+    NSStackView *body=Stack(@[Label(@"CONNECTION HEALTH",11,NSFontWeightBold),_health,Label(@"RECEPTION REPORTS",11,NSFontWeightBold),_reportEnabled,_reportStatus,note,Label(@"COMMAND SHORTCUTS",11,NSFontWeightBold),keys,saveKeys,Label(@"Esc stops station activity in the main window. Plain typing keys are reserved for text entry.",11,NSFontWeightRegular)],YES,14);
+    for(NSView *v in body.arrangedSubviews) if(v!=keys && v!=saveKeys) [v.widthAnchor constraintEqualToAnchor:body.widthAnchor].active=YES; return Card(body);
 }
 - (void)tabChanged:(id)sender { (void)sender; _paneWidth.active=NO; for(NSView *v in _paneHost.arrangedSubviews.copy) { [_paneHost removeArrangedSubview:v]; [v removeFromSuperview]; } NSView *pane=_panes[_tabs.selectedSegment]; [_paneHost addArrangedSubview:pane]; _paneWidth=[pane.widthAnchor constraintEqualToAnchor:_paneHost.widthAnchor]; _paneWidth.active=YES; }
 - (void)changed:(NSNotification *)n { (void)n; [self refresh]; }
+- (BOOL)busy { return _busy; }
 - (void)activate { [self refresh]; [self loadProfile:_store.activeProfile]; }
 - (void)refresh {
-    NSDictionary *p=_store.activeProfile; _profileBadge.stringValue=[NSString stringWithFormat:@"%@  ·  %@",p[@"name"] ?: @"Station",p[@"call"] ?: @"Set callsign"];
+    NSDictionary *p=_store.activeProfile; _profileBadge.stringValue=[NSString stringWithFormat:@"%@  ·  %@",p[@"name"] ?: @"Station",[p[@"call"] length] ? p[@"call"] : @"Set callsign"];
     NSString *selected=_editingID; [_profileMenu removeAllItems]; for(NSDictionary *item in _store.profiles) { [_profileMenu addItemWithTitle:item[@"name"]]; _profileMenu.lastItem.representedObject=item[@"id"]; if([selected isEqual:item[@"id"]]) [_profileMenu selectItem:_profileMenu.lastItem]; }
     NSDictionary *s=self.core.snapshot; _vfo.stringValue=s[@"frequency"] ? [NSString stringWithFormat:@"%.6f MHz",[s[@"frequency"] doubleValue]/1e6] : @"— . ——— ———";
     _state.stringValue=s.count ? [NSString stringWithFormat:@"%@   •   %@   •   %@",Mode([s[@"mode"] integerValue]),[s[@"tx"] boolValue]?@"TX":@"RX",self.core.owner] : @"Read the radio to see its current frequency";
     _health.stringValue=[NSString stringWithFormat:@"%@\n%lu status reads  ·  %lu failures  ·  last %.0f ms",self.core.status ?: @"Disconnected",(unsigned long)self.core.queryCount,(unsigned long)self.core.failureCount,self.core.lastLatency];
     _reportStatus.stringValue=TX500PSKReporter.sharedReporter.status; _reportEnabled.state=TX500PSKReporter.sharedReporter.enabled?NSControlStateValueOn:NSControlStateValueOff;
-    NSString *q=_search.stringValue.lowercaseString; _filtered=[_store.frequencies filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(NSDictionary *f,NSDictionary *b){(void)b;return !q.length || [[NSString stringWithFormat:@"%@ %@ %.6f",f[@"name"],f[@"tags"],[f[@"hz"] doubleValue]/1e6].lowercaseString containsString:q];}]]; [_table reloadData]; [self bandChanged:nil];
+    NSString *q=_search.stringValue.lowercaseString; _filtered=[_store.frequencies filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(NSDictionary *f,NSDictionary *b){(void)b;return !q.length || [[NSString stringWithFormat:@"%@ %@ %.6f",f[@"name"],f[@"tags"],[f[@"hz"] doubleValue]/1e6].lowercaseString containsString:q];}]]; _table.delegate=nil; [_table reloadData];
+    if(_frequencyID) { NSUInteger row=[_filtered indexOfObjectPassingTest:^BOOL(NSDictionary *f,NSUInteger i,BOOL *stop){(void)i;(void)stop;return [f[@"id"] isEqual:self->_frequencyID];}]; if(row!=NSNotFound) [_table selectRowIndexes:[NSIndexSet indexSetWithIndex:row] byExtendingSelection:NO]; }
+    _table.delegate=self; [self bandChanged:nil];
     if(_store.loadError) _message.stringValue=_store.loadError.localizedDescription;
 }
 - (void)controlTextDidChange:(NSNotification *)n { if(n.object==_search) [self refresh]; }
@@ -131,21 +152,37 @@ static NSString *Mode(NSInteger m) { return @{@1:@"LSB",@2:@"USB",@3:@"CW",@4:@"
     else if([k isEqual:@"range"]) s=[NSString stringWithFormat:@"%.4f – %.4f",[d[@"low"] doubleValue]/1e6,[d[@"high"] doubleValue]/1e6];
     else if([k isEqual:@"bandwidth"]) s=[d[k] integerValue] ? [NSString stringWithFormat:@"%@ Hz",d[k]] : @"See source";
     else s=d[k] ?: @"";
-    NSTextField *v=Label(s,12,[k isEqual:@"name"]?NSFontWeightMedium:NSFontWeightRegular); v.lineBreakMode=NSLineBreakByTruncatingTail; v.toolTip=s; return v;
+    NSTableCellView *cell=[t makeViewWithIdentifier:k owner:self];
+    if(!cell) {
+        cell=[[NSTableCellView alloc] initWithFrame:NSZeroRect]; cell.identifier=k;
+        NSTextField *label=Label(@"",12,[k isEqual:@"name"]?NSFontWeightMedium:NSFontWeightRegular);
+        label.maximumNumberOfLines=1; label.lineBreakMode=NSLineBreakByTruncatingTail;
+        cell.textField=label; [cell addSubview:label];
+        // Let the row fill its height while the single-line label keeps its natural height.
+        [NSLayoutConstraint activateConstraints:@[
+            [label.leadingAnchor constraintEqualToAnchor:cell.leadingAnchor],
+            [label.trailingAnchor constraintEqualToAnchor:cell.trailingAnchor],
+            [label.centerYAnchor constraintEqualToAnchor:cell.centerYAnchor]
+        ]];
+    }
+    cell.textField.stringValue=s; cell.toolTip=s; return cell;
 }
 - (void)tableViewSelectionDidChange:(NSNotification *)n { if(n.object==_table && _table.selectedRow>=0 && _table.selectedRow<(NSInteger)_filtered.count) { NSDictionary *f=_filtered[_table.selectedRow]; _frequencyID=f[@"id"]; _entryName.stringValue=f[@"name"]; _frequency.stringValue=[NSString stringWithFormat:@"%.6f",[f[@"hz"] doubleValue]/1e6]; [_mode selectItemWithTitle:Mode([f[@"mode"] integerValue])]; _tags.stringValue=f[@"tags"] ?: @""; _favorite.state=[f[@"favorite"] boolValue]; } }
-- (void)message:(NSString *)text { _message.stringValue=text; }
+- (void)message:(NSString *)text { _message.stringValue=text; if(self.logHandler) self.logHandler([@"Station: " stringByAppendingString:text]); }
 - (void)performRadio:(BOOL)tune {
     if(_busy) return; uint64_t hz=0; if(tune && ![TX500StationStore parseMHz:_frequency.stringValue hertz:&hz]) { [self message:@"Enter a frequency in MHz from 0.5 to 56."]; return; }
     if(self.prepareControl && !self.prepareControl()) { [self message:@"Stop the active station before changing radio control."]; return; }
-    NSInteger modes[]={1,2,3,4,5,6,7,9}; NSInteger mode=modes[MAX(0,_mode.indexOfSelectedItem)]; _busy=YES; [self message:tune?@"Applying and reading back frequency / mode…":@"Reading radio status…"];
+    NSInteger modes[]={1,2,3,4,5,6,7,9}; NSInteger mode=modes[MAX(0,_mode.indexOfSelectedItem)]; _busy=YES; [self message:tune?@"Applying frequency, then mode; waiting for radio confirmation…":@"Reading radio status…"];
     dispatch_async(_worker, ^{ NSError *e=nil; BOOL ok=tune ? [self.core tune:hz mode:mode owner:@"Station" error:&e] : [self.core readState:&e]!=nil; dispatch_async(dispatch_get_main_queue(), ^{ self->_busy=NO; [self refresh]; [self message:ok ? (tune?@"Frequency and mode confirmed • receiving":@"Radio status verified") : e.localizedDescription ?: @"Radio not available"]; }); });
 }
 - (void)readRadio:(id)sender { (void)sender; [self performRadio:NO]; }
 - (void)tune:(id)sender { (void)sender; [self performRadio:YES]; }
 - (void)stop:(id)sender { (void)sender; if(self.commandHandler) self.commandHandler(@"stop"); }
 - (void)quick:(NSButton *)sender { [self runCommand:sender.identifier]; }
-- (void)runCommand:(NSString *)command { if([command isEqual:@"read"]) [self readRadio:nil]; else if([command isEqual:@"favorite"]) { NSDictionary *s=self.core.snapshot; if(!s[@"frequency"]) { [self message:@"Read the radio before saving its VFO."]; return; } [self newFrequency:nil]; _frequency.stringValue=[NSString stringWithFormat:@"%.6f",[s[@"frequency"] doubleValue]/1e6]; [_mode selectItemWithTitle:Mode([s[@"mode"] integerValue])]; _entryName.stringValue=@"My frequency"; _favorite.state=NSControlStateValueOn; _tabs.selectedSegment=0; [self tabChanged:nil]; [self.view.window makeFirstResponder:_entryName]; } else if(self.commandHandler) self.commandHandler(command); }
+- (void)runCommand:(NSString *)command {
+    NSDictionary *sections=@{@"frequencies":@0,@"bandplan":@1,@"profiles":@2,@"connections":@3};
+    if(sections[command]) { _tabs.selectedSegment=[sections[command] integerValue]; [self tabChanged:nil]; return; }
+    if([command isEqual:@"read"]) [self readRadio:nil]; else if([command isEqual:@"favorite"]) { NSDictionary *s=self.core.snapshot; if(!s[@"frequency"]) { [self message:@"Read the radio before saving its VFO."]; return; } [self newFrequency:nil]; _frequency.stringValue=[NSString stringWithFormat:@"%.6f",[s[@"frequency"] doubleValue]/1e6]; [_mode selectItemWithTitle:Mode([s[@"mode"] integerValue])]; _entryName.stringValue=@"My frequency"; _favorite.state=NSControlStateValueOn; _tabs.selectedSegment=0; [self tabChanged:nil]; [self.view.window makeFirstResponder:_entryName]; } else if(self.commandHandler) self.commandHandler(command); }
 - (void)newFrequency:(id)sender { (void)sender; _frequencyID=nil; [_table deselectAll:nil]; _entryName.stringValue=@""; _tags.stringValue=@""; _favorite.state=NSControlStateValueOn; }
 - (void)saveFrequency:(id)sender { (void)sender; uint64_t hz; if(![TX500StationStore parseMHz:_frequency.stringValue hertz:&hz]) { [self message:@"Enter a valid frequency in MHz."]; return; } NSInteger modes[]={1,2,3,4,5,6,7,9}; NSMutableDictionary *f=[@{@"name":_entryName.stringValue,@"hz":@(hz),@"mode":@(modes[MAX(0,_mode.indexOfSelectedItem)]),@"tags":_tags.stringValue,@"favorite":@(_favorite.state==NSControlStateValueOn)} mutableCopy]; if(_frequencyID) f[@"id"]=_frequencyID; NSError *e=nil; if([_store saveFrequency:f error:&e]) { [self message:@"Frequency saved on this Mac. Radio memories were not changed."]; _frequencyID=nil; } else [self message:e.localizedDescription]; }
 - (void)removeFrequency:(id)sender { (void)sender; if(!_frequencyID) return; NSError *e=nil; if([_store removeFrequency:_frequencyID error:&e]) { [self newFrequency:nil]; [self message:@"Frequency removed."]; } else [self message:e.localizedDescription]; }

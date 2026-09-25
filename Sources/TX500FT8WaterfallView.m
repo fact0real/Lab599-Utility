@@ -8,8 +8,8 @@
 #import "TX500FT8WaterfallView.h"
 #import <stdatomic.h>
 
-#define WF_WIDTH 256
-#define WF_HEIGHT 120
+#define WF_WIDTH 4096
+#define WF_HEIGHT 300
 #define RULER_HEIGHT 20.0
 
 @interface TX500FT8WaterfallView () {
@@ -267,14 +267,22 @@ static inline uint32_t ColorForMagnitude(float mag, TX500FT8Palette pal) {
 
         // Fill top row 0
         float gainVal = (self.gain > 0.05f) ? self.gain : 1.0f;
+        // Map Floor to a bounded black point. The former direct subtraction
+        // allowed a saved negative value to add 0.3 to every bin and turn
+        // ordinary receiver noise into a saturated white band.
+        float blackPoint = fmaxf(0.002f, 0.032f + self.contrastFloor * 0.10f);
         for (int x = 0; x < WF_WIDTH; x++) {
-            float sampleIdx = (float)x / (float)WF_WIDTH * (float)count;
-            int idx = (int)sampleIdx;
-            float rawMag = 0.0f;
-            if (idx < count) {
-                rawMag = magnitudes[idx];
+            float sourceStart = (float)x * (float)count / (float)WF_WIDTH;
+            float sourceEnd = (float)(x + 1) * (float)count / (float)WF_WIDTH;
+            int first = MIN((int)floorf(sourceStart), (int)count - 1);
+            int last = MIN(MAX(first, (int)ceilf(sourceEnd) - 1), (int)count - 1);
+            float rawMag = magnitudes[first];
+            // Max pooling preserves a narrow carrier when an upstream spectrum
+            // has more bins than the view. Interpolation would blur it.
+            for (int idx = first + 1; idx <= last; idx++) {
+                rawMag = fmaxf(rawMag, magnitudes[idx]);
             }
-            float scaledMag = fmaxf(0.0f, fminf(1.0f, (rawMag - self.contrastFloor) * gainVal));
+            float scaledMag = fmaxf(0.0f, fminf(1.0f, (rawMag - blackPoint) * gainVal * 1.35f));
             _pixelBuffer[x] = ColorForMagnitude(scaledMag, self.palette);
         }
     }
@@ -311,7 +319,9 @@ static inline uint32_t ColorForMagnitude(float mag, TX500FT8Palette pal) {
 
     if (imageRef && ctx) {
         CGContextSaveGState(ctx);
-        CGContextSetInterpolationQuality(ctx, kCGInterpolationHigh);
+        // Preserve individual spectral bins as precise tracks instead of
+        // smearing them into broad coloured clouds.
+        CGContextSetInterpolationQuality(ctx, kCGInterpolationNone);
         CGContextDrawImage(ctx, NSRectToCGRect(wfRect), imageRef);
         CGContextRestoreGState(ctx);
     }

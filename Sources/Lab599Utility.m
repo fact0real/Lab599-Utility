@@ -272,6 +272,8 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 @property(nonatomic, strong) NSLayoutConstraint *logCardHeightConstraint;
 @property(nonatomic, strong) NSButton *consoleToggleButton;
 @property(nonatomic, assign) BOOL logCollapsed;
+@property(nonatomic, assign) BOOL catConsoleDefaultApplied;
+@property(nonatomic, assign) BOOL terminateAfterToolsStop;
 @property(nonatomic, strong) NSTextField *sectionTitleLabel;
 @property(nonatomic, strong) NSButton *outdoorModeButton;
 @property(nonatomic, assign) BOOL outdoorModeActive;
@@ -360,6 +362,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     (void)sender;
     if(![self stationCanEdit]) { if(self.stationPort.length) [self.portMenu selectItemWithTitle:self.stationPort]; [self appendLog:@"Stop station activity before changing the CAT port."]; return; }
     self.stationPort=[self currentStationPort];
+    [self.tools portsAvailable:self.hasPorts];
     if(self.stationCore.owner.length) [self.stationCore selectOwner:self.stationCore.owner port:self.stationPort error:nil];
     if (self.operationPicker.selectedSegment == 12) [self.ft8StationController refreshRadioFrequency];
 }
@@ -608,7 +611,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 
     // Setup legacy operation picker for CLI arguments and underlying state
     self.operationPicker = [NSSegmentedControl segmentedControlWithLabels:@[
-        @"Firmware Update", @"Time Sync", @"Telemetry", @"Radio Screen", @"CAT Test", @"Settings", @"Memory", @"Driver Install", @"Documentation", @"Feedback & Suggestion", @"CW Station", @"Live Audio (AD-508)", @"FT8 / FT4 Digital", @"Logbook & Cloud", @"Voice Keyer", @"Station", @"DX Cluster"
+        @"Firmware Update", @"Time Sync", @"Telemetry", @"Radio Screen", @"CAT Studio", @"Settings", @"Memory", @"Driver Install", @"Documentation", @"Feedback & Suggestion", @"CW Station", @"Live Audio (AD-508)", @"FT8 / FT4 Digital", @"Logbook & Cloud", @"Voice Keyer", @"Station", @"DX Cluster"
     ] trackingMode:NSSegmentSwitchTrackingSelectOne target:self action:@selector(operationChanged:)];
     self.operationPicker.selectedSegment = 0;
     self.operationPicker.hidden = YES;
@@ -702,7 +705,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     TX500SidebarButton *btnTime = [[TX500SidebarButton alloc] initWithTitle:@"Time Sync" iconName:@"clock" tag:1 target:self action:@selector(sidebarItemClicked:)];
     TX500SidebarButton *btnTelemetry = [[TX500SidebarButton alloc] initWithTitle:@"Telemetry" iconName:@"gauge.with.needle" tag:2 target:self action:@selector(sidebarItemClicked:)];
     TX500SidebarButton *btnScreen = [[TX500SidebarButton alloc] initWithTitle:@"Radio Screen" iconName:@"display" tag:3 target:self action:@selector(sidebarItemClicked:)];
-    TX500SidebarButton *btnCat = [[TX500SidebarButton alloc] initWithTitle:@"CAT Test" iconName:@"antenna.radiowaves.left.and.right" tag:4 target:self action:@selector(sidebarItemClicked:)];
+    TX500SidebarButton *btnCat = [[TX500SidebarButton alloc] initWithTitle:@"CAT Studio" iconName:@"antenna.radiowaves.left.and.right" tag:4 target:self action:@selector(sidebarItemClicked:)];
     TX500SidebarButton *btnSettings = [[TX500SidebarButton alloc] initWithTitle:@"Settings" iconName:@"slider.horizontal.3" tag:5 target:self action:@selector(sidebarItemClicked:)];
     TX500SidebarButton *btnMemory = [[TX500SidebarButton alloc] initWithTitle:@"Memory" iconName:@"memorychip" tag:6 target:self action:@selector(sidebarItemClicked:)];
     TX500SidebarButton *btnDriver = [[TX500SidebarButton alloc] initWithTitle:@"Driver Install" iconName:@"wrench.and.screwdriver" tag:7 target:self action:@selector(sidebarItemClicked:)];
@@ -873,8 +876,10 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     self.portMenu.target=self; self.portMenu.action=@selector(stationPortChanged:);
     self.portMenu.controlSize = NSControlSizeSmall;
     self.portMenu.font = [NSFont systemFontOfSize:11];
-    self.portMenu.bordered = NO;
+    self.portMenu.bordered = YES;
     self.portMenu.focusRingType = NSFocusRingTypeNone;
+    self.portMenu.toolTip = @"Choose a detected CAT serial port. Refresh after connecting a new adapter.";
+    self.portMenu.accessibilityLabel = @"CAT serial port selector";
     NSLayoutConstraint *pmW = [self.portMenu.widthAnchor constraintEqualToConstant:190];
     pmW.priority = NSLayoutPriorityDefaultLow;
     pmW.active = YES;
@@ -1988,7 +1993,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     } else if (self.hasPorts) {
         // CAT port detected but nothing actively streaming
         self.statusLEDView.layer.backgroundColor = [NSColor colorWithSRGBRed:0.20 green:0.75 blue:0.35 alpha:1.0].CGColor;
-        self.connectionStatusLabel.stringValue = @"Radio Ready";
+        self.connectionStatusLabel.stringValue = @"CAT Port Available";
         self.connectionStatusLabel.textColor = [NSColor labelColor];
         self.statusPillBox.fillColor   = [NSColor colorWithSRGBRed:0.20 green:0.75 blue:0.35 alpha:0.12];
         self.statusPillBox.borderColor = [NSColor colorWithSRGBRed:0.20 green:0.75 blue:0.35 alpha:0.35];
@@ -2188,7 +2193,13 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     }
 
     self.tools.view.hidden = !isTools;
-    if (isTools) [self.tools selectTool:operation - 4];
+    if (isTools) {
+        if (operation == 4 && !self.catConsoleDefaultApplied) {
+            self.catConsoleDefaultApplied = YES;
+            if (!self.logCollapsed) [self toggleLogConsole:nil];
+        }
+        [self.tools selectTool:operation - 4];
+    }
 
     self.driverController.view.hidden = !isDriver;
     if (isDriver) [self.driverController checkDriverStatus];
@@ -2229,8 +2240,8 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         self.instructions.stringValue = @"Real-Time LCD Screen Capture & Live Display for Lab599 TX-500 Discovery / TX-500MP. Faithfully simulates the 256×128 monochrome LCD matrix with authentic typography, calibrated S-meter / RF power bars, panadapter spectrum, and milled aluminum chassis bezel. Capture screenshots, copy to clipboard, or choose amber, daylight, green, or OLED themes.";
         self.statusLabel.stringValue = @"Ready. Click 'Refresh' or toggle 'Live Auto-Sync' to stream the radio screen.";
     } else if (operation == 4) {
-        self.instructions.stringValue = @"Inspect live transceiver parameters (frequency, mode, power, filters), write settings directly or use quick amateur band chips, execute raw CAT commands, and test serial latency.";
-        self.statusLabel.stringValue = @"Ready. Connect transceiver CAT port (9600 baud, 8N1) to monitor, control or send commands.";
+        self.instructions.stringValue = @"";
+        self.statusLabel.stringValue = @"Select a CAT port and use Read All to verify the radio before changing settings.";
     } else if (operation == 5) {
         self.instructions.stringValue = @"Inspect and modify named parameters, export/import JSON, compare backups, and restore 1024-byte binary blocks to the radio.";
         self.statusLabel.stringValue = @"Ready. Connect transceiver CAT port (9600 baud, 8N1) to read or write radio configuration.";
@@ -2267,7 +2278,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         self.instructions.hidden = YES;
         self.statusLabel.stringValue = @"Ready: Enter callsign to lookup operator details, or log contacts with 'Log QSO ↵' (Enter).";
     }
-    self.instructions.hidden = (isFT8 || isLogbook);
+    self.instructions.hidden = (isFT8 || isLogbook || operation == 4);
     // Hidden station panels must not impose their minimum width on the active panel.
     for (NSLayoutConstraint *width in self.featureWidthConstraints) {
         width.active = !((NSView *)width.firstItem).hidden;
@@ -2293,6 +2304,12 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     } else {
         if (self.activity) [NSProcessInfo.processInfo endActivity:self.activity];
         self.activity = nil; [self refreshPorts:nil];
+        if (self.terminateAfterToolsStop) {
+            self.terminateAfterToolsStop = NO;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [NSApp replyToApplicationShouldTerminate:YES];
+            });
+        }
     }
 }
 
@@ -3851,28 +3868,45 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 
 - (BOOL)windowShouldClose:(NSWindow *)sender {
     (void)sender;
-    if (!self.busy) { [NSApp terminate:nil]; return NO; }
-    NSBeep();
+    [NSApp terminate:nil];
     return NO;
 }
 
 - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender {
     (void)sender;
-    if (![self.voiceKeyerController deactivate]) return NSTerminateCancel;
+    if (self.terminateAfterToolsStop) return NSTerminateLater;
+    // A launch failure can leave optional controllers uninitialized. A message
+    // to nil returns NO, which previously made a windowless app refuse Quit.
+    if (self.voiceKeyerController && ![self.voiceKeyerController deactivate]) return NSTerminateCancel;
     [self.telemetryController stopMonitoring];
     [self.cwStationController stopStation];
     [self.ft8StationController stopStation];
     [self.audioMonitorController stopController];
-    if(![self.stationCore suspend:nil]) return NSTerminateCancel;
+    if(self.stationCore && ![self.stationCore suspend:nil]) return NSTerminateCancel;
     [self.clusterController stop];
     if(self.stationKeyMonitor) [NSEvent removeMonitor:self.stationKeyMonitor];
-    if (!self.busy) return [self.tools confirmDiscard] ? NSTerminateNow : NSTerminateCancel;
+    if (!self.busy) return (!self.tools || [self.tools confirmDiscard]) ? NSTerminateNow : NSTerminateCancel;
+    if (self.tools.operationInProgress) {
+        if (![self.tools confirmDiscard]) return NSTerminateCancel;
+        self.terminateAfterToolsStop = YES;
+        [self.tools cancelActiveOperation];
+        return NSTerminateLater;
+    }
     NSBeep();
     return NSTerminateCancel;
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication *)sender {
     (void)sender;
+    return YES;
+}
+
+- (BOOL)applicationShouldHandleReopen:(NSApplication *)sender hasVisibleWindows:(BOOL)hasVisibleWindows {
+    (void)sender;
+    if (!hasVisibleWindows && self.window) {
+        [self ensureWindowFitsVisibleScreen];
+        [self.window makeKeyAndOrderFront:nil];
+    }
     return YES;
 }
 

@@ -35,10 +35,15 @@ FOUNDATION_EXPORT TXCATCode TXClassifyCATReply(NSData *reply);
 @property(nonatomic) NSInteger modeCode;               // 1-7
 @property(nonatomic) double rfPowerWatts;              // 1.0 - 10.0
 @property(nonatomic) NSInteger filterNumber;           // 1, 2, 3, 4
+@property(nonatomic) BOOL filterKnown;
 @property(nonatomic) BOOL preampOn;
+@property(nonatomic) BOOL preampKnown;
 @property(nonatomic) BOOL attenuatorOn;
+@property(nonatomic) BOOL attenuatorKnown;
 @property(nonatomic) double voltage;                   // e.g. 13.8 V
+@property(nonatomic) BOOL voltageKnown;
 @property(nonatomic) NSInteger sMeterDots;             // 0-30
+@property(nonatomic) BOOL sMeterKnown;
 @property(nonatomic, copy) NSString *modelID;          // e.g. "ID019 (Lab599 TX-500)"
 @property(nonatomic) BOOL isTransmitting;
 @property(nonatomic, copy) NSString *rawIFReply;
@@ -66,3 +71,8 @@ FOUNDATION_EXPORT BOOL TXSetRadioPreamp(NSString *path, BOOL on, NSError **error
 FOUNDATION_EXPORT BOOL TXSetRadioAttenuator(NSString *path, BOOL on, NSError **error);
 FOUNDATION_EXPORT BOOL TXSetRadioFilter(NSString *path, NSInteger filterNumber, NSError **error);
 
+// Automation accepts only a conservative set of read queries and non-PTT
+// setters. Each setter is read back before the next command executes.
+FOUNDATION_EXPORT NSArray<NSString *> *TXValidatedCATMacro(NSString *source, NSError **error);
+FOUNDATION_EXPORT BOOL TXRunCATMacro(NSString *path, NSArray<NSString *> *commands,
+    Lab599Cancellation *token, void (^progress)(NSUInteger index, NSString *command, NSString *reply), NSError **error);

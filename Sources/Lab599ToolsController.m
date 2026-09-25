@@ -6,11 +6,73 @@
 #import "TX500SettingsModel.h"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
+@interface TXCATLatencyView : NSView
+@property(nonatomic, strong) NSMutableArray<NSNumber *> *samples;
+- (void)addMilliseconds:(double)milliseconds passed:(BOOL)passed;
+@end
+
+@implementation TXCATLatencyView
+- (instancetype)initWithFrame:(NSRect)frame {
+    if ((self = [super initWithFrame:frame])) self.samples = [NSMutableArray array];
+    return self;
+}
+- (void)addMilliseconds:(double)milliseconds passed:(BOOL)passed {
+    [self.samples addObject:@(passed ? MAX(1.0, milliseconds) : -MAX(1.0, milliseconds))];
+    if (self.samples.count > 48) [self.samples removeObjectAtIndex:0];
+    self.needsDisplay = YES;
+}
+- (void)drawRect:(NSRect)dirtyRect {
+    (void)dirtyRect;
+    [[NSColor colorWithCalibratedWhite:0.5 alpha:0.08] setFill];
+    NSRectFill(self.bounds);
+    if (!self.samples.count) return;
+    double maximum = 100.0;
+    for (NSNumber *number in self.samples) maximum = MAX(maximum, fabs(number.doubleValue));
+    CGFloat width = self.bounds.size.width / 48.0;
+    for (NSUInteger index = 0; index < self.samples.count; index++) {
+        double value = self.samples[index].doubleValue;
+        CGFloat height = MAX(2.0, (CGFloat)(fabs(value) / maximum * (self.bounds.size.height - 4.0)));
+        [(value < 0 ? NSColor.systemRedColor : NSColor.systemGreenColor) setFill];
+        NSRectFill(NSMakeRect(index * width + 1.0, 2.0, MAX(1.0, width - 2.0), height));
+    }
+}
+@end
+
+@interface TXCATSMeterScaleView : NSView
+@end
+
+@implementation TXCATSMeterScaleView
+- (void)drawRect:(NSRect)dirtyRect {
+    (void)dirtyRect;
+    const NSInteger dots[] = {2, 6, 10, 14, 18, 22, 26, 30};
+    NSArray<NSString *> *labels = @[@"S1", @"S3", @"S5", @"S7", @"S9", @"+20", @"+40", @"+60"];
+    NSDictionary *attributes = @{
+        NSFontAttributeName: [NSFont monospacedDigitSystemFontOfSize:8 weight:NSFontWeightMedium],
+        NSForegroundColorAttributeName: NSColor.secondaryLabelColor
+    };
+    for (NSUInteger i = 0; i < labels.count; i++) {
+        // The last tick must be inside the drawing bounds, exactly at the
+        // visible end of the progress track rather than clipped at width.
+        CGFloat trackStart = 1.0;
+        CGFloat trackEnd = MAX(trackStart, self.bounds.size.width - 1.0);
+        CGFloat tickX = trackStart + (trackEnd - trackStart) * dots[i] / 30.0;
+        NSSize size = [labels[i] sizeWithAttributes:attributes];
+        CGFloat textX = MAX(0, MIN(self.bounds.size.width - size.width, tickX - size.width / 2.0));
+        [labels[i] drawAtPoint:NSMakePoint(textX, 0) withAttributes:attributes];
+        [NSColor.tertiaryLabelColor setStroke];
+        NSBezierPath *tick = [NSBezierPath bezierPath];
+        [tick moveToPoint:NSMakePoint(tickX, 15)];
+        [tick lineToPoint:NSMakePoint(tickX, 19)];
+        [tick stroke];
+    }
+}
+@end
+
 @interface Lab599ToolsController ()
 @property(nonatomic, strong, readwrite) NSView *view;
 @property(nonatomic, strong) NSArray<NSView *> *panels;
 @property(nonatomic, strong) NSMutableArray<NSControl *> *controls;
-@property(nonatomic, strong) NSButton *catOnce, *catStart, *stop, *settingsRead, *settingsWrite, *settingsSave, *settingsCompare;
+@property(nonatomic, strong) NSButton *catOnce, *catStart, *catStop, *stop, *settingsRead, *settingsWrite, *settingsSave, *settingsCompare;
 @property(nonatomic, strong) NSButton *memoryRead, *memoryWrite, *memorySave, *memoryCompare, *csvImport, *csvExport;
 @property(nonatomic, strong) NSPopUpButton *profilesPopup;
 @property(nonatomic, strong) NSTextField *catResult, *catCounts, *settingsInfo, *memoryInfo, *frequency;
@@ -32,10 +94,22 @@
 @property(nonatomic, strong) NSTextField *catPreampBadge;
 @property(nonatomic, strong) NSTextField *catVoltageBadge;
 @property(nonatomic, strong) NSTextField *catSMeterBadge;
+@property(nonatomic, strong) NSProgressIndicator *catSMeterGauge;
+@property(nonatomic, strong) NSTextField *catSMeterTitle;
+@property(nonatomic, strong) NSStackView *catSMeterScaleRow;
+@property(nonatomic) BOOL catIsTransmitting;
+@property(nonatomic) BOOL catSMeterKnown;
+@property(nonatomic) NSInteger catSMeterDots;
+@property(nonatomic, strong) NSProgressIndicator *catVoltageGauge;
+@property(nonatomic, strong) NSProgressIndicator *catPowerGauge;
+@property(nonatomic, strong) NSTextField *catNotice;
+@property(nonatomic, strong) NSBox *catNoticeBox;
 @property(nonatomic, strong) NSButton *catReadAllButton;
 
 @property(nonatomic, strong) NSTextField *catFreqInputField;
 @property(nonatomic, strong) NSButton *catSetFreqButton;
+@property(nonatomic, strong) NSPopUpButton *catStepPopup;
+@property(nonatomic, strong) NSButton *catStepDownButton, *catStepUpButton;
 @property(nonatomic, strong) NSPopUpButton *catModePopup;
 @property(nonatomic, strong) NSButton *catSetModeButton;
 @property(nonatomic, strong) NSPopUpButton *catPowerPopup;
@@ -51,6 +125,21 @@
 @property(nonatomic, strong) NSButton *catClearTerminalButton;
 @property(nonatomic, strong) NSButton *catCopyTerminalButton;
 @property(nonatomic, strong) NSMutableArray<NSButton *> *quickCmdButtons;
+@property(nonatomic, strong) NSPopUpButton *catLogFilter;
+@property(nonatomic, strong) NSMutableArray<NSDictionary *> *catLogEntries;
+@property(nonatomic, strong) TXCATLatencyView *catLatencyView;
+@property(nonatomic, copy) NSString *verifiedCATPort;
+@property(nonatomic, strong) NSLayoutConstraint *toolHeight;
+@property(nonatomic, strong) NSLayoutConstraint *catBottomConstraint;
+@property(nonatomic, strong) NSMutableArray<NSDictionary *> *studioMacros, *studioSnapshots, *monitorEntries;
+@property(nonatomic, strong) NSPopUpButton *macroPopup, *snapshotPopup, *monitorFilter;
+@property(nonatomic, strong) NSTextField *macroName, *snapshotName, *snapshotDetails, *monitorSummary;
+@property(nonatomic, strong) NSTextView *macroCommands, *monitorText;
+@property(nonatomic, strong) NSView *macroButtonCanvas;
+@property(nonatomic, strong) NSButton *macroSave, *macroRun, *macroDelete, *snapshotCapture, *snapshotRestore, *snapshotDelete, *monitorPause, *monitorClear;
+@property(nonatomic, strong) NSButton *macroStop, *snapshotStop;
+@property(nonatomic, strong) TXCATLatencyView *monitorLatency;
+@property(nonatomic) BOOL monitorPaused, monitorRedrawPending;
 
 
 // Settings Editor
@@ -132,11 +221,200 @@ static NSBox *CreateCardWithView(NSView *innerView) {
     return box;
 }
 
+static NSScrollView *StudioTextScroll(NSTextView **textView, BOOL editable, CGFloat height) {
+    NSScrollView *scroll = [NSScrollView new];
+    scroll.hasVerticalScroller = YES;
+    scroll.borderType = NSBezelBorder;
+    scroll.wantsLayer = YES;
+    scroll.layer.cornerRadius = 5;
+    NSTextView *text = [[NSTextView alloc] initWithFrame:NSMakeRect(0, 0, 600, height)];
+    text.font = [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightMedium];
+    text.textColor = editable ? NSColor.labelColor : [NSColor colorWithCalibratedRed:0.45 green:0.9 blue:0.64 alpha:1];
+    text.backgroundColor = editable ? NSColor.textBackgroundColor : [NSColor colorWithCalibratedRed:0.055 green:0.075 blue:0.09 alpha:1];
+    text.editable = editable;
+    text.selectable = YES;
+    text.automaticQuoteSubstitutionEnabled = NO;
+    text.automaticDashSubstitutionEnabled = NO;
+    scroll.documentView = text;
+    [scroll.heightAnchor constraintEqualToConstant:height].active = YES;
+    if (textView) *textView = text;
+    return scroll;
+}
+
+- (NSBox *)buildAutomationCard {
+    NSTextField *title = [NSTextField labelWithString:@"CAT WORKSPACE"];
+    title.font = [NSFont systemFontOfSize:12 weight:NSFontWeightBold];
+    title.textColor = NSColor.labelColor;
+    NSTextField *subtitle = Label(@"Build repeatable actions, keep full radio snapshots, and inspect the CAT traffic generated by this app.");
+    subtitle.font = [NSFont systemFontOfSize:11];
+    subtitle.preferredMaxLayoutWidth = 1200;
+    NSTabView *tabs = [NSTabView new];
+    tabs.tabViewType = NSTopTabsBezelBorder;
+    [tabs.heightAnchor constraintEqualToConstant:355].active = YES;
+
+    self.macroPopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+    self.macroPopup.target = self; self.macroPopup.action = @selector(macroSelected:);
+    self.macroName = [NSTextField new];
+    self.macroName.placeholderString = @"Button name, e.g. FT8 Ready";
+    self.macroSave = [NSButton buttonWithTitle:@"Save Macro" target:self action:@selector(saveMacro:)];
+    self.macroDelete = [NSButton buttonWithTitle:@"Delete" target:self action:@selector(deleteMacro:)];
+    self.macroRun = [NSButton buttonWithTitle:@"Run Saved" target:self action:@selector(runMacro:)];
+    self.macroRun.bezelStyle = NSBezelStyleRounded;
+    self.macroStop = [NSButton buttonWithTitle:@"Stop" target:self action:@selector(stopOperation:)];
+    self.macroStop.hidden = YES;
+    NSTextView *macroText = nil;
+    NSScrollView *macroScroll = StudioTextScroll(&macroText, YES, 125);
+    self.macroCommands = macroText;
+    self.macroCommands.string = @"MD6;\nPC050;\nFL1;";
+    NSTextField *macroHelp = Label(@"One safe CAT command per line. FL1; selects RX filter 2 and keeps the TX filter. Every setter is read back; TX/PTT commands are blocked.");
+    macroHelp.font = [NSFont systemFontOfSize:10];
+    macroHelp.preferredMaxLayoutWidth = 1200;
+    NSStackView *macroTop = Stack(@[Label(@"Saved:"), self.macroPopup, self.macroDelete, [NSView new]], NO);
+    NSScrollView *quickScroll = [NSScrollView new];
+    quickScroll.hasHorizontalScroller = YES;
+    quickScroll.hasVerticalScroller = NO;
+    quickScroll.drawsBackground = NO;
+    quickScroll.borderType = NSNoBorder;
+    self.macroButtonCanvas = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 600, 32)];
+    quickScroll.documentView = self.macroButtonCanvas;
+    [quickScroll.heightAnchor constraintEqualToConstant:42].active = YES;
+    NSStackView *macroEdit = Stack(@[self.macroName, self.macroSave, self.macroRun, self.macroStop], NO);
+    macroEdit.detachesHiddenViews = YES;
+    NSStackView *macroPane = Stack(@[macroTop, quickScroll, macroEdit, macroScroll, macroHelp], YES);
+    macroPane.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    // A tab item owns its view only after addTabViewItem:. Linking the pane to
+    // tabs here raises NSGenericException during launch (no common ancestor).
+    // NSTabView sizes each item view; the autoresizing mask follows that size.
+    macroPane.edgeInsets = NSEdgeInsetsMake(10, 12, 10, 12);
+    macroPane.spacing = 8;
+    [macroTop.widthAnchor constraintEqualToAnchor:macroPane.widthAnchor constant:-24].active = YES;
+    [quickScroll.widthAnchor constraintEqualToAnchor:macroPane.widthAnchor constant:-24].active = YES;
+    [macroEdit.widthAnchor constraintEqualToAnchor:macroPane.widthAnchor constant:-24].active = YES;
+    [macroScroll.widthAnchor constraintEqualToAnchor:macroPane.widthAnchor constant:-24].active = YES;
+    NSTabViewItem *macroTab = [[NSTabViewItem alloc] initWithIdentifier:@"macros"];
+    macroTab.label = @"CAT Macros"; macroTab.view = macroPane; [tabs addTabViewItem:macroTab];
+
+    self.snapshotPopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+    self.snapshotPopup.target = self; self.snapshotPopup.action = @selector(snapshotSelected:);
+    self.snapshotName = [NSTextField new];
+    self.snapshotName.placeholderString = @"Profile name, e.g. CW Portable";
+    [self.snapshotName.widthAnchor constraintGreaterThanOrEqualToConstant:240].active = YES;
+    [self.snapshotName setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+    self.snapshotCapture = [NSButton buttonWithTitle:@"Capture Radio…" target:self action:@selector(captureSnapshot:)];
+    self.snapshotRestore = [NSButton buttonWithTitle:@"Restore & Verify…" target:self action:@selector(restoreSnapshot:)];
+    self.snapshotDelete = [NSButton buttonWithTitle:@"Delete" target:self action:@selector(deleteSnapshot:)];
+    self.snapshotStop = [NSButton buttonWithTitle:@"Stop" target:self action:@selector(stopOperation:)];
+    self.snapshotStop.hidden = YES;
+    self.snapshotDetails = Label(@"Choose a saved snapshot or capture the connected radio. Each snapshot includes all 1024 settings bytes and available live dial readings.");
+    self.snapshotDetails.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
+    self.snapshotDetails.textColor = NSColor.labelColor;
+    self.snapshotDetails.preferredMaxLayoutWidth = 1200;
+    NSStackView *snapTop = Stack(@[Label(@"Saved:"), self.snapshotPopup, self.snapshotDelete, [NSView new]], NO);
+    NSStackView *snapCreate = Stack(@[self.snapshotName, self.snapshotCapture, self.snapshotRestore, self.snapshotStop], NO);
+    snapCreate.detachesHiddenViews = YES;
+    NSBox *snapInfo = CreateCardWithView(self.snapshotDetails);
+    [snapInfo.heightAnchor constraintGreaterThanOrEqualToConstant:100].active = YES;
+    NSTextField *snapHelp = Label(@"Restore first backs up the current radio, checks the model, writes the selected settings, and verifies every byte. A stopped write may leave partial changes.");
+    snapHelp.font = [NSFont systemFontOfSize:10];
+    snapHelp.preferredMaxLayoutWidth = 1200;
+    NSStackView *snapPane = Stack(@[snapTop, snapCreate, snapInfo, snapHelp], YES);
+    snapPane.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    snapPane.edgeInsets = NSEdgeInsetsMake(10, 12, 10, 12);
+    snapPane.spacing = 10;
+    [snapTop.widthAnchor constraintEqualToAnchor:snapPane.widthAnchor constant:-24].active = YES;
+    [snapCreate.widthAnchor constraintEqualToAnchor:snapPane.widthAnchor constant:-24].active = YES;
+    [snapInfo.widthAnchor constraintEqualToAnchor:snapPane.widthAnchor constant:-24].active = YES;
+    NSTabViewItem *snapTab = [[NSTabViewItem alloc] initWithIdentifier:@"snapshots"];
+    snapTab.label = @"Radio Snapshots"; snapTab.view = snapPane; [tabs addTabViewItem:snapTab];
+
+    self.monitorFilter = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+    [self.monitorFilter addItemsWithTitles:@[@"All traffic", @"TX only", @"RX only", @"Errors"]];
+    self.monitorFilter.target = self; self.monitorFilter.action = @selector(redrawMonitor:);
+    self.monitorPause = [NSButton buttonWithTitle:@"Pause" target:self action:@selector(toggleMonitor:)];
+    self.monitorClear = [NSButton buttonWithTitle:@"Clear" target:self action:@selector(clearMonitor:)];
+    NSButton *copy = [NSButton buttonWithTitle:@"Copy" target:self action:@selector(copyMonitor:)];
+    NSStackView *monitorTop = Stack(@[Label(@"Show:"), self.monitorFilter, self.monitorPause, self.monitorClear, copy, [NSView new]], NO);
+    NSTextView *monitorText = nil;
+    NSScrollView *monitorScroll = StudioTextScroll(&monitorText, NO, 125);
+    self.monitorText = monitorText;
+    self.monitorSummary = Label(@"0 TX   ·   0 RX   ·   0 errors   ·   RTT —");
+    self.monitorSummary.font = [NSFont monospacedDigitSystemFontOfSize:10 weight:NSFontWeightMedium];
+    self.monitorLatency = [[TXCATLatencyView alloc] initWithFrame:NSZeroRect];
+    self.monitorLatency.toolTip = @"Recent app CAT response times; red bars are protocol error replies.";
+    [self.monitorLatency.heightAnchor constraintEqualToConstant:30].active = YES;
+    NSTextField *monitorHelp = Label(@"App-owned serial traffic only. The CAT port is exclusive; traffic from other applications is not captured.");
+    monitorHelp.font = [NSFont systemFontOfSize:10];
+    monitorHelp.preferredMaxLayoutWidth = 1200;
+    NSStackView *monitorPane = Stack(@[monitorTop, monitorScroll, self.monitorSummary, self.monitorLatency, monitorHelp], YES);
+    monitorPane.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    monitorPane.edgeInsets = NSEdgeInsetsMake(8, 12, 8, 12);
+    monitorPane.spacing = 6;
+    [monitorTop.widthAnchor constraintEqualToAnchor:monitorPane.widthAnchor constant:-24].active = YES;
+    [monitorScroll.widthAnchor constraintEqualToAnchor:monitorPane.widthAnchor constant:-24].active = YES;
+    [self.monitorLatency.widthAnchor constraintEqualToAnchor:monitorPane.widthAnchor constant:-24].active = YES;
+    NSTabViewItem *monitorTab = [[NSTabViewItem alloc] initWithIdentifier:@"monitor"];
+    monitorTab.label = @"Protocol Monitor"; monitorTab.view = monitorPane; [tabs addTabViewItem:monitorTab];
+
+    [self.controls addObjectsFromArray:@[self.macroPopup, self.macroName, self.macroSave, self.macroDelete,
+        self.macroRun, self.snapshotPopup, self.snapshotName, self.snapshotCapture, self.snapshotRestore, self.snapshotDelete]];
+    [self reloadMacroMenu];
+    [self reloadSnapshotMenu];
+    NSStackView *inner = Stack(@[title, subtitle, tabs], YES);
+    inner.spacing = 5;
+    [tabs.widthAnchor constraintEqualToAnchor:inner.widthAnchor].active = YES;
+    return CreateCardWithView(inner);
+}
+
 static NSString *ToolsFormatFreq(uint64_t hz) {
     uint64_t m = hz / 1000000;
     uint64_t k = (hz % 1000000) / 1000;
     uint64_t h = hz % 1000;
     return [NSString stringWithFormat:@"%llu.%03llu.%03llu MHz", m, k, h];
+}
+
+static NSString *ToolsFormatInputFrequency(uint64_t hz) {
+    return [NSString stringWithFormat:@"%llu.%03llu.%03llu", hz / 1000000,
+            (hz % 1000000) / 1000, hz % 1000];
+}
+
+static uint64_t ToolsParseInputFrequency(NSString *input) {
+    NSString *raw = [input stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if ([raw containsString:@"."] || [raw containsString:@","]) {
+        NSString *grouped = [raw stringByReplacingOccurrencesOfString:@"," withString:@"."];
+        NSRegularExpression *pattern = [NSRegularExpression regularExpressionWithPattern:@"^[0-9]{1,3}(\\.[0-9]{3})+$"
+                                                                              options:0 error:NULL];
+        if ([pattern numberOfMatchesInString:grouped options:0 range:NSMakeRange(0, grouped.length)] != 1) return 0;
+    }
+    raw = [[raw stringByReplacingOccurrencesOfString:@"." withString:@""]
+           stringByReplacingOccurrencesOfString:@"," withString:@""];
+    if (!raw.length || [raw rangeOfCharacterFromSet:
+        [[NSCharacterSet characterSetWithCharactersInString:@"0123456789"] invertedSet]].location != NSNotFound) return 0;
+    unsigned long long value = 0;
+    NSScanner *scanner = [NSScanner scannerWithString:raw];
+    if (![scanner scanUnsignedLongLong:&value] || !scanner.isAtEnd) return 0;
+    return (uint64_t)value;
+}
+
+static NSString *ToolsSMeterReading(NSInteger dots, BOOL transmitting) {
+    NSInteger bounded = MAX(0, MIN(30, dots));
+    if (transmitting) return [NSString stringWithFormat:@"TX meter: %ld/30 dots", (long)bounded];
+    if (bounded <= 18) return [NSString stringWithFormat:@"S-MTR: S%ld", (long)((bounded + 1) / 2)];
+    return [NSString stringWithFormat:@"S-MTR: S9+%ld dB", (long)((bounded - 18) * 5)];
+}
+
+static NSInteger ToolsBandIndexForFrequency(uint64_t hz) {
+    // Keep CAT Studio aligned with the band ranges used by the FT8 station.
+    const struct { uint64_t low, high; } bands[] = {
+        {1800000, 2000000}, {3500000, 4000000},
+        {7000000, 7300000}, {10100000, 10150000},
+        {14000000, 14350000}, {18068000, 18168000},
+        {21000000, 21450000}, {24890000, 24990000},
+        {28000000, 29700000}, {50000000, 54000000}
+    };
+    for (NSUInteger i = 0; i < sizeof(bands) / sizeof(bands[0]); i++) {
+        if (hz >= bands[i].low && hz <= bands[i].high) return (NSInteger)i;
+    }
+    return -1;
 }
 
 static NSString *ToolsModeNameFromCode(NSInteger code) {
@@ -190,16 +468,34 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
     c1Header.distribution = NSStackViewDistributionEqualSpacing;
 
     // Dark OLED-style frequency & model banner
-    self.catModelLabel = [NSTextField labelWithString:@"Transceiver Model: Lab599 TX-500 Discovery"];
+    self.catModelLabel = [NSTextField labelWithString:@"Transceiver Model: —"];
     self.catModelLabel.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
-    self.catModelLabel.textColor = [NSColor secondaryLabelColor];
+    self.catModelLabel.textColor = [NSColor colorWithCalibratedRed:0.86 green:0.91 blue:0.96 alpha:1.0];
 
     self.catFreqDisplay = [NSTextField labelWithString:@"— . — . — MHz"];
     self.catFreqDisplay.font = [NSFont monospacedDigitSystemFontOfSize:22 weight:NSFontWeightBold];
     self.catFreqDisplay.textColor = [NSColor colorWithCalibratedRed:0.25 green:0.75 blue:1.0 alpha:1.0];
     self.catFreqDisplay.alignment = NSTextAlignmentLeft;
 
-    NSStackView *freqBoxInner = Stack(@[self.catModelLabel, self.catFreqDisplay], YES);
+    self.catStepPopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+    [self.catStepPopup addItemsWithTitles:@[@"100 Hz", @"1 kHz", @"10 kHz"]];
+    [self.catStepPopup selectItemAtIndex:1];
+    self.catStepPopup.controlSize = NSControlSizeSmall;
+    self.catStepDownButton = [NSButton buttonWithTitle:@"−" target:self action:@selector(stepFrequencyAction:)];
+    self.catStepDownButton.tag = -1;
+    self.catStepDownButton.toolTip = @"Tune the displayed radio frequency down by the selected step.";
+    self.catStepUpButton = [NSButton buttonWithTitle:@"+" target:self action:@selector(stepFrequencyAction:)];
+    self.catStepUpButton.tag = 1;
+    self.catStepUpButton.toolTip = @"Tune the displayed radio frequency up by the selected step.";
+    for (NSButton *button in @[self.catStepDownButton, self.catStepUpButton]) button.controlSize = NSControlSizeSmall;
+    [self.controls addObjectsFromArray:@[self.catStepPopup, self.catStepDownButton, self.catStepUpButton]];
+    NSTextField *stepLabel = [NSTextField labelWithString:@"Step:"];
+    stepLabel.font = [NSFont systemFontOfSize:10 weight:NSFontWeightMedium];
+    stepLabel.textColor = [NSColor colorWithCalibratedWhite:0.86 alpha:1.0];
+    NSStackView *stepRow = Stack(@[stepLabel, self.catStepDownButton, self.catStepPopup, self.catStepUpButton], NO);
+    stepRow.spacing = 6;
+
+    NSStackView *freqBoxInner = Stack(@[self.catModelLabel, self.catFreqDisplay, stepRow], YES);
     freqBoxInner.spacing = 2;
     freqBoxInner.edgeInsets = NSEdgeInsetsMake(6, 10, 6, 10);
 
@@ -210,6 +506,7 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
     freqBanner.borderColor = [NSColor colorWithCalibratedWhite:0.3 alpha:0.4];
     freqBanner.fillColor = [NSColor colorWithCalibratedRed:0.06 green:0.08 blue:0.11 alpha:0.9];
     freqBanner.translatesAutoresizingMaskIntoConstraints = NO;
+    [freqBanner.heightAnchor constraintEqualToConstant:88].active = YES;
     [freqBanner addSubview:freqBoxInner];
     freqBoxInner.translatesAutoresizingMaskIntoConstraints = NO;
     [NSLayoutConstraint activateConstraints:@[
@@ -233,32 +530,60 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
     self.catSMeterBadge = [NSTextField labelWithString:@"S-MTR: —"];
     self.catSMeterBadge.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightSemibold];
 
-    NSView *pMode = CreateBadgePill(self.catModeBadge, nil);
-    NSView *pPower = CreateBadgePill(self.catPowerBadge, nil);
-    NSView *pFilter = CreateBadgePill(self.catFilterBadge, nil);
+    self.catSMeterGauge = [NSProgressIndicator new];
+    self.catSMeterGauge.style = NSProgressIndicatorStyleBar;
+    self.catSMeterGauge.indeterminate = NO;
+    self.catSMeterGauge.maxValue = 30;
+    self.catSMeterGauge.doubleValue = 0;
+    self.catSMeterGauge.toolTip = @"RX display scale uses 0–30 raw CAT dots; SM0 reports TX meter dots during transmit.";
+    self.catVoltageGauge = [NSProgressIndicator new];
+    self.catVoltageGauge.style = NSProgressIndicatorStyleBar;
+    self.catVoltageGauge.indeterminate = NO;
+    self.catVoltageGauge.maxValue = 20;
+    self.catVoltageGauge.doubleValue = 0;
+    self.catVoltageGauge.toolTip = @"Supply voltage, updated by Read All";
+    self.catPowerGauge = [NSProgressIndicator new];
+    self.catPowerGauge.style = NSProgressIndicatorStyleBar;
+    self.catPowerGauge.indeterminate = NO;
+    self.catPowerGauge.maxValue = 10;
+    self.catPowerGauge.doubleValue = 0;
+    self.catPowerGauge.toolTip = @"Configured RF power (PC), not measured output power";
+
     NSView *pPreamp = CreateBadgePill(self.catPreampBadge, nil);
     NSView *pVoltage = CreateBadgePill(self.catVoltageBadge, nil);
     NSView *pSMeter = CreateBadgePill(self.catSMeterBadge, nil);
-
-    NSStackView *badgeRow1 = Stack(@[pMode, pPower, pFilter], NO);
-    badgeRow1.distribution = NSStackViewDistributionFillEqually;
-    badgeRow1.spacing = 6;
 
     NSStackView *badgeRow2 = Stack(@[pPreamp, pVoltage, pSMeter], NO);
     badgeRow2.distribution = NSStackViewDistributionFillEqually;
     badgeRow2.spacing = 6;
 
-    NSStackView *c1Inner = Stack(@[c1Header, freqBanner, badgeRow1, badgeRow2], YES);
-    c1Inner.spacing = 8;
-    NSBox *card1 = CreateCardWithView(c1Inner);
+    self.catSMeterTitle = Label(@"S-Meter");
+    NSTextField *voltageTitle = Label(@"Voltage");
+    NSTextField *powerTitle = Label(@"Set Pwr");
+    for (NSTextField *title in @[self.catSMeterTitle, voltageTitle, powerTitle]) {
+        title.font = [NSFont systemFontOfSize:10 weight:NSFontWeightMedium];
+        [title.widthAnchor constraintEqualToConstant:52].active = YES;
+    }
+    NSStackView *sMeterRow = Stack(@[self.catSMeterTitle, self.catSMeterGauge], NO);
+    NSView *scaleIndent = [NSView new];
+    [scaleIndent.widthAnchor constraintEqualToConstant:52].active = YES;
+    TXCATSMeterScaleView *scale = [TXCATSMeterScaleView new];
+    scale.toolTip = @"RX scale follows the radio display: S1–S9, then S9+20/+40/+60 dB (30 raw dots).";
+    [scale setAccessibilityLabel:@"S-meter scale: S1, S3, S5, S7, S9, plus 20, plus 40, plus 60 dB"];
+    [scale.heightAnchor constraintEqualToConstant:21].active = YES;
+    self.catSMeterScaleRow = Stack(@[scaleIndent, scale], NO);
+    NSStackView *voltageRow = Stack(@[voltageTitle, self.catVoltageGauge], NO);
+    NSStackView *powerMeterRow = Stack(@[powerTitle, self.catPowerGauge], NO);
+    NSStackView *meterGroup = Stack(@[sMeterRow, self.catSMeterScaleRow, voltageRow, powerMeterRow], YES);
+    meterGroup.spacing = 4;
 
     // --- Card 2: Quick Control & Band Presets ---
-    NSTextField *c2Title = [NSTextField labelWithString:@"Quick Control & Band Presets"];
+    NSTextField *c2Title = [NSTextField labelWithString:@"Controls & Band Presets"];
     c2Title.font = [NSFont systemFontOfSize:12 weight:NSFontWeightSemibold];
 
     // Frequency tuning row
     self.catFreqInputField = [NSTextField new];
-    self.catFreqInputField.placeholderString = @"Frequency in Hz (e.g. 14074000)";
+    self.catFreqInputField.placeholderString = @"14.074.000";
     self.catFreqInputField.font = [NSFont monospacedDigitSystemFontOfSize:12 weight:NSFontWeightRegular];
     self.catFreqInputField.target = self;
     self.catFreqInputField.action = @selector(setFrequencyAction:);
@@ -276,20 +601,24 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
     NSStackView *freqRow = Stack(@[hzLabel, self.catFreqInputField, self.catSetFreqButton], NO);
     freqRow.spacing = 6;
 
-    // Band Presets (2 tidy rows: 80m-17m and 15m-6m)
+    // Two fixed rows keep 160m and 80m visible at every supported window width.
     self.bandButtons = [NSMutableArray array];
     struct { const char *band; uint64_t freq; } bands[] = {
-        {"80m", 3573000}, {"40m", 7074000}, {"30m", 10136000},
+        {"160m", 1840000}, {"80m", 3573000}, {"40m", 7074000}, {"30m", 10136000},
         {"20m", 14074000}, {"17m", 18100000}, {"15m", 21074000},
         {"12m", 24915000}, {"10m", 28074000}, {"6m", 50313000}
     };
     NSMutableArray *bandRow1Views = [NSMutableArray array];
     NSMutableArray *bandRow2Views = [NSMutableArray array];
-    for (int i = 0; i < 9; i++) {
+    for (int i = 0; i < 10; i++) {
         NSButton *bb = [NSButton buttonWithTitle:@(bands[i].band) target:self action:@selector(bandPresetClicked:)];
         bb.tag = (NSInteger)bands[i].freq;
         bb.bezelStyle = NSBezelStyleInline;
+        [bb setButtonType:NSButtonTypePushOnPushOff];
         bb.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
+        bb.wantsLayer = YES;
+        bb.layer.cornerRadius = 6.0;
+        bb.layer.masksToBounds = YES;
         [self.bandButtons addObject:bb];
         [self.controls addObject:bb];
         if (i < 5) {
@@ -342,16 +671,18 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
     self.catPreampToggle = [NSButton checkboxWithTitle:@"Preamp" target:self action:@selector(togglePreampAction:)];
     self.catPreampToggle.controlSize = NSControlSizeSmall;
     self.catPreampToggle.font = [NSFont systemFontOfSize:11];
+    self.catPreampToggle.allowsMixedState = YES;
 
     self.catAttenuatorToggle = [NSButton checkboxWithTitle:@"Attenuator" target:self action:@selector(toggleAttenuatorAction:)];
     self.catAttenuatorToggle.controlSize = NSControlSizeSmall;
     self.catAttenuatorToggle.font = [NSFont systemFontOfSize:11];
+    self.catAttenuatorToggle.allowsMixedState = YES;
 
     self.catFilterSegment = [NSSegmentedControl segmentedControlWithLabels:@[@"FIL 1", @"FIL 2", @"FIL 3", @"FIL 4"]
                                                               trackingMode:NSSegmentSwitchTrackingSelectOne
                                                                     target:self
                                                                     action:@selector(filterChangedAction:)];
-    self.catFilterSegment.selectedSegment = 0;
+    self.catFilterSegment.selectedSegment = -1;
     self.catFilterSegment.controlSize = NSControlSizeSmall;
     [self.controls addObjectsFromArray:@[self.catPreampToggle, self.catAttenuatorToggle, self.catFilterSegment]];
 
@@ -365,12 +696,12 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
     ], NO);
     frontendRow.spacing = 6;
 
-    NSStackView *c2Inner = Stack(@[c2Title, freqRow, bandRow1, bandRow2, modePowerRow, frontendRow], YES);
-    c2Inner.spacing = 7;
-    NSBox *card2 = CreateCardWithView(c2Inner);
+    NSStackView *c1Inner = Stack(@[c1Header, freqBanner, badgeRow2, meterGroup,
+                                  c2Title, freqRow, bandRow1, bandRow2, modePowerRow, frontendRow], YES);
+    c1Inner.spacing = 7;
+    NSBox *card1 = CreateCardWithView(c1Inner);
 
-    NSStackView *leftColumn = Stack(@[card1, card2], YES);
-    leftColumn.spacing = 10;
+    NSStackView *leftColumn = Stack(@[card1], YES);
 
     // =========================================================================
     // RIGHT COLUMN: Interactive Terminal (Card 3) + Diagnostics (Card 4)
@@ -419,12 +750,21 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
     // Quick Command Preset Chips
     self.quickCmdButtons = [NSMutableArray array];
     NSArray *chips = @[@"FA;", @"MD;", @"PC;", @"IF;", @"VL;", @"ID;", @"SM0;", @"FL;"];
+    NSDictionary *chipNames = @{@"FA;": @"Freq", @"MD;": @"Mode", @"PC;": @"Power",
+        @"IF;": @"Status", @"VL;": @"Voltage", @"ID;": @"Radio ID",
+        @"SM0;": @"S-Meter", @"FL;": @"Filter"};
+    NSDictionary *chipHelp = @{@"FA;": @"Read VFO-A frequency", @"MD;": @"Read operating mode",
+        @"PC;": @"Read configured RF power", @"IF;": @"Read transceiver status",
+        @"VL;": @"Read supply voltage", @"ID;": @"Identify the radio",
+        @"SM0;": @"Read S-meter", @"FL;": @"Read selected filter"};
     NSMutableArray *chipViews = [NSMutableArray array];
     for (NSString *cmd in chips) {
-        NSButton *cb = [NSButton buttonWithTitle:cmd target:self action:@selector(quickCommandChipClicked:)];
+        NSButton *cb = [NSButton buttonWithTitle:chipNames[cmd] target:self action:@selector(quickCommandChipClicked:)];
         cb.identifier = cmd;
-        cb.bezelStyle = NSBezelStyleInline;
-        cb.font = [NSFont fontWithName:@"Menlo" size:10.5] ?: [NSFont monospacedSystemFontOfSize:10.5 weight:NSFontWeightMedium];
+        cb.bezelStyle = NSBezelStyleRounded;
+        cb.controlSize = NSControlSizeSmall;
+        cb.font = [NSFont systemFontOfSize:10.5 weight:NSFontWeightMedium];
+        cb.toolTip = [NSString stringWithFormat:@"%@ (%@)", chipHelp[cmd], cmd];
         [self.quickCmdButtons addObject:cb];
         [self.controls addObject:cb];
         [chipViews addObject:cb];
@@ -432,6 +772,14 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
     NSStackView *chipsRow = Stack(chipViews, NO);
     chipsRow.distribution = NSStackViewDistributionFillEqually;
     chipsRow.spacing = 4;
+
+    self.catLogFilter = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+    [self.catLogFilter addItemsWithTitles:@[@"All traffic", @"TX only", @"RX only"]];
+    self.catLogFilter.controlSize = NSControlSizeSmall;
+    self.catLogFilter.target = self;
+    self.catLogFilter.action = @selector(catLogFilterChanged:);
+    NSStackView *logFilterRow = Stack(@[Label(@"Show:"), self.catLogFilter], NO);
+    logFilterRow.spacing = 5;
 
     // Terminal Monospace Text View
     NSScrollView *termScroll = [NSScrollView new];
@@ -450,7 +798,7 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
     self.catTerminalTextView.textContainerInset = NSMakeSize(6, 6);
     termScroll.documentView = self.catTerminalTextView;
 
-    NSStackView *c3Inner = Stack(@[c3Header, cmdInputRow, chipsRow, termScroll], YES);
+    NSStackView *c3Inner = Stack(@[c3Header, cmdInputRow, chipsRow, logFilterRow, termScroll], YES);
     c3Inner.spacing = 6;
     NSBox *card3 = CreateCardWithView(c3Inner);
 
@@ -470,55 +818,443 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
     self.catStart.bezelStyle = NSBezelStyleRounded;
     self.catStart.controlSize = NSControlSizeSmall;
 
+    self.catStop = [self button:@"Stop" action:@selector(stopOperation:) tag:0];
+    self.catStop.bezelStyle = NSBezelStyleRounded;
+    self.catStop.controlSize = NSControlSizeSmall;
+    self.catStop.toolTip = @"Stop the current CAT operation and close its serial port.";
+    self.catStop.keyEquivalent = @"\e";
+
     self.catCounts = Label(@"Checks: 0    Passed: 0    Failed: 0    RTT: —");
     self.catCounts.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightRegular];
+    self.catLatencyView = [[TXCATLatencyView alloc] initWithFrame:NSMakeRect(0, 0, 420, 34)];
+    self.catLatencyView.toolTip = @"Recent CAT ping times; green passed, red failed";
+    [self.catLatencyView.heightAnchor constraintEqualToConstant:34].active = YES;
 
-    NSStackView *pingRow = Stack(@[self.catOnce, self.catStart, [NSView new]], NO);
+    NSStackView *pingRow = Stack(@[self.catOnce, self.catStart, self.catStop, [NSView new]], NO);
     pingRow.spacing = 8;
+    pingRow.detachesHiddenViews = YES;
 
-    NSTextField *pttGuard = Label(@"🛡️ PTT Guard: Test queries are safe & read-only. Transmitter is never keyed.");
+    NSTextField *pttGuard = Label(@"Ping sends ID; only. Raw CAT commands can change radio state or key TX.");
     pttGuard.font = [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
     pttGuard.textColor = NSColor.secondaryLabelColor;
 
-    NSStackView *c4Inner = Stack(@[c4Title, self.catResult, pingRow, self.catCounts, pttGuard], YES);
+    NSStackView *c4Inner = Stack(@[c4Title, self.catResult, pingRow, self.catCounts, self.catLatencyView, pttGuard], YES);
     c4Inner.spacing = 5;
     NSBox *card4 = CreateCardWithView(c4Inner);
 
     NSStackView *rightColumn = Stack(@[card3, card4], YES);
     rightColumn.spacing = 10;
 
-    // Symmetrical 2-Column Container
-    NSStackView *studioView = [NSStackView stackViewWithViews:@[leftColumn, rightColumn]];
-    studioView.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    studioView.alignment = NSLayoutAttributeTop;
-    studioView.distribution = NSStackViewDistributionFillEqually;
-    studioView.spacing = 12;
+    // Visible connection and command failures stay close to the controls.
+    self.catNotice = [NSTextField wrappingLabelWithString:@"CAT port available — use Read All to confirm radio communication."];
+    self.catNotice.font = [NSFont systemFontOfSize:11 weight:NSFontWeightSemibold];
+    self.catNotice.textColor = NSColor.secondaryLabelColor;
+    self.catNoticeBox = CreateCardWithView(self.catNotice);
+    self.catNoticeBox.fillColor = [NSColor colorWithCalibratedWhite:0.5 alpha:0.08];
+
+    NSStackView *columns = [NSStackView stackViewWithViews:@[leftColumn, rightColumn]];
+    columns.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    columns.alignment = NSLayoutAttributeTop;
+    columns.distribution = NSStackViewDistributionFillEqually;
+    columns.spacing = 12;
+    NSBox *automationCard = [self buildAutomationCard];
+    NSStackView *studioView = Stack(@[self.catNoticeBox, columns, automationCard], YES);
+    studioView.spacing = 8;
+    [self.catNoticeBox.widthAnchor constraintEqualToAnchor:studioView.widthAnchor].active = YES;
+    [columns.widthAnchor constraintEqualToAnchor:studioView.widthAnchor].active = YES;
+    [automationCard.widthAnchor constraintEqualToAnchor:studioView.widthAnchor].active = YES;
 
     // Anchor widths to guarantee full column width utilization
     [card1.widthAnchor constraintEqualToAnchor:leftColumn.widthAnchor].active = YES;
-    [card2.widthAnchor constraintEqualToAnchor:leftColumn.widthAnchor].active = YES;
     [card3.widthAnchor constraintEqualToAnchor:rightColumn.widthAnchor].active = YES;
     [card4.widthAnchor constraintEqualToAnchor:rightColumn.widthAnchor].active = YES;
 
     [freqBanner.widthAnchor constraintEqualToAnchor:c1Inner.widthAnchor].active = YES;
-    [badgeRow1.widthAnchor constraintEqualToAnchor:c1Inner.widthAnchor].active = YES;
     [badgeRow2.widthAnchor constraintEqualToAnchor:c1Inner.widthAnchor].active = YES;
-    [freqRow.widthAnchor constraintEqualToAnchor:c2Inner.widthAnchor].active = YES;
-    [bandRow1.widthAnchor constraintEqualToAnchor:c2Inner.widthAnchor].active = YES;
-    [bandRow2.widthAnchor constraintEqualToAnchor:c2Inner.widthAnchor].active = YES;
-    [modePowerRow.widthAnchor constraintEqualToAnchor:c2Inner.widthAnchor].active = YES;
-    [frontendRow.widthAnchor constraintEqualToAnchor:c2Inner.widthAnchor].active = YES;
+    [meterGroup.widthAnchor constraintEqualToAnchor:c1Inner.widthAnchor].active = YES;
+    [sMeterRow.widthAnchor constraintEqualToAnchor:meterGroup.widthAnchor].active = YES;
+    [self.catSMeterScaleRow.widthAnchor constraintEqualToAnchor:meterGroup.widthAnchor].active = YES;
+    [scale.widthAnchor constraintEqualToAnchor:self.catSMeterGauge.widthAnchor].active = YES;
+    [voltageRow.widthAnchor constraintEqualToAnchor:meterGroup.widthAnchor].active = YES;
+    [powerMeterRow.widthAnchor constraintEqualToAnchor:meterGroup.widthAnchor].active = YES;
+    [freqRow.widthAnchor constraintEqualToAnchor:c1Inner.widthAnchor].active = YES;
+    [bandRow1.widthAnchor constraintEqualToAnchor:c1Inner.widthAnchor].active = YES;
+    [bandRow2.widthAnchor constraintEqualToAnchor:c1Inner.widthAnchor].active = YES;
+    [modePowerRow.widthAnchor constraintEqualToAnchor:c1Inner.widthAnchor].active = YES;
+    [frontendRow.widthAnchor constraintEqualToAnchor:c1Inner.widthAnchor].active = YES;
     [c3Header.widthAnchor constraintEqualToAnchor:c3Inner.widthAnchor].active = YES;
     [cmdInputRow.widthAnchor constraintEqualToAnchor:c3Inner.widthAnchor].active = YES;
     [chipsRow.widthAnchor constraintEqualToAnchor:c3Inner.widthAnchor].active = YES;
     [termScroll.widthAnchor constraintEqualToAnchor:c3Inner.widthAnchor].active = YES;
+    [self.catLatencyView.widthAnchor constraintEqualToAnchor:c4Inner.widthAnchor].active = YES;
 
     return studioView;
 }
 
+static NSString *StudioTimestamp(NSDate *date) {
+    NSDateFormatter *formatter = [NSDateFormatter new];
+    formatter.dateFormat = @"yyyy-MM-dd HH:mm:ss";
+    return [formatter stringFromDate:date ?: [NSDate date]];
+}
+
+- (void)reloadMacroMenu {
+    [self.macroPopup removeAllItems];
+    [self.macroPopup addItemWithTitle:@"Choose a macro…"];
+    for (NSDictionary *macro in self.studioMacros) [self.macroPopup addItemWithTitle:macro[@"name"] ?: @"Untitled"];
+    [self.macroPopup selectItemAtIndex:0];
+    for (NSView *view in self.macroButtonCanvas.subviews.copy) [view removeFromSuperview];
+    CGFloat x = 0;
+    for (NSUInteger i = 0; i < self.studioMacros.count; i++) {
+        NSString *name = self.studioMacros[i][@"name"] ?: @"Untitled";
+        CGFloat width = MIN(190, MAX(96, name.length * 8 + 24));
+        NSButton *button = [NSButton buttonWithTitle:name target:self action:@selector(runMacroButton:)];
+        button.tag = i;
+        button.bezelStyle = NSBezelStyleRounded;
+        button.contentTintColor = NSColor.systemBlueColor;
+        button.frame = NSMakeRect(x, 2, width, 27);
+        button.toolTip = [NSString stringWithFormat:@"Run saved macro: %@", name];
+        [self.macroButtonCanvas addSubview:button];
+        x += width + 7;
+    }
+    if (!self.studioMacros.count) {
+        NSTextField *empty = Label(@"Save a macro to add its quick-launch button here.");
+        empty.frame = NSMakeRect(3, 5, 390, 22);
+        [self.macroButtonCanvas addSubview:empty];
+    }
+    self.macroButtonCanvas.frame = NSMakeRect(0, 0, MAX(600, x), 32);
+}
+
+- (void)runMacroButton:(NSButton *)sender {
+    if (self.busy) return;
+    [self.macroPopup selectItemAtIndex:sender.tag + 1];
+    [self macroSelected:nil];
+    [self runMacro:sender];
+}
+
+- (void)macroSelected:(id)sender {
+    (void)sender;
+    NSInteger index = self.macroPopup.indexOfSelectedItem - 1;
+    if (index >= 0 && index < (NSInteger)self.studioMacros.count) {
+        NSDictionary *macro = self.studioMacros[index];
+        self.macroName.stringValue = macro[@"name"] ?: @"";
+        self.macroCommands.string = [macro[@"commands"] componentsJoinedByString:@"\n"] ?: @"";
+    } else { self.macroName.stringValue = @""; self.macroCommands.string = @"MD6;\nPC050;\nFL1;"; }
+    [self refresh];
+}
+
+- (void)saveMacro:(id)sender {
+    (void)sender;
+    NSString *name = [self.macroName.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (!name.length || name.length > 60) { [self alert:@"Name the macro" message:@"Use a name of 1–60 characters."]; return; }
+    NSError *error = nil;
+    NSArray *commands = TXValidatedCATMacro(self.macroCommands.string, &error);
+    if (!commands) { [self alert:@"Macro needs a change" message:error.localizedDescription]; return; }
+    NSInteger selected = self.macroPopup.indexOfSelectedItem - 1;
+    for (NSUInteger i = 0; i < self.studioMacros.count; i++) {
+        if ((NSInteger)i != selected && [self.studioMacros[i][@"name"] caseInsensitiveCompare:name] == NSOrderedSame) {
+            [self alert:@"Name already in use" message:@"Choose a different name or select the existing macro to edit it."]; return;
+        }
+    }
+    NSDictionary *macro = @{@"name": name, @"commands": commands};
+    if (selected >= 0 && selected < (NSInteger)self.studioMacros.count) self.studioMacros[selected] = macro;
+    else {
+        if (self.studioMacros.count >= 40) { [self alert:@"Macro library is full" message:@"Delete an unused macro first."]; return; }
+        [self.studioMacros addObject:macro];
+        selected = self.studioMacros.count - 1;
+    }
+    [NSUserDefaults.standardUserDefaults setObject:self.studioMacros forKey:@"CATStudioMacrosV1"];
+    [self reloadMacroMenu];
+    [self.macroPopup selectItemAtIndex:selected + 1];
+    [self showCATNotice:[NSString stringWithFormat:@"Macro “%@” saved (%lu steps).", name, (unsigned long)commands.count] error:NO];
+    [self refresh];
+}
+
+- (void)deleteMacro:(id)sender {
+    (void)sender;
+    NSInteger index = self.macroPopup.indexOfSelectedItem - 1;
+    if (index < 0 || index >= (NSInteger)self.studioMacros.count || self.busy) return;
+    NSString *name = self.studioMacros[index][@"name"];
+    if (![self confirm:@"Delete this macro?" message:name button:@"Delete Macro"]) return;
+    [self.studioMacros removeObjectAtIndex:index];
+    [NSUserDefaults.standardUserDefaults setObject:self.studioMacros forKey:@"CATStudioMacrosV1"];
+    [self reloadMacroMenu]; [self refresh];
+}
+
+- (void)runMacro:(id)sender {
+    (void)sender;
+    NSInteger index = self.macroPopup.indexOfSelectedItem - 1;
+    if (![self CATControlReady] || index < 0 || index >= (NSInteger)self.studioMacros.count) return;
+    NSDictionary *macro = self.studioMacros[index];
+    NSArray<NSString *> *commands = macro[@"commands"];
+    NSString *name = macro[@"name"];
+    NSString *port = self.selectedPort ? self.selectedPort() : nil;
+    if (!port.length) return;
+    [self begin];
+    [self showCATNotice:[NSString stringWithFormat:@"Running %@ (0/%lu)…", name, (unsigned long)commands.count] error:NO];
+    Lab599Cancellation *token = self.token;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSError *error = nil;
+        BOOL success = TXRunCATMacro(port, commands, token, ^(NSUInteger step, NSString *command, NSString *reply) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self appendTerminalTX:command];
+                [self appendTerminalRX:reply latency:0 error:NO];
+                NSString *message = [NSString stringWithFormat:@"%@ — step %lu/%lu verified", name,
+                    (unsigned long)(step + 1), (unsigned long)commands.count];
+                [self showCATNotice:message error:NO];
+                if (self.statusChanged) self.statusChanged(message, (double)(step + 1) / commands.count);
+            });
+        }, &error);
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self end];
+            if (success) {
+                [self showCATNotice:[NSString stringWithFormat:@"Macro “%@” completed and verified.", name] error:NO];
+                [self readRadioStateAction:nil];
+            } else {
+                NSString *message = token.cancelled ? @"Macro stopped. Earlier steps may have changed the radio." :
+                    [NSString stringWithFormat:@"Macro stopped at an unverified step: %@", error.localizedDescription ?: @"Unknown error"];
+                [self showCATNotice:message error:!token.cancelled];
+                if (self.statusChanged) self.statusChanged(message, 0);
+            }
+        });
+    });
+}
+
+- (void)reloadSnapshotMenu {
+    [self.snapshotPopup removeAllItems];
+    [self.snapshotPopup addItemWithTitle:@"Choose a snapshot…"];
+    for (NSDictionary *snapshot in self.studioSnapshots) [self.snapshotPopup addItemWithTitle:snapshot[@"name"] ?: @"Untitled"];
+    [self.snapshotPopup selectItemAtIndex:0];
+}
+
+- (void)snapshotSelected:(id)sender {
+    (void)sender;
+    NSInteger index = self.snapshotPopup.indexOfSelectedItem - 1;
+    if (index >= 0 && index < (NSInteger)self.studioSnapshots.count) {
+        NSDictionary *snapshot = self.studioSnapshots[index];
+        NSData *settings = snapshot[@"settings"];
+        self.snapshotDetails.stringValue = [NSString stringWithFormat:@"%@\nCaptured: %@   •   Model: %@\nSettings: %lu bytes   •   SHA-256: %@\nDial: %@ Hz   •   Mode: %@   •   RF: %@ W   •   Filter: FL%@",
+            snapshot[@"name"], StudioTimestamp(snapshot[@"date"]), snapshot[@"model"],
+            (unsigned long)settings.length, TXFirmwareSHA256(settings), snapshot[@"frequency"] ?: @"—",
+            snapshot[@"mode"] ?: @"—", snapshot[@"power"] ?: @"—", snapshot[@"filter"] ?: @"—"];
+    } else self.snapshotDetails.stringValue = @"Choose a saved snapshot or capture the connected radio. Each snapshot includes all 1024 settings bytes and available live dial readings.";
+    [self refresh];
+}
+
+- (BOOL)saveSnapshotRecord:(NSDictionary *)record {
+    NSMutableArray *updated = [self.studioSnapshots mutableCopy];
+    if (updated.count >= 24) [updated removeObjectAtIndex:0];
+    [updated addObject:record];
+    [NSUserDefaults.standardUserDefaults setObject:updated forKey:@"CATStudioSnapshotsV1"];
+    if (![NSUserDefaults.standardUserDefaults synchronize]) return NO;
+    self.studioSnapshots = updated;
+    [self reloadSnapshotMenu];
+    [self.snapshotPopup selectItemAtIndex:self.studioSnapshots.count];
+    [self snapshotSelected:nil];
+    return YES;
+}
+
+- (NSDictionary *)snapshotRecordWithName:(NSString *)name model:(NSString *)model settings:(NSData *)settings state:(TXRadioState *)state {
+    NSMutableDictionary *record = [@{@"name": name, @"date": [NSDate date], @"model": model,
+        @"settings": settings, @"checksum": TXFirmwareSHA256(settings)} mutableCopy];
+    if (state.frequencyHz) record[@"frequency"] = @(state.frequencyHz);
+    if (state.modeCode >= 1 && state.modeCode <= 7) { record[@"modeCode"] = @(state.modeCode); record[@"mode"] = state.operatingMode ?: @"—"; }
+    if (state.rfPowerWatts >= 1 && state.rfPowerWatts <= 10) record[@"power"] = @(state.rfPowerWatts);
+    if (state.filterKnown) record[@"filter"] = @(state.filterNumber);
+    if (state.preampKnown) record[@"preamp"] = @(state.preampOn);
+    if (state.attenuatorKnown) record[@"attenuator"] = @(state.attenuatorOn);
+    return record;
+}
+
+- (void)captureSnapshot:(id)sender {
+    (void)sender;
+    if (![self CATControlReady]) return;
+    NSString *name = [self.snapshotName.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (!name.length || name.length > 60) { [self alert:@"Name the snapshot" message:@"Use a name of 1–60 characters."]; return; }
+    for (NSDictionary *saved in self.studioSnapshots) if ([saved[@"name"] caseInsensitiveCompare:name] == NSOrderedSame) {
+        [self alert:@"Name already in use" message:@"Choose a distinct snapshot name."]; return;
+    }
+    NSString *port = self.selectedPort ? self.selectedPort() : nil;
+    [self begin]; Lab599Cancellation *token = self.token;
+    [self showCATNotice:@"Capturing all 1024 radio settings bytes…" error:NO];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        TXConfigurationResult *result = TXSettingsTransfer(port, nil, TXDefaultConfigurationOptions(), token,
+            ^(NSString *phase, NSUInteger done, NSUInteger total) {
+                if (done % 64 && done != total) return;
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    if (self.statusChanged) self.statusChanged([NSString stringWithFormat:@"%@: %lu/%lu", phase, (unsigned long)done, (unsigned long)total], (double)done/total);
+                });
+            });
+        NSError *error = nil;
+        NSString *model = result.success && !token.cancelled ? TXExecuteCATCommand(port, @"ID;", 0.6, NULL, &error) : nil;
+        TXRadioState *state = model && TXClassifyCATReply([model dataUsingEncoding:NSASCIIStringEncoding]) == TXCATOK && !token.cancelled ?
+            TXReadRadioState(port, 0.3, &error) : nil;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self end];
+            if (result.success && state && !token.cancelled) {
+                BOOL saved = [self saveSnapshotRecord:[self snapshotRecordWithName:name model:model settings:result.settings state:state]];
+                [self showCATNotice:saved ? [NSString stringWithFormat:@"Snapshot “%@” captured and saved.", name] :
+                    @"Snapshot was captured but could not be saved to disk." error:!saved];
+            } else {
+                [self showCATNotice:token.cancelled ? @"Snapshot capture stopped." :
+                    [NSString stringWithFormat:@"Snapshot was not saved: %@", error.localizedDescription ?: result.message] error:!token.cancelled];
+            }
+        });
+    });
+}
+
+- (void)deleteSnapshot:(id)sender {
+    (void)sender;
+    NSInteger index = self.snapshotPopup.indexOfSelectedItem - 1;
+    if (self.busy || index < 0 || index >= (NSInteger)self.studioSnapshots.count) return;
+    if (![self confirm:@"Delete this snapshot?" message:self.studioSnapshots[index][@"name"] button:@"Delete Snapshot"]) return;
+    [self.studioSnapshots removeObjectAtIndex:index];
+    [NSUserDefaults.standardUserDefaults setObject:self.studioSnapshots forKey:@"CATStudioSnapshotsV1"];
+    [self reloadSnapshotMenu]; [self snapshotSelected:nil];
+}
+
+- (void)restoreSnapshot:(id)sender {
+    (void)sender;
+    NSInteger index = self.snapshotPopup.indexOfSelectedItem - 1;
+    if (![self CATControlReady] || index < 0 || index >= (NSInteger)self.studioSnapshots.count) return;
+    NSDictionary *snapshot = self.studioSnapshots[index];
+    NSData *settings = snapshot[@"settings"];
+    NSString *problem = TXValidateSettings(settings);
+    BOOL checksumValid = [snapshot[@"checksum"] isKindOfClass:NSString.class] &&
+        [snapshot[@"checksum"] isEqualToString:TXFirmwareSHA256(settings)];
+    if (problem || !checksumValid || TXClassifyCATReply([snapshot[@"model"] dataUsingEncoding:NSASCIIStringEncoding]) != TXCATOK) {
+        [self alert:@"Snapshot is invalid" message:problem ?: (!checksumValid ? @"The saved settings checksum does not match the snapshot." : @"The saved radio model is not recognized.")]; return;
+    }
+    NSString *port = self.selectedPort ? self.selectedPort() : nil;
+    NSString *message = [NSString stringWithFormat:@"Restore “%@” to %@?\n\nThis writes all 1024 settings bytes, then restores the saved live dial settings. The current settings will first be captured as a “Before restore” snapshot. Every write is read back. Keep the radio powered and connected.", snapshot[@"name"], port];
+    if (![self confirm:@"Restore radio snapshot?" message:message button:@"Back Up & Restore"]) return;
+    [self begin]; Lab599Cancellation *token = self.token;
+    [self showCATNotice:@"Checking radio model and backing up current settings…" error:NO];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSError *error = nil;
+        NSString *model = TXExecuteCATCommand(port, @"ID;", 0.6, NULL, &error);
+        TXConfigurationResult *backup = nil, *written = nil;
+        __block BOOL backupSaved = NO;
+        if (!token.cancelled && [model isEqualToString:snapshot[@"model"]]) {
+            TXRadioState *currentState = TXReadRadioState(port, 0.3, nil);
+            backup = TXSettingsTransfer(port, nil, TXDefaultConfigurationOptions(), token, nil);
+            if (backup.success && !token.cancelled) {
+                NSString *backupName = [NSString stringWithFormat:@"Before restore • %@", StudioTimestamp([NSDate date])];
+                NSDictionary *record = [self snapshotRecordWithName:backupName model:model settings:backup.settings state:currentState];
+                dispatch_sync(dispatch_get_main_queue(), ^{ backupSaved = [self saveSnapshotRecord:record]; });
+                if (backupSaved && !token.cancelled) {
+                    dispatch_async(dispatch_get_main_queue(), ^{ [self showCATNotice:@"Backup saved. Writing and verifying snapshot…" error:NO]; });
+                    written = TXSettingsTransfer(port, settings, TXDefaultConfigurationOptions(), token,
+                        ^(NSString *phase, NSUInteger done, NSUInteger total) {
+                            if (done % 64 && done != total) return;
+                            dispatch_async(dispatch_get_main_queue(), ^{
+                                if (self.statusChanged) self.statusChanged([NSString stringWithFormat:@"%@: %lu/%lu", phase, (unsigned long)done, (unsigned long)total], (double)done/total);
+                            });
+                        });
+                }
+            }
+        }
+        BOOL liveOK = YES;
+        if (written.success && !token.cancelled) {
+            NSMutableArray<NSString *> *commands = [NSMutableArray array];
+            if (snapshot[@"frequency"]) [commands addObject:[NSString stringWithFormat:@"FA%011llu;", [snapshot[@"frequency"] unsignedLongLongValue]]];
+            if (snapshot[@"modeCode"]) [commands addObject:[NSString stringWithFormat:@"MD%ld;", (long)[snapshot[@"modeCode"] integerValue]]];
+            if (snapshot[@"power"]) [commands addObject:[NSString stringWithFormat:@"PC%03d;", (int)round([snapshot[@"power"] doubleValue] * 10.0)]];
+            if (snapshot[@"filter"]) [commands addObject:[NSString stringWithFormat:@"FL%ld;", (long)[snapshot[@"filter"] integerValue] - 1]];
+            if (snapshot[@"preamp"]) [commands addObject:[NSString stringWithFormat:@"PA%d;", [snapshot[@"preamp"] boolValue] ? 1 : 0]];
+            if (snapshot[@"attenuator"]) [commands addObject:[NSString stringWithFormat:@"RA0%d;", [snapshot[@"attenuator"] boolValue] ? 1 : 0]];
+            if (commands.count) liveOK = TXRunCATMacro(port, commands, token, nil, &error);
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self end];
+            NSString *status = nil;
+            if (token.cancelled) status = @"Restore stopped. Radio settings may be partially changed; inspect the radio before retrying.";
+            else if (![model isEqualToString:snapshot[@"model"]]) status = @"Restore blocked: the connected radio model does not match this snapshot.";
+            else if (!backup.success) status = [NSString stringWithFormat:@"Restore blocked: current settings could not be backed up (%@).", backup.message ?: error.localizedDescription];
+            else if (!backupSaved) status = @"Restore blocked: the pre-restore backup could not be saved to disk.";
+            else if (!written.success) status = [NSString stringWithFormat:@"Restore incomplete: %@", written.message ?: @"Settings write failed."];
+            else if (!liveOK) status = [NSString stringWithFormat:@"Settings verified, but live dial restore failed: %@", error.localizedDescription ?: @"Read-back mismatch"];
+            else status = [NSString stringWithFormat:@"Snapshot “%@” restored and verified.", snapshot[@"name"]];
+            [self showCATNotice:status error:!(written.success && liveOK) && !token.cancelled];
+            if (self.statusChanged) self.statusChanged(status, written.success && liveOK ? 1 : 0);
+            if (written.success && liveOK) [self readRadioStateAction:nil];
+        });
+    });
+}
+
+- (void)observeCATTraffic:(NSNotification *)notification {
+    NSDictionary *event = notification.userInfo;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (self.monitorPaused) return;
+        [self.monitorEntries addObject:event];
+        if (self.monitorEntries.count > 600) [self.monitorEntries removeObjectsInRange:NSMakeRange(0, self.monitorEntries.count - 500)];
+        NSString *frame = event[@"frame"] ?: @"";
+        if ([event[@"direction"] isEqualToString:@"RX"] && [event[@"latencyMs"] doubleValue] >= 0) {
+            BOOL ok = !([frame hasPrefix:@"?;"] || [frame hasPrefix:@"E;"] || [frame hasPrefix:@"O;"]);
+            [self.monitorLatency addMilliseconds:[event[@"latencyMs"] doubleValue] passed:ok];
+        }
+        if (!self.monitorRedrawPending) {
+            self.monitorRedrawPending = YES;
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.16 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                self.monitorRedrawPending = NO;
+                [self redrawMonitor:nil];
+            });
+        }
+    });
+}
+
+- (void)redrawMonitor:(id)sender {
+    (void)sender;
+    NSMutableAttributedString *rendered = [NSMutableAttributedString new];
+    NSUInteger tx = 0, rx = 0, errors = 0;
+    double totalLatency = 0; NSUInteger latencyCount = 0;
+    NSInteger filter = self.monitorFilter.indexOfSelectedItem;
+    for (NSDictionary *event in self.monitorEntries) {
+        NSString *direction = event[@"direction"];
+        NSString *frame = event[@"frame"] ?: @"";
+        BOOL isError = [frame hasPrefix:@"?;"] || [frame hasPrefix:@"E;"] || [frame hasPrefix:@"O;"];
+        if ([direction isEqualToString:@"TX"]) tx++; else rx++;
+        if (isError) errors++;
+        double ms = [event[@"latencyMs"] doubleValue];
+        if ([direction isEqualToString:@"RX"] && ms >= 0) { totalLatency += ms; latencyCount++; }
+        if ((filter == 1 && ![direction isEqualToString:@"TX"]) ||
+            (filter == 2 && ![direction isEqualToString:@"RX"]) || (filter == 3 && !isError)) continue;
+        NSString *line = [NSString stringWithFormat:@"%@  %@  %@%@\n", StudioTimestamp(event[@"timestamp"]), direction, frame,
+            [direction isEqualToString:@"RX"] && ms >= 0 ? [NSString stringWithFormat:@"  (%.0f ms)", ms] : @""];
+        NSColor *color = isError ? NSColor.systemRedColor :
+            ([direction isEqualToString:@"TX"] ? [NSColor colorWithCalibratedRed:0.38 green:0.76 blue:1 alpha:1] : [NSColor colorWithCalibratedRed:0.45 green:0.9 blue:0.64 alpha:1]);
+        [rendered appendAttributedString:[[NSAttributedString alloc] initWithString:line attributes:@{
+            NSFontAttributeName: [NSFont monospacedSystemFontOfSize:10.5 weight:NSFontWeightMedium], NSForegroundColorAttributeName: color}]];
+    }
+    [self.monitorText.textStorage setAttributedString:rendered];
+    [self.monitorText scrollToEndOfDocument:nil];
+    self.monitorSummary.stringValue = [NSString stringWithFormat:@"%lu TX   ·   %lu RX   ·   %lu errors   ·   mean response %@   ·   %lu retained",
+        (unsigned long)tx, (unsigned long)rx, (unsigned long)errors,
+        latencyCount ? [NSString stringWithFormat:@"%.0f ms", totalLatency / latencyCount] : @"—",
+        (unsigned long)self.monitorEntries.count];
+}
+
+- (void)toggleMonitor:(id)sender {
+    (void)sender; self.monitorPaused = !self.monitorPaused;
+    self.monitorPause.title = self.monitorPaused ? @"Resume" : @"Pause";
+}
+- (void)clearMonitor:(id)sender {
+    (void)sender; [self.monitorEntries removeAllObjects]; [self.monitorLatency.samples removeAllObjects];
+    self.monitorLatency.needsDisplay = YES; [self redrawMonitor:nil];
+}
+- (void)copyMonitor:(id)sender {
+    (void)sender; [NSPasteboard.generalPasteboard clearContents];
+    [NSPasteboard.generalPasteboard setString:self.monitorText.string forType:NSPasteboardTypeString];
+}
+
+- (void)dealloc { [[NSNotificationCenter defaultCenter] removeObserver:self]; }
+
 - (instancetype)init {
     if (!(self = [super init])) return nil;
     self.controls = [NSMutableArray array];
+    self.catLogEntries = [NSMutableArray array];
+    self.studioMacros = [[NSUserDefaults.standardUserDefaults arrayForKey:@"CATStudioMacrosV1"] mutableCopy] ?: [NSMutableArray array];
+    self.studioSnapshots = [[NSUserDefaults.standardUserDefaults arrayForKey:@"CATStudioSnapshotsV1"] mutableCopy] ?: [NSMutableArray array];
+    self.monitorEntries = [NSMutableArray array];
     self.channels = [TXEmptyMemory() mutableCopy];
     self.view = [NSView new];
     self.view.translatesAutoresizingMaskIntoConstraints = NO;
@@ -722,10 +1458,17 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
     self.stop.translatesAutoresizingMaskIntoConstraints = NO;
     [self.view addSubview:self.stop];
     [NSLayoutConstraint activateConstraints:@[
-        [self.view.heightAnchor constraintEqualToConstant:520],
+        [self.view.heightAnchor constraintGreaterThanOrEqualToConstant:520],
         [self.stop.leadingAnchor constraintEqualToAnchor:self.view.leadingAnchor],
         [self.stop.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor]
     ]];
+
+    self.toolHeight = [self.view.heightAnchor constraintEqualToConstant:960];
+    self.toolHeight.priority = 750;
+    self.toolHeight.active = YES;
+    self.catBottomConstraint = [cat.bottomAnchor constraintLessThanOrEqualToAnchor:self.view.bottomAnchor constant:-8];
+    [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(observeCATTraffic:)
+        name:Lab599CATTrafficNotification object:nil];
 
     [self selectTool:0];
     return self;
@@ -734,6 +1477,8 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
 - (void)selectTool:(NSInteger)tool {
     if (self.busy) return;
     self.tool = tool;
+    self.toolHeight.constant = tool == 0 ? 960 : 520;
+    self.catBottomConstraint.active = tool == 0;
     for (NSUInteger i = 0; i < self.panels.count; i++) {
         self.panels[i].hidden = ((NSInteger)i != tool);
     }
@@ -742,28 +1487,65 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
 
 - (void)portsAvailable:(BOOL)available {
     self.hasPorts = available;
+    NSString *port = available && self.selectedPort ? self.selectedPort() : nil;
+    if (self.verifiedCATPort.length && ![self.verifiedCATPort isEqualToString:port]) {
+        [self updateRadioStateUI:[TXRadioState new]];
+        self.verifiedCATPort = nil;
+        if (available) [self showCATNotice:@"CAT port available — use Read All to confirm radio communication." error:NO];
+    }
     [self refresh];
 }
 
 - (void)refresh {
     for (NSControl *c in self.controls) c.enabled = !self.busy;
     self.table.enabled = !self.busy;
-    self.stop.enabled = self.busy;
-    self.stop.hidden = !self.busy;
+    BOOL canStop = self.busy && !self.token.cancelled;
+    self.stop.enabled = canStop;
+    self.stop.hidden = !self.busy || self.tool == 0;
+    self.catStop.enabled = canStop;
+    self.catStop.hidden = !self.busy || self.tool != 0;
+    self.macroStop.enabled = canStop;
+    self.snapshotStop.enabled = canStop;
+    self.macroStop.hidden = self.snapshotStop.hidden = !self.busy || self.tool != 0;
 
     // CAT Controls
     BOOL canCAT = !self.busy && self.hasPorts;
+    BOOL canControl = canCAT && self.verifiedCATPort.length &&
+        [self.verifiedCATPort isEqualToString:(self.selectedPort ? self.selectedPort() : nil)];
     self.catOnce.enabled = self.catStart.enabled = canCAT;
     self.catReadAllButton.enabled = canCAT;
-    self.catSetFreqButton.enabled = canCAT;
-    self.catSetModeButton.enabled = canCAT;
-    self.catSetPowerButton.enabled = canCAT;
-    self.catSendCommandButton.enabled = canCAT;
-    self.catPreampToggle.enabled = canCAT;
-    self.catAttenuatorToggle.enabled = canCAT;
-    self.catFilterSegment.enabled = canCAT;
-    for (NSButton *b in self.bandButtons) b.enabled = canCAT;
+    self.catFreqInputField.enabled = canControl;
+    self.catSetFreqButton.enabled = canControl;
+    self.catStepPopup.enabled = canControl;
+    self.catStepDownButton.enabled = canControl;
+    self.catStepUpButton.enabled = canControl;
+    self.catModePopup.enabled = canControl;
+    self.catSetModeButton.enabled = canControl;
+    self.catPowerPopup.enabled = canControl;
+    self.catSetPowerButton.enabled = canControl;
+    self.catCommandInput.enabled = canControl;
+    self.catSendCommandButton.enabled = canControl;
+    self.catPreampToggle.enabled = canControl;
+    self.catAttenuatorToggle.enabled = canControl;
+    self.catFilterSegment.enabled = canControl;
+    for (NSButton *b in self.bandButtons) b.enabled = canControl;
     for (NSButton *b in self.quickCmdButtons) b.enabled = canCAT;
+    self.macroSave.enabled = !self.busy;
+    self.macroDelete.enabled = !self.busy && self.macroPopup.indexOfSelectedItem > 0;
+    self.macroRun.enabled = canControl && self.macroPopup.indexOfSelectedItem > 0;
+    for (NSView *view in self.macroButtonCanvas.subviews) if ([view isKindOfClass:NSButton.class]) ((NSButton *)view).enabled = canControl;
+    self.snapshotCapture.enabled = canControl;
+    self.snapshotRestore.enabled = canControl && self.snapshotPopup.indexOfSelectedItem > 0;
+    self.snapshotDelete.enabled = !self.busy && self.snapshotPopup.indexOfSelectedItem > 0;
+    if (!self.hasPorts) {
+        self.catNotice.stringValue = @"Disconnected — connect the CAT adapter, then refresh the serial ports.";
+        self.catNotice.textColor = NSColor.systemOrangeColor;
+        self.catNoticeBox.fillColor = [NSColor.systemOrangeColor colorWithAlphaComponent:0.12];
+    } else if ([self.catNotice.stringValue hasPrefix:@"Disconnected"]) {
+        self.catNotice.stringValue = @"CAT port available — use Read All to confirm radio communication.";
+        self.catNotice.textColor = NSColor.secondaryLabelColor;
+        self.catNoticeBox.fillColor = [NSColor colorWithCalibratedWhite:0.5 alpha:0.08];
+    }
 
     // Settings & Memory
     self.settingsRead.enabled = self.memoryRead.enabled = canCAT;
@@ -818,18 +1600,74 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
 - (void)end {
     self.busy = NO;
     self.token = nil;
+    self.catStop.title = @"Stop";
     [self refresh];
     if (self.activityChanged) self.activityChanged(NO);
 }
 
-- (void)stopOperation:(id)sender {
-    (void)sender;
+- (BOOL)operationInProgress { return self.busy; }
+
+- (void)cancelActiveOperation {
+    if (!self.busy || self.token.cancelled) return;
     self.token.cancelled = YES;
     self.stop.enabled = NO;
+    self.catStop.enabled = NO;
+    self.catStop.title = @"Stopping…";
     if (self.statusChanged) self.statusChanged(@"Stopping and closing the serial port…", 0);
 }
 
+- (void)stopOperation:(id)sender {
+    (void)sender;
+    [self cancelActiveOperation];
+}
+
 #pragma mark - CAT Studio & Test
+
+- (BOOL)CATControlReady {
+    return !self.busy && self.hasPorts && self.verifiedCATPort.length &&
+        [self.verifiedCATPort isEqualToString:(self.selectedPort ? self.selectedPort() : nil)];
+}
+
+- (void)CATCommandFailed:(NSError *)error {
+    self.verifiedCATPort = nil;
+    [self updateRadioStateUI:[TXRadioState new]];
+    [self refresh];
+    [self showCATNotice:error.localizedDescription ?: @"CAT communication failed; read the radio before using controls." error:YES];
+}
+
+- (void)showCATNotice:(NSString *)message error:(BOOL)isError {
+    self.catNotice.stringValue = message;
+    self.catNotice.textColor = isError ? NSColor.systemRedColor : NSColor.secondaryLabelColor;
+    self.catNoticeBox.fillColor = isError ? [NSColor.systemRedColor colorWithAlphaComponent:0.12] :
+        [NSColor colorWithCalibratedWhite:0.5 alpha:0.08];
+}
+
+- (void)catLogFilterChanged:(id)sender {
+    (void)sender;
+    [self.catTerminalTextView.textStorage setAttributedString:[NSAttributedString new]];
+    NSInteger filter = self.catLogFilter.indexOfSelectedItem;
+    for (NSDictionary *entry in self.catLogEntries) {
+        if (filter == 1 && ![entry[@"kind"] isEqualToString:@"TX"]) continue;
+        if (filter == 2 && ![entry[@"kind"] isEqualToString:@"RX"]) continue;
+        [self.catTerminalTextView.textStorage appendAttributedString:entry[@"line"]];
+    }
+    [self.catTerminalTextView scrollToEndOfDocument:nil];
+}
+
+- (void)appendCATLogLine:(NSAttributedString *)line kind:(NSString *)kind {
+    [self.catLogEntries addObject:@{@"kind": kind, @"line": line}];
+    if (self.catLogEntries.count > 1000) {
+        [self.catLogEntries removeObjectsInRange:NSMakeRange(0, 250)];
+        [self catLogFilterChanged:nil];
+        return;
+    }
+    NSInteger filter = self.catLogFilter.indexOfSelectedItem;
+    if (filter == 0 || (filter == 1 && [kind isEqualToString:@"TX"]) ||
+        (filter == 2 && [kind isEqualToString:@"RX"])) {
+        [self.catTerminalTextView.textStorage appendAttributedString:line];
+        [self.catTerminalTextView scrollToEndOfDocument:nil];
+    }
+}
 
 - (void)appendTerminalTX:(NSString *)cmd {
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -844,8 +1682,7 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
             NSFontAttributeName: [NSFont fontWithName:@"Menlo" size:11] ?: [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular]
         };
         NSAttributedString *astr = [[NSAttributedString alloc] initWithString:line attributes:attrs];
-        [self.catTerminalTextView.textStorage appendAttributedString:astr];
-        [self.catTerminalTextView scrollToEndOfDocument:nil];
+        [self appendCATLogLine:astr kind:@"TX"];
     });
 }
 
@@ -864,13 +1701,13 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
             NSFontAttributeName: [NSFont fontWithName:@"Menlo" size:11] ?: [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular]
         };
         NSAttributedString *astr = [[NSAttributedString alloc] initWithString:line attributes:attrs];
-        [self.catTerminalTextView.textStorage appendAttributedString:astr];
-        [self.catTerminalTextView scrollToEndOfDocument:nil];
+        [self appendCATLogLine:astr kind:@"RX"];
     });
 }
 
 - (void)clearTerminalAction:(id)sender {
     (void)sender;
+    [self.catLogEntries removeAllObjects];
     [self.catTerminalTextView.textStorage setAttributedString:[NSAttributedString new]];
 }
 
@@ -884,21 +1721,32 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
 }
 
 - (void)updateRadioStateUI:(TXRadioState *)state {
-    if (state.modelID.length) self.catModelLabel.stringValue = [NSString stringWithFormat:@"Transceiver Model: %@", state.modelID];
+    self.catModelLabel.stringValue = state.modelID.length ? [NSString stringWithFormat:@"Transceiver Model: %@", state.modelID] : @"Transceiver Model: —";
     if (state.frequencyDisplay.length) {
         self.catFreqDisplay.stringValue = state.frequencyDisplay;
-        self.catFreqInputField.stringValue = [NSString stringWithFormat:@"%llu", state.frequencyHz];
+        self.catFreqInputField.stringValue = ToolsFormatInputFrequency(state.frequencyHz);
+    } else {
+        self.catFreqDisplay.stringValue = @"— . — . — MHz";
+        self.catFreqInputField.stringValue = @"";
     }
+    [self updateActiveBandForFrequency:state.frequencyHz];
     self.catModeBadge.stringValue = [NSString stringWithFormat:@"MODE: %@", state.operatingMode ?: @"—"];
-    if (fmod(state.rfPowerWatts, 1.0) == 0.0) {
+    if (state.rfPowerWatts <= 0.0) {
+        self.catPowerBadge.stringValue = @"PWR: —";
+    } else if (fmod(state.rfPowerWatts, 1.0) == 0.0) {
         self.catPowerBadge.stringValue = [NSString stringWithFormat:@"PWR: %.0f W", state.rfPowerWatts];
     } else {
         self.catPowerBadge.stringValue = [NSString stringWithFormat:@"PWR: %.1f W", state.rfPowerWatts];
     }
-    self.catFilterBadge.stringValue = [NSString stringWithFormat:@"FIL: FL%ld", (long)state.filterNumber];
-    self.catPreampBadge.stringValue = [NSString stringWithFormat:@"PRE: %@", state.preampOn ? @"ON" : @"OFF"];
-    self.catVoltageBadge.stringValue = [NSString stringWithFormat:@"VOLT: %.1f V", state.voltage];
-    self.catSMeterBadge.stringValue = [NSString stringWithFormat:@"S-MTR: S%ld", (long)MIN(9, state.sMeterDots / 3)];
+    self.catFilterBadge.stringValue = state.filterKnown ? [NSString stringWithFormat:@"FIL: FL%ld", (long)state.filterNumber] : @"FIL: —";
+    self.catPreampBadge.stringValue = state.preampKnown ? [NSString stringWithFormat:@"PRE: %@", state.preampOn ? @"ON" : @"OFF"] : @"PRE: —";
+    self.catVoltageBadge.stringValue = state.voltageKnown ? [NSString stringWithFormat:@"VOLT: %.1f V", state.voltage] : @"VOLT: —";
+    self.catIsTransmitting = state.isTransmitting;
+    self.catSMeterKnown = state.sMeterKnown;
+    self.catSMeterDots = state.sMeterDots;
+    [self refreshSMeterPresentation];
+    self.catVoltageGauge.doubleValue = MAX(0.0, MIN(20.0, state.voltage));
+    self.catPowerGauge.doubleValue = MAX(0.0, MIN(10.0, state.rfPowerWatts));
 
     // Sync input controls with read values
     if (state.operatingMode.length) {
@@ -909,20 +1757,57 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
         NSInteger idx = [self.catPowerPopup indexOfItemWithTitle:pTitle];
         if (idx >= 0) [self.catPowerPopup selectItemAtIndex:idx];
     }
-    if (state.filterNumber >= 1 && state.filterNumber <= 4) {
-        self.catFilterSegment.selectedSegment = state.filterNumber - 1;
+    self.catFilterSegment.selectedSegment = state.filterKnown ? state.filterNumber - 1 : -1;
+    self.catPreampToggle.state = state.preampKnown ? (state.preampOn ? NSControlStateValueOn : NSControlStateValueOff) : NSControlStateValueMixed;
+    self.catAttenuatorToggle.state = state.attenuatorKnown ? (state.attenuatorOn ? NSControlStateValueOn : NSControlStateValueOff) : NSControlStateValueMixed;
+}
+
+- (void)updateActiveBandForFrequency:(uint64_t)frequencyHz {
+    NSInteger activeIndex = ToolsBandIndexForFrequency(frequencyHz);
+    for (NSUInteger i = 0; i < self.bandButtons.count; i++) {
+        NSButton *button = self.bandButtons[i];
+        BOOL active = ((NSInteger)i == activeIndex);
+        button.state = active ? NSControlStateValueOn : NSControlStateValueOff;
+        button.bordered = !active;
+        button.layer.backgroundColor = active ? NSColor.controlAccentColor.CGColor : NSColor.clearColor.CGColor;
+        button.contentTintColor = active ? NSColor.whiteColor : nil;
+        button.toolTip = active ? @"Current radio band" : @"Tune the radio to this band preset";
     }
-    self.catPreampToggle.state = state.preampOn ? NSControlStateValueOn : NSControlStateValueOff;
-    self.catAttenuatorToggle.state = state.attenuatorOn ? NSControlStateValueOn : NSControlStateValueOff;
+}
+
+- (void)refreshSMeterPresentation {
+    self.catSMeterTitle.stringValue = self.catIsTransmitting ? @"TX meter" : @"S-Meter";
+    self.catSMeterScaleRow.hidden = self.catIsTransmitting;
+    self.catSMeterBadge.stringValue = self.catSMeterKnown ?
+        ToolsSMeterReading(self.catSMeterDots, self.catIsTransmitting) :
+        (self.catIsTransmitting ? @"TX meter: —" : @"S-MTR: —");
+    self.catSMeterGauge.doubleValue = self.catSMeterKnown ? MAX(0, MIN(30, self.catSMeterDots)) : 0;
 }
 
 - (void)updateStateFromCommand:(NSString *)cmd reply:(NSString *)reply {
-    if ([cmd hasPrefix:@"FA"] && reply && [reply hasPrefix:@"FA"] && reply.length >= 13) {
+    if ([cmd isEqualToString:@"IF;"] && [reply hasPrefix:@"IF"]) {
+        NSString *clean = [reply stringByReplacingOccurrencesOfString:@";" withString:@""];
+        if (clean.length >= 13) {
+            uint64_t frequencyHz = (uint64_t)[[clean substringWithRange:NSMakeRange(2, 11)] longLongValue];
+            if (frequencyHz > 0) {
+                self.catFreqDisplay.stringValue = ToolsFormatFreq(frequencyHz);
+                self.catFreqInputField.stringValue = ToolsFormatInputFrequency(frequencyHz);
+                [self updateActiveBandForFrequency:frequencyHz];
+            }
+        }
+        if (clean.length > 28) {
+            BOOL transmitting = ([clean characterAtIndex:28] == '1');
+            if (self.catIsTransmitting != transmitting) self.catSMeterKnown = NO;
+            self.catIsTransmitting = transmitting;
+            [self refreshSMeterPresentation];
+        }
+    } else if ([cmd hasPrefix:@"FA"] && reply && [reply hasPrefix:@"FA"] && reply.length >= 13) {
         NSString *digits = [reply substringWithRange:NSMakeRange(2, 11)];
         uint64_t f = (uint64_t)[digits longLongValue];
         if (f > 0) {
             self.catFreqDisplay.stringValue = ToolsFormatFreq(f);
-            self.catFreqInputField.stringValue = [NSString stringWithFormat:@"%llu", f];
+            self.catFreqInputField.stringValue = ToolsFormatInputFrequency(f);
+            [self updateActiveBandForFrequency:f];
         }
     } else if ([cmd hasPrefix:@"MD"] && reply && [reply hasPrefix:@"MD"] && reply.length >= 3) {
         int m = [[reply substringWithRange:NSMakeRange(2, 1)] intValue];
@@ -940,9 +1825,11 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
         NSString *pTitle = [NSString stringWithFormat:@"%ld W", (long)round(watts)];
         NSInteger idx = [self.catPowerPopup indexOfItemWithTitle:pTitle];
         if (idx >= 0) [self.catPowerPopup selectItemAtIndex:idx];
+        self.catPowerGauge.doubleValue = MAX(0.0, MIN(10.0, watts));
     } else if ([cmd hasPrefix:@"FL"] && reply && [reply hasPrefix:@"FL"] && reply.length >= 3) {
         unichar c = [reply characterAtIndex:2];
-        int fl = (c >= '1' && c <= '4') ? (c - '0') : [[reply substringFromIndex:2] intValue];
+        int fl = reply.length == 5 && c >= '0' && c <= '3' ? (int)(c - '0') + 1 :
+            (c >= '1' && c <= '4' ? (int)(c - '0') : 0);
         if (fl >= 1 && fl <= 4) {
             self.catFilterBadge.stringValue = [NSString stringWithFormat:@"FIL: FL%d", fl];
             self.catFilterSegment.selectedSegment = fl - 1;
@@ -965,8 +1852,14 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
             if (v > 20.0) v = v / 10.0;
             if (v >= 7.0 && v <= 20.0) {
                 self.catVoltageBadge.stringValue = [NSString stringWithFormat:@"VOLT: %.1f V", v];
+                self.catVoltageGauge.doubleValue = v;
             }
         }
+    } else if ([cmd hasPrefix:@"SM0"] && reply && [reply hasPrefix:@"SM"] && reply.length >= 4) {
+        NSInteger dots = [[reply substringFromIndex:2] integerValue];
+        self.catSMeterKnown = YES;
+        self.catSMeterDots = dots;
+        [self refreshSMeterPresentation];
     } else if ([cmd hasPrefix:@"ID"] && reply) {
         if ([reply containsString:@"ID019"]) self.catModelLabel.stringValue = @"Transceiver Model: Lab599 TX-500 Discovery (ID019)";
         else if ([reply containsString:@"ID500"]) self.catModelLabel.stringValue = @"Transceiver Model: Lab599 TX-500 Discovery (ID500)";
@@ -995,13 +1888,30 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
         dispatch_async(dispatch_get_main_queue(), ^{
             [self end];
             if (state) {
-                [self appendTerminalRX:[NSString stringWithFormat:@"%@ | Freq: %@ | Mode: %@ | Pwr: %.0fW | Volt: %.1fV",
-                                        state.modelID, state.frequencyDisplay, state.operatingMode, state.rfPowerWatts, state.voltage]
+                [self appendTerminalRX:[NSString stringWithFormat:@"%@ | Freq: %@ | Mode: %@ | Pwr: %@ | Volt: %@",
+                                        state.modelID ?: @"Unknown radio", state.frequencyDisplay ?: @"—",
+                                        state.operatingMode ?: @"—",
+                                        state.rfPowerWatts > 0 ? [NSString stringWithFormat:@"%.1f W", state.rfPowerWatts] : @"—",
+                                        state.voltageKnown ? [NSString stringWithFormat:@"%.1f V", state.voltage] : @"—"]
                                 latency:elapsed error:NO];
                 [self updateRadioStateUI:state];
-                if (self.statusChanged) self.statusChanged([NSString stringWithFormat:@"Radio state read successfully in %.0f ms.", elapsed], 1);
+                if ([state.modelID hasPrefix:@"Lab599 "]) {
+                    self.verifiedCATPort = port;
+                    [self showCATNotice:@"Radio identified; CAT controls are ready." error:NO];
+                } else {
+                    self.verifiedCATPort = nil;
+                    [self showCATNotice:@"CAT replied, but the radio identity was not verified. Controls remain disabled." error:YES];
+                }
+                [self refresh];
+                if (self.statusChanged) self.statusChanged([NSString stringWithFormat:@"CAT read finished in %.0f ms; %@.", elapsed,
+                    self.verifiedCATPort.length ? @"radio identified" : @"identity not verified"],
+                    self.verifiedCATPort.length ? 1 : 0);
             } else {
+                self.verifiedCATPort = nil;
+                [self updateRadioStateUI:[TXRadioState new]];
+                [self refresh];
                 [self appendTerminalRX:err.localizedDescription ?: @"Timeout" latency:elapsed error:YES];
+                [self showCATNotice:err.localizedDescription ?: @"Radio did not respond." error:YES];
                 if (self.statusChanged) self.statusChanged([NSString stringWithFormat:@"Failed to read radio: %@", err.localizedDescription ?: @"Port error"], 0);
             }
         });
@@ -1031,13 +1941,25 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
             [self end];
             if (reply) {
                 [self appendTerminalRX:reply latency:rtt error:NO];
+                if ([cmd isEqualToString:@"ID;"] &&
+                    TXClassifyCATReply([reply dataUsingEncoding:NSASCIIStringEncoding]) == TXCATOK) {
+                    self.verifiedCATPort = port;
+                    [self showCATNotice:@"Radio identified; CAT controls are ready." error:NO];
+                    [self refresh];
+                } else {
+                    [self showCATNotice:@"CAT reply received." error:NO];
+                }
                 if (self.statusChanged) self.statusChanged([NSString stringWithFormat:@"Reply: %@ (%.0f ms)", reply, rtt], 1);
                 [self updateStateFromCommand:cmd reply:reply];
             } else if (err && err.code == Lab599SerialTimeout && ToolsIsCATSetCommand(cmd)) {
                 [self appendTerminalRX:@"OK (Command Sent)" latency:rtt error:NO];
+                [self showCATNotice:@"Command sent; the radio did not return a reply." error:NO];
                 if (self.statusChanged) self.statusChanged([NSString stringWithFormat:@"Command sent successfully: %@", cmd], 1);
             } else {
+                self.verifiedCATPort = nil;
+                [self refresh];
                 [self appendTerminalRX:err ? err.localizedDescription : @"No reply / Timeout" latency:rtt error:YES];
+                [self showCATNotice:err.localizedDescription ?: @"No CAT reply." error:YES];
                 if (self.statusChanged) self.statusChanged([NSString stringWithFormat:@"Error sending %@: %@", cmd, err.localizedDescription ?: @"Timeout"], 0);
             }
         });
@@ -1045,11 +1967,32 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
 }
 
 - (void)bandPresetClicked:(NSButton *)sender {
+    // A preset click requests a tune; keep the highlight on the current dial
+    // until the CAT operation succeeds.
+    uint64_t current = ToolsParseInputFrequency([self.catFreqDisplay.stringValue stringByReplacingOccurrencesOfString:@" MHz" withString:@""]);
+    [self updateActiveBandForFrequency:current];
     uint64_t freq = (uint64_t)sender.tag;
     if (freq > 0) {
-        self.catFreqInputField.stringValue = [NSString stringWithFormat:@"%llu", freq];
+        self.catFreqInputField.stringValue = ToolsFormatInputFrequency(freq);
         [self setFrequencyAction:sender];
     }
+}
+
+- (void)stepFrequencyAction:(NSButton *)sender {
+    if (![self CATControlReady]) return;
+    uint64_t current = ToolsParseInputFrequency([self.catFreqDisplay.stringValue stringByReplacingOccurrencesOfString:@" MHz" withString:@""]);
+    if (!current) current = ToolsParseInputFrequency(self.catFreqInputField.stringValue);
+    uint64_t step = self.catStepPopup.indexOfSelectedItem == 0 ? 100 :
+                    self.catStepPopup.indexOfSelectedItem == 2 ? 10000 : 1000;
+    if (current < 500000 || current > 56000000 ||
+        (sender.tag < 0 && current < 500000 + step) ||
+        (sender.tag > 0 && current > 56000000 - step)) {
+        [self showCATNotice:@"Enter a valid frequency from 500 kHz to 56 MHz before stepping." error:YES];
+        return;
+    }
+    uint64_t next = sender.tag < 0 ? current - step : current + step;
+    self.catFreqInputField.stringValue = ToolsFormatInputFrequency(next);
+    [self setFrequencyAction:sender];
 }
 
 - (void)quickCommandChipClicked:(NSButton *)sender {
@@ -1062,18 +2005,16 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
 
 - (void)setFrequencyAction:(id)sender {
     (void)sender;
-    if (self.busy || !self.hasPorts) return;
+    if (![self CATControlReady]) return;
     NSString *port = self.selectedPort ? self.selectedPort() : nil;
     if (!port) return;
 
-    NSString *raw = [self.catFreqInputField.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    raw = [raw stringByReplacingOccurrencesOfString:@"," withString:@""];
-    raw = [raw stringByReplacingOccurrencesOfString:@"." withString:@""];
-    uint64_t freq = (uint64_t)[raw longLongValue];
-    if (freq < 100000 || freq > 60000000) {
-        [self alert:@"Invalid Frequency" message:@"Please enter a valid frequency between 100 kHz (100000 Hz) and 60 MHz (60000000 Hz)."];
+    uint64_t freq = ToolsParseInputFrequency(self.catFreqInputField.stringValue);
+    if (freq < 500000 || freq > 56000000) {
+        [self showCATNotice:@"Invalid frequency. Enter 500.000–56.000.000 Hz (for example 21.140.000)." error:YES];
         return;
     }
+    self.catFreqInputField.stringValue = ToolsFormatInputFrequency(freq);
 
     [self begin];
     NSString *cmd = [NSString stringWithFormat:@"FA%011llu;", freq];
@@ -1088,9 +2029,12 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
             if (!err || err.code == Lab599SerialTimeout) {
                 [self appendTerminalRX:reply ?: @"OK" latency:rtt error:NO];
                 self.catFreqDisplay.stringValue = ToolsFormatFreq(freq);
+                [self updateActiveBandForFrequency:freq];
+                [self showCATNotice:[NSString stringWithFormat:@"Tune sent: %@", ToolsFormatFreq(freq)] error:NO];
                 if (self.statusChanged) self.statusChanged([NSString stringWithFormat:@"Frequency tuned to %@", ToolsFormatFreq(freq)], 1);
             } else {
                 [self appendTerminalRX:err.localizedDescription ?: @"Error" latency:rtt error:YES];
+                [self CATCommandFailed:err];
             }
         });
     });
@@ -1098,7 +2042,7 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
 
 - (void)setModeAction:(id)sender {
     (void)sender;
-    if (self.busy || !self.hasPorts) return;
+    if (![self CATControlReady]) return;
     NSString *port = self.selectedPort ? self.selectedPort() : nil;
     if (!port) return;
 
@@ -1122,6 +2066,7 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
                 if (self.statusChanged) self.statusChanged([NSString stringWithFormat:@"Mode set to %@", modeName], 1);
             } else {
                 [self appendTerminalRX:err.localizedDescription ?: @"Error" latency:rtt error:YES];
+                [self CATCommandFailed:err];
             }
         });
     });
@@ -1129,7 +2074,7 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
 
 - (void)setPowerAction:(id)sender {
     (void)sender;
-    if (self.busy || !self.hasPorts) return;
+    if (![self CATControlReady]) return;
     NSString *port = self.selectedPort ? self.selectedPort() : nil;
     if (!port) return;
 
@@ -1155,16 +2100,18 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
                 } else {
                     self.catPowerBadge.stringValue = [NSString stringWithFormat:@"PWR: %.1f W", watts];
                 }
+                self.catPowerGauge.doubleValue = MAX(0.0, MIN(10.0, watts));
                 if (self.statusChanged) self.statusChanged([NSString stringWithFormat:@"RF Power set to %.0f W", watts], 1);
             } else {
                 [self appendTerminalRX:err.localizedDescription ?: @"Error" latency:rtt error:YES];
+                [self CATCommandFailed:err];
             }
         });
     });
 }
 
 - (void)togglePreampAction:(NSButton *)sender {
-    if (self.busy || !self.hasPorts) return;
+    if (![self CATControlReady]) return;
     NSString *port = self.selectedPort ? self.selectedPort() : nil;
     if (!port) return;
 
@@ -1185,13 +2132,14 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
                 if (self.statusChanged) self.statusChanged([NSString stringWithFormat:@"Preamp %@", on ? @"enabled" : @"disabled"], 1);
             } else {
                 [self appendTerminalRX:err.localizedDescription ?: @"Error" latency:rtt error:YES];
+                [self CATCommandFailed:err];
             }
         });
     });
 }
 
 - (void)toggleAttenuatorAction:(NSButton *)sender {
-    if (self.busy || !self.hasPorts) return;
+    if (![self CATControlReady]) return;
     NSString *port = self.selectedPort ? self.selectedPort() : nil;
     if (!port) return;
 
@@ -1211,35 +2159,40 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
                 if (self.statusChanged) self.statusChanged([NSString stringWithFormat:@"Attenuator %@", on ? @"enabled" : @"disabled"], 1);
             } else {
                 [self appendTerminalRX:err.localizedDescription ?: @"Error" latency:rtt error:YES];
+                [self CATCommandFailed:err];
             }
         });
     });
 }
 
 - (void)filterChangedAction:(NSSegmentedControl *)sender {
-    if (self.busy || !self.hasPorts) return;
+    if (![self CATControlReady]) return;
     NSString *port = self.selectedPort ? self.selectedPort() : nil;
     if (!port) return;
 
     NSInteger filterIndex = sender.selectedSegment; // 0, 1, 2, 3
     NSInteger filterNum = filterIndex + 1;         // 1, 2, 3, 4
     [self begin];
-    // TX-500 filter parameter is 0-indexed: FL0; = Filter 1, FL1; = Filter 2, etc.
+    // FL0..FL3 is an app shorthand; the executor preserves the TX-filter digit.
     NSString *cmd = [NSString stringWithFormat:@"FL%ld;", (long)filterIndex];
     [self appendTerminalTX:cmd];
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSError *err = nil;
-        double rtt = 0;
-        NSString *reply = TXExecuteCATCommand(port, cmd, 0.1, &rtt, &err);
+        __block NSString *reply = nil;
+        BOOL verified = TXRunCATMacro(port, @[cmd], self.token,
+            ^(NSUInteger index, NSString *command, NSString *readback) {
+                (void)index; (void)command; reply = readback;
+            }, &err);
         dispatch_async(dispatch_get_main_queue(), ^{
             [self end];
-            if (!err || err.code == Lab599SerialTimeout) {
-                [self appendTerminalRX:reply ?: @"OK" latency:rtt error:NO];
+            if (verified) {
+                [self appendTerminalRX:reply ?: @"Verified" latency:0 error:NO];
                 self.catFilterBadge.stringValue = [NSString stringWithFormat:@"FIL: FL%ld", (long)filterNum];
                 if (self.statusChanged) self.statusChanged([NSString stringWithFormat:@"Filter set to FL%ld", (long)filterNum], 1);
             } else {
-                [self appendTerminalRX:err.localizedDescription ?: @"Error" latency:rtt error:YES];
+                [self appendTerminalRX:err.localizedDescription ?: @"Error" latency:0 error:YES];
+                [self CATCommandFailed:err];
             }
         });
     });
@@ -1262,6 +2215,15 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
                 self.catResult.stringValue = [NSString stringWithFormat:@"%@\nReply: %@", s.message, s.lastReply ?: @"—"];
                 self.catCounts.stringValue = [NSString stringWithFormat:@"Checks: %lu    Passed: %lu    Failed: %lu    Reply: %.0f ms",
                     (unsigned long)s.checks, (unsigned long)s.passed, (unsigned long)s.failed, s.responseMilliseconds];
+                [self.catLatencyView addMilliseconds:s.responseMilliseconds passed:(s.lastCode == TXCATOK)];
+                if (s.lastCode == TXCATOK) {
+                    self.verifiedCATPort = port;
+                    [self showCATNotice:@"Radio identified; CAT controls are ready." error:NO];
+                } else {
+                    self.verifiedCATPort = nil;
+                    [self showCATNotice:s.message ?: @"CAT ping failed." error:YES];
+                }
+                [self refresh];
                 [self appendTerminalRX:s.lastReply latency:s.responseMilliseconds error:(s.lastCode != TXCATOK)];
                 if (self.statusChanged) self.statusChanged(s.message, 0);
             });
@@ -1272,8 +2234,22 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
         });
         dispatch_async(dispatch_get_main_queue(), ^{
             [self end];
+            NSString *finalMessage = result.message;
+            if (result.cancelled) {
+                finalMessage = self.hasPorts ?
+                    @"Ping stopped. CAT port available for a new session." :
+                    @"Ping stopped. CAT port disconnected.";
+                self.catResult.stringValue = [NSString stringWithFormat:@"%@\nLast reply: %@",
+                    finalMessage, result.lastReply ?: @"—"];
+                if (self.hasPorts) {
+                    BOOL verified = [self CATControlReady];
+                    [self showCATNotice:verified ?
+                        @"CAT port available; radio identity verified." :
+                        @"CAT port available — use Read All to confirm radio communication." error:NO];
+                }
+            }
             if (self.statusChanged) {
-                self.statusChanged(result.cancelled ? @"CAT test stopped. Port closed." : result.message,
+                self.statusChanged(finalMessage,
                                    result.passed && !result.failed ? 1 : 0);
             }
         });
@@ -2127,4 +3103,3 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
 }
 
 @end
-

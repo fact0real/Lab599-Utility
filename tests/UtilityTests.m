@@ -140,6 +140,29 @@ static void CATScenario(NSArray<NSString *> *replies, BOOL cancel, BOOL fragment
     }
     close(master);close(slave);printf("PASS: CAT %s (%lu queries)\n",cancel ? "cancel" : "response sequence",(unsigned long)queries);
 }
+static void CATCancelAfterSuccessScenario(void) {
+    int master, slave; char path[256];
+    Check(openpty(&master, &slave, path, NULL, NULL) == 0, @"CAT cancel PTY");
+    Lab599Cancellation *token = [Lab599Cancellation new], *stop = [Lab599Cancellation new];
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        Check([Command(master, stop) isEqual:@"ID;"], @"First CAT query");
+        Reply(master, @"ID500;", NO);
+        Check([Command(master, stop) isEqual:@"ID;"], @"Second CAT query");
+        token.cancelled = YES;
+        dispatch_semaphore_signal(done);
+    });
+    TXCATOptions options = TXDefaultCATOptions();
+    options.responseTimeout = .15; options.cycleInterval = .03; options.settleDelay = .001;
+    TXCATSummary *result = TXRunCATTest(@(path), options, token, nil, nil);
+    stop.cancelled = YES;
+    Check(dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC)) == 0,
+          @"CAT cancellation emulator stops");
+    Check(result.cancelled && result.checks == 1 && result.passed == 1 &&
+          [result.lastReply isEqual:@"ID500;"], @"Cancellation preserves last completed CAT reply");
+    close(master); close(slave);
+    printf("PASS: CAT cancellation preserves last reply\n");
+}
 int main(void) { @autoreleasepool {
     int master,slave;char path[256];Check(openpty(&master,&slave,path,NULL,NULL)==0,@"transport pty");close(slave);
     NSError *serialError=nil;
@@ -176,6 +199,7 @@ int main(void) { @autoreleasepool {
     CATScenario(@[@"ID019;",@"ID500;",@"ID501;",@"ID502;",@"ID505;"],NO,YES);
     CATScenario(@[@"",@"ID;",@"ID503;",@"ID500;extra",@"ID500;"],NO,NO);
     CATScenario(@[@""],YES,NO);
+    CATCancelAfterSuccessScenario();
 
     // Test interactive CAT execution & radio state parsing
     int catM, catS; char catPath[256];
@@ -195,11 +219,99 @@ int main(void) { @autoreleasepool {
     Check(!catErr && [catResp isEqualToString:@"FA00014074000;"] && rtt >= 0, @"Execute CAT command FA;");
     close(catM); close(catS);
 
-    // Test TXRadioState defaults and copy
+    NSError *macroError = nil;
+    NSArray *steps = TXValidatedCATMacro(@"MD6;\nPC050;\nFL1;", &macroError);
+    Check(steps.count == 3 && !macroError, @"Safe macro parsed");
+    Check(!TXValidatedCATMacro(@"TX1;", NULL) && !TXValidatedCATMacro(@"FA21074000;", NULL) &&
+          !TXValidatedCATMacro(@"MD6; PC050;", NULL), @"Unsafe or malformed macro rejected");
+    int macroM, macroS; char macroPath[256];
+    Check(openpty(&macroM, &macroS, macroPath, NULL, NULL) == 0, @"Macro pty");
+    NSString *macroPortPath = @(macroPath);
+    Lab599Cancellation *macroStop = [Lab599Cancellation new];
+    dispatch_semaphore_t macroDone = dispatch_semaphore_create(0);
+    NSArray *expected = @[@"MD6;", @"MD;", @"PC050;", @"PC;", @"FL;", @"FL10;", @"FL;"];
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        for (NSUInteger i = 0; i < expected.count; i++) {
+            NSString *cmd = Command(macroM, macroStop);
+            Check([cmd isEqualToString:expected[i]], @"Macro command sequence");
+            if (i == 1) Reply(macroM, @"MD6;", NO);
+            if (i == 3) Reply(macroM, @"PC050;", NO);
+            if (i == 4) Reply(macroM, @"FL00;", NO);
+            if (i == 6) Reply(macroM, @"FL10;", NO);
+        }
+        dispatch_semaphore_signal(macroDone);
+    });
+    __block NSUInteger txSeen = 0, rxSeen = 0;
+    id observer = [NSNotificationCenter.defaultCenter addObserverForName:Lab599CATTrafficNotification object:nil queue:nil usingBlock:^(NSNotification *note) {
+        Check([note.userInfo[@"port"] isEqualToString:macroPortPath], @"Monitor event port");
+        if ([note.userInfo[@"direction"] isEqualToString:@"TX"]) txSeen++; else rxSeen++;
+    }];
+    __block NSUInteger verified = 0;
+    macroError = nil;
+    BOOL macroOK = TXRunCATMacro(macroPortPath, steps, macroStop,
+        ^(NSUInteger index, NSString *command, NSString *reply) {
+            (void)index; (void)command; (void)reply; verified++;
+        }, &macroError);
+    Check(dispatch_semaphore_wait(macroDone, dispatch_time(DISPATCH_TIME_NOW, 2*NSEC_PER_SEC)) == 0, @"Macro emulator exits");
+    [NSNotificationCenter.defaultCenter removeObserver:observer];
+    Check(macroOK && !macroError && verified == 3 && txSeen == 7 && rxSeen == 4, @"Macro readback and app-owned sniffer");
+    close(macroM); close(macroS);
+
+    int mismatchM, mismatchS; char mismatchPath[256];
+    Check(openpty(&mismatchM, &mismatchS, mismatchPath, NULL, NULL) == 0, @"Mismatch pty");
+    Lab599Cancellation *mismatchStop = [Lab599Cancellation new];
+    dispatch_semaphore_t mismatchDone = dispatch_semaphore_create(0);
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        Check([Command(mismatchM, mismatchStop) isEqualToString:@"MD6;"], @"Mismatch setter sent");
+        Check([Command(mismatchM, mismatchStop) isEqualToString:@"MD;"], @"Mismatch readback sent");
+        Reply(mismatchM, @"MD2;", NO);
+        dispatch_semaphore_signal(mismatchDone);
+    });
+    macroError = nil;
+    Check(!TXRunCATMacro(@(mismatchPath), @[@"MD6;", @"PC050;"], mismatchStop, nil, &macroError) &&
+          [macroError.localizedDescription containsString:@"Read-back"], @"Macro stops on wrong readback");
+    Check(dispatch_semaphore_wait(mismatchDone, dispatch_time(DISPATCH_TIME_NOW, 2*NSEC_PER_SEC)) == 0, @"Mismatch emulator exits");
+    close(mismatchM); close(mismatchS);
+    Lab599Cancellation *preCancelledMacro = [Lab599Cancellation new]; preCancelledMacro.cancelled = YES;
+    Check(!TXRunCATMacro(@"/does-not-exist", @[@"ID;"], preCancelledMacro, nil, NULL),
+          @"Cancelled macro never opens the port");
+
+    // A snapshot without CAT replies must not display plausible demo measurements.
     TXRadioState *state = [TXRadioState new];
-    Check(state.frequencyHz == 14074000 && [state.operatingMode isEqualToString:@"USB"] && state.rfPowerWatts == 10.0, @"RadioState defaults");
+    Check(state.frequencyHz == 0 && !state.operatingMode && state.rfPowerWatts == 0.0 &&
+          state.sMeterDots == -1 && !state.modelID, @"RadioState starts unknown");
     TXRadioState *stateCopy = [state copy];
-    Check(stateCopy.frequencyHz == state.frequencyHz && [stateCopy.modelID isEqualToString:state.modelID], @"RadioState copy");
+    Check(stateCopy.frequencyHz == state.frequencyHz && stateCopy.sMeterDots == -1 &&
+          !stateCopy.modelID, @"RadioState copy");
+    int silentM, silentS; char silentPath[256];
+    Check(openpty(&silentM, &silentS, silentPath, NULL, NULL) == 0, @"Silent CAT pty");
+    NSError *silentError = nil;
+    Check(!TXReadRadioState(@(silentPath), .02, &silentError) &&
+          silentError.code == Lab599SerialTimeout, @"Silent serial adapter is not a connected radio");
+    close(silentM); close(silentS);
+    int partialM, partialS; char partialPath[256];
+    Check(openpty(&partialM, &partialS, partialPath, NULL, NULL) == 0, @"Partial CAT pty");
+    Lab599Cancellation *partialStop = [Lab599Cancellation new];
+    dispatch_semaphore_t partialDone = dispatch_semaphore_create(0);
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        for (NSUInteger i = 0; i < 10; i++) {
+            NSString *command = Command(partialM, partialStop);
+            if (!command) break;
+            if ([command isEqualToString:@"ID;"]) Reply(partialM, @"ID500;", NO);
+            if ([command isEqualToString:@"FA;"]) Reply(partialM, @"FA00014074000;", NO);
+        }
+        dispatch_semaphore_signal(partialDone);
+    });
+    NSError *partialError = nil;
+    TXRadioState *partial = TXReadRadioState(@(partialPath), .02, &partialError);
+    partialStop.cancelled = YES;
+    Check(dispatch_semaphore_wait(partialDone, dispatch_time(DISPATCH_TIME_NOW, 2*NSEC_PER_SEC)) == 0,
+          @"Partial CAT emulator exits");
+    Check(partial && !partialError && partial.frequencyHz == 14074000 &&
+          [partial.modelID containsString:@"ID500"] && !partial.operatingMode &&
+          !partial.preampKnown && !partial.voltageKnown && !partial.sMeterKnown,
+          @"Partial CAT response leaves unreported readings unknown");
+    close(partialM); close(partialS);
     printf("PASS: Interactive CAT execution and TXRadioState snapshot engine\n");
     for(NSNumber *mem in @[@NO,@YES]) {
         ConfigurationScenario(mem.boolValue,NO,@"fragmented");ConfigurationScenario(mem.boolValue,YES,@"");

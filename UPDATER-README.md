@@ -1,6 +1,6 @@
 # Lab599 Utility 2.0 — build and package guide
 
-The app combines Firmware Update, Time Sync, CAT Test, Settings and Memory. See [README](README.md) and [the Persian guide](QUICKSTART-FA.md) for operation.
+The app combines Firmware Update, Time Sync, CAT Studio, Settings and Memory. See [README](README.md) and [the Persian guide](QUICKSTART-FA.md) for operation.
 
 ## Standalone build
 

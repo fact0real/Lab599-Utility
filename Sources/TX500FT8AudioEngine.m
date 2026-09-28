@@ -19,6 +19,19 @@
 #define TX500_FT8_FFT_SIZE 16384
 #define TX500_FT8_WATER_BUFFER_SIZE 16384
 
+// Process receive slots in submission order. The C decoder also locks its
+// shared hash cache for other callers, including offline WAV decodes.
+static dispatch_queue_t TX500FT8DecodeQueue(void) {
+    static dispatch_queue_t queue;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        dispatch_queue_attr_t attr = dispatch_queue_attr_make_with_qos_class(
+            DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0);
+        queue = dispatch_queue_create("com.lab599.ft8.decode", attr);
+    });
+    return queue;
+}
+
 @interface TX500FT8AudioEngine () {
     AudioQueueRef _inputQueue;
     AudioQueueRef _outputQueue;
@@ -871,7 +884,7 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
     NSTimeInterval slotStartEpoch = floor(now / slotPeriod) * slotPeriod;
     NSDate *slotDate = [NSDate dateWithTimeIntervalSince1970:slotStartEpoch];
 
-    dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0), ^{
+    dispatch_async(TX500FT8DecodeQueue(), ^{
         tx500_ft8_decoded_t results[100];
         int numDecoded = tx500_ft8_decode_samples(snapshot, sampleCount, FT8_SAMPLE_RATE,
                                                   proto, results, 100);
@@ -1101,6 +1114,8 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
     unsigned char tones[FT8808_MAX_TONES];
     int numTones = tx500_ft8_encode_message([msgText UTF8String], self.protocol, tones, FT8808_MAX_TONES);
     if (numTones <= 0) {
+        self.isTransmitArmed = NO;
+        _autoParityLocked = -1;
         if (self.logHandler) {
             self.logHandler([NSString stringWithFormat:@"[%@ Error] Failed to encode text: '%@'", self.modeName, msgText]);
         }
@@ -1133,7 +1148,20 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
                                                  self.protocol, FT8_SAMPLE_RATE,
                                                  _txBuffer, FT8_MAX_SLOT_SAMPLES);
     _txBufferReadIndex = 0;
+    BOOL synthesisFailed = _txBufferTotalSamples <= 0;
+    if (synthesisFailed) _txBufferTotalSamples = 0;
     [_txBufferLock unlock];
+
+    if (synthesisFailed) {
+        self.isTransmitArmed = NO;
+        _autoParityLocked = -1;
+        if (_fakeItVfoShiftHz) {
+            [self restoreNominalDialAfterFakeIt];
+            _fakeItVfoShiftHz = 0;
+        }
+        if (self.logHandler) self.logHandler(@"[FT8 TX blocked] Audio synthesis failed; radio PTT was not keyed.");
+        return;
+    }
 
     [self resetSWRReading];
 

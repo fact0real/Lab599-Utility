@@ -137,8 +137,8 @@ static double Rad2Deg(double rad) {
             if (nonEmpty.count == 2) {
                 self.callerCall = nonEmpty[1];
             } else if (nonEmpty.count >= 3) {
-                // Check if index 1 is a modifier like DX, NA, AS, FD, etc.
-                if (nonEmpty[1].length <= 3 && ![self isValidCallsign:nonEmpty[1]]) {
+                // ft8_lib accepts CQ followed by 1–4 letters or three digits.
+                if ([self isCQModifier:nonEmpty[1]]) {
                     self.callerCall = nonEmpty[2];
                     if (nonEmpty.count >= 4 && [self isValidGrid:nonEmpty[3]]) {
                         self.grid = nonEmpty[3];
@@ -208,6 +208,18 @@ static double Rad2Deg(double rad) {
         self.distanceKm = [TX500FT8Message distanceKmFromGrid:myGrid toGrid:self.grid];
         self.bearingDeg = [TX500FT8Message bearingDegFromGrid:myGrid toGrid:self.grid];
     }
+}
+
+- (BOOL)isCQModifier:(NSString *)str {
+    NSUInteger n = str.length;
+    if (n == 0 || n > 4) return NO;
+    BOOL allLetters = YES, allDigits = YES;
+    for (NSUInteger i = 0; i < n; ++i) {
+        unichar c = [str characterAtIndex:i];
+        if (c < 'A' || c > 'Z') allLetters = NO;
+        if (c < '0' || c > '9') allDigits = NO;
+    }
+    return allLetters || (allDigits && n == 3);
 }
 
 - (BOOL)isValidCallsign:(NSString *)str {

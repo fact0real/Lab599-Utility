@@ -196,6 +196,16 @@ int main(int argc, const char * argv[]) {
         AssertTrue([msgCQ.grid isEqualToString:@"PM95"], @"msgCQ grid is PM95");
         AssertTrue(msgCQ.distanceKm > 7000, @"Calculated distance > 7000 km");
 
+        for (NSString *modifier in @[@"POTA", @"SOTA", @"TEST", @"123", @"DX"]) {
+            NSString *raw = [NSString stringWithFormat:@"CQ %@ K1ABC FN42", modifier];
+            TX500FT8Message *specialCQ = [TX500FT8Message messageWithRawText:raw
+                                                                       freqHz:1200 snrDb:-10 dt:0
+                                                                       myCall:@"EP2AES" myGrid:@"LM55"];
+            AssertTrue([specialCQ.callerCall isEqualToString:@"K1ABC"] &&
+                       [specialCQ.grid isEqualToString:@"FN42"],
+                       [NSString stringWithFormat:@"CQ %@ modifier preserves caller and grid", modifier]);
+        }
+
         TX500FT8Message *msgDirected = [TX500FT8Message messageWithRawText:@"EP2AES JA1ABC -08"
                                                                     freqHz:1200 snrDb:-8 dt:0.2
                                                                     myCall:@"EP2AES" myGrid:@"KM35"];

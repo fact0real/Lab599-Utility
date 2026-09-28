@@ -76,6 +76,12 @@ if [ "${1:-}" = "--test" ] || [ "${1:-}" = "--test-only" ]; then
         Sources/cft8/ft8/constants.c Sources/cft8/ft8/crc.c Sources/cft8/ft8/encode.c Sources/cft8/ft8/decode.c Sources/cft8/ft8/ldpc.c Sources/cft8/ft8/message.c Sources/cft8/ft8/text.c Sources/cft8/fft/kiss_fft.c Sources/cft8/fft/kiss_fftr.c Sources/cft8/common/wave.c Sources/cft8/common/monitor.c Sources/cft8/shim/tx500_ft8_shim.c \
         -o build/FT8StationTests
     ./build/FT8StationTests
+    clang -std=gnu11 -O1 -g -Wall -Wextra -Wno-unused-parameter -Werror -fsanitize=address,undefined \
+        -mmacosx-version-min=12.0 -IHeaders/cft8 -ISources/cft8 \
+        tests/FT8DecoderSafetyTests.c \
+        Sources/cft8/ft8/constants.c Sources/cft8/ft8/crc.c Sources/cft8/ft8/encode.c Sources/cft8/ft8/decode.c Sources/cft8/ft8/ldpc.c Sources/cft8/ft8/message.c Sources/cft8/ft8/text.c Sources/cft8/fft/kiss_fft.c Sources/cft8/fft/kiss_fftr.c Sources/cft8/common/wave.c Sources/cft8/common/monitor.c \
+        -o build/FT8DecoderSafetyTests
+    ./build/FT8DecoderSafetyTests
     clang -O2 -Wall -Wextra -Wno-unused-parameter -Werror -fobjc-arc \
         -mmacosx-version-min=12.0 -framework Cocoa \
         -IHeaders -ISources \

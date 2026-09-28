@@ -18,6 +18,7 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <math.h>
+#include <pthread.h>
 
 // ---- Decode tuning (Optimized for Deep FT8 Decoding) ------------------------
 #define FT8808_MIN_SCORE      7    // Lowered threshold to extract faint signals (-24 to -26 dB)
@@ -27,56 +28,106 @@
 #define FT8808_FREQ_OSR       2
 #define FT8808_TIME_OSR       4
 
-// ---- Callsign hashtable (adapted from ft8_lib demo) -----------------------
-// FT8 can transmit hashed (non-standard) callsigns; decoding those requires a
-// table of previously-seen calls. For a single offline slot this is mostly a
-// no-op, but we keep it so hashed-callsign messages render correctly once we
-// feed it a live stream of slots.
-#define CALLSIGN_HASHTABLE_SIZE 256
+// ---- Bounded callsign cache ----------------------------------------------
+// FT8 hashes nonstandard callsigns. Keep recently decoded full calls across
+// receive blocks, but never guess when a shortened hash matches two stations.
+// A compact array makes expiry safe: deleting an entry cannot break a probe
+// chain, and every lookup/insertion has a fixed upper bound of 256 entries.
+#define CALLSIGN_CACHE_CAPACITY 256
+#define CALLSIGN_MAX_AGE_DECODES 10
+#define CALLSIGN_HASH_MASK 0x3FFFFFu
 
-static struct {
-    char     callsign[12];
-    uint32_t hash; // 8 MSB = age, 22 LSB = hash
-} g_callsign_hashtable[CALLSIGN_HASHTABLE_SIZE];
+typedef struct {
+    char callsign[12];
+    uint32_t hash;
+    uint8_t age;
+    uint64_t last_seen;
+} callsign_cache_entry_t;
 
-static int g_callsign_hashtable_size;
+static callsign_cache_entry_t g_callsign_cache[CALLSIGN_CACHE_CAPACITY];
+static size_t g_callsign_cache_count;
+static uint64_t g_callsign_cache_sequence;
+static bool g_callsign_cache_ready;
+// ft8_lib's hash callbacks have no context pointer. Hold this lock over the
+// entire decode so callbacks and cache ageing cannot race across callers.
+static pthread_mutex_t g_decode_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static void hashtable_init(void) {
-    g_callsign_hashtable_size = 0;
-    memset(g_callsign_hashtable, 0, sizeof(g_callsign_hashtable));
+    g_callsign_cache_count = 0;
+    g_callsign_cache_sequence = 0;
+    g_callsign_cache_ready = true;
+}
+
+static void hashtable_cleanup(void) {
+    size_t retained = 0;
+    for (size_t i = 0; i < g_callsign_cache_count; ++i) {
+        callsign_cache_entry_t entry = g_callsign_cache[i];
+        if (entry.age >= CALLSIGN_MAX_AGE_DECODES) continue;
+        entry.age++;
+        g_callsign_cache[retained++] = entry;
+    }
+    g_callsign_cache_count = retained;
 }
 
 static void hashtable_add(const char* callsign, uint32_t hash) {
-    uint16_t hash10 = (hash >> 12) & 0x3FFu;
-    int idx = (hash10 * 23) % CALLSIGN_HASHTABLE_SIZE;
-    while (g_callsign_hashtable[idx].callsign[0] != '\0') {
-        if (((g_callsign_hashtable[idx].hash & 0x3FFFFFu) == hash) &&
-            (0 == strcmp(g_callsign_hashtable[idx].callsign, callsign))) {
-            g_callsign_hashtable[idx].hash &= 0x3FFFFFu; // reset age
+    if (!callsign || !callsign[0] || strlen(callsign) >= sizeof(g_callsign_cache[0].callsign)) return;
+    hash &= CALLSIGN_HASH_MASK;
+    for (size_t i = 0; i < g_callsign_cache_count; ++i) {
+        callsign_cache_entry_t *entry = &g_callsign_cache[i];
+        if (entry->hash == hash && strcmp(entry->callsign, callsign) == 0) {
+            entry->age = 0;
+            entry->last_seen = ++g_callsign_cache_sequence;
             return;
         }
-        idx = (idx + 1) % CALLSIGN_HASHTABLE_SIZE;
     }
-    g_callsign_hashtable_size++;
-    strncpy(g_callsign_hashtable[idx].callsign, callsign, 11);
-    g_callsign_hashtable[idx].callsign[11] = '\0';
-    g_callsign_hashtable[idx].hash = hash;
+
+    size_t index = g_callsign_cache_count;
+    if (index < CALLSIGN_CACHE_CAPACITY) {
+        g_callsign_cache_count++;
+    } else {
+        // Evict the stalest entry; break same-age ties by last observation.
+        index = 0;
+        for (size_t i = 1; i < CALLSIGN_CACHE_CAPACITY; ++i) {
+            if (g_callsign_cache[i].age > g_callsign_cache[index].age ||
+                (g_callsign_cache[i].age == g_callsign_cache[index].age &&
+                 g_callsign_cache[i].last_seen < g_callsign_cache[index].last_seen)) index = i;
+        }
+    }
+    callsign_cache_entry_t *entry = &g_callsign_cache[index];
+    strcpy(entry->callsign, callsign);
+    entry->hash = hash;
+    entry->age = 0;
+    entry->last_seen = ++g_callsign_cache_sequence;
 }
 
 static bool hashtable_lookup(ftx_callsign_hash_type_t hash_type, uint32_t hash, char* callsign) {
-    uint8_t hash_shift = (hash_type == FTX_CALLSIGN_HASH_10_BITS) ? 12
-                       : (hash_type == FTX_CALLSIGN_HASH_12_BITS ? 10 : 0);
-    uint16_t hash10 = (hash >> (12 - hash_shift)) & 0x3FFu;
-    int idx = (hash10 * 23) % CALLSIGN_HASHTABLE_SIZE;
-    while (g_callsign_hashtable[idx].callsign[0] != '\0') {
-        if (((g_callsign_hashtable[idx].hash & 0x3FFFFFu) >> hash_shift) == hash) {
-            strcpy(callsign, g_callsign_hashtable[idx].callsign);
-            return true;
-        }
-        idx = (idx + 1) % CALLSIGN_HASHTABLE_SIZE;
-    }
+    if (!callsign) return false;
     callsign[0] = '\0';
-    return false;
+    unsigned shift;
+    switch (hash_type) {
+        case FTX_CALLSIGN_HASH_10_BITS: shift = 12; break;
+        case FTX_CALLSIGN_HASH_12_BITS: shift = 10; break;
+        case FTX_CALLSIGN_HASH_22_BITS: shift = 0; break;
+        default: return false;
+    }
+    const char *match = NULL;
+    for (size_t i = 0; i < g_callsign_cache_count; ++i) {
+        const callsign_cache_entry_t *entry = &g_callsign_cache[i];
+        if ((entry->hash >> shift) != hash) continue;
+        if (match && strcmp(match, entry->callsign) != 0) return false;
+        match = entry->callsign;
+    }
+    if (!match) return false;
+    strcpy(callsign, match);
+    return true;
+}
+
+static void set_candidate_time_index(ftx_candidate_t *candidate, int index, int time_osr) {
+    int offset = index / time_osr;
+    int sub = index % time_osr;
+    if (sub < 0) { sub += time_osr; offset--; }
+    candidate->time_offset = offset;
+    candidate->time_sub = (uint8_t)sub;
 }
 
 static ftx_callsign_hash_interface_t g_hash_if = {
@@ -176,11 +227,13 @@ int ft8808_decode_samples(const float* samples,
                           ft8808_protocol_t protocol,
                           ft8808_decoded_t* out,
                           int max_out) {
-    if (samples == NULL || out == NULL || max_out <= 0 || num_samples <= 0) {
+    if (samples == NULL || out == NULL || max_out <= 0 || num_samples <= 0 || sample_rate <= 0) {
         return -2;
     }
 
-    hashtable_init();
+    pthread_mutex_lock(&g_decode_mutex);
+    if (!g_callsign_cache_ready) hashtable_init();
+    else hashtable_cleanup();
 
     monitor_config_t mon_cfg = {
         .f_min       = 200,
@@ -210,8 +263,9 @@ int ft8808_decode_samples(const float* samples,
     for (int i = 0; i < FT8808_MAX_DECODED; ++i) decoded_hashtable[i] = NULL;
 
     int num_out = 0;
+    int num_stored = 0;
 
-    for (int idx = 0; idx < num_candidates && num_out < max_out; ++idx) {
+    for (int idx = 0; idx < num_candidates && num_out < max_out && num_stored < FT8808_MAX_DECODED; ++idx) {
         const ftx_candidate_t* cand = &candidates[idx];
 
         float freq_hz  = (mon.min_bin + cand->freq_offset + (float)cand->freq_sub / wf->freq_osr) / mon.symbol_period;
@@ -220,12 +274,8 @@ int ft8808_decode_samples(const float* samples,
         float timing_sigma = mon.symbol_period / wf->time_osr;
         if (time_index > -10 * wf->time_osr && time_index < 20 * wf->time_osr - 1) {
             ftx_candidate_t before = *cand, after = *cand;
-            int before_index = time_index - 1, after_index = time_index + 1;
-            before.time_offset = before_index / wf->time_osr;
-            before.time_sub = (uint8_t)(before_index % wf->time_osr);
-            if ((int8_t)before.time_sub < 0) { before.time_sub += wf->time_osr; before.time_offset--; }
-            after.time_offset = after_index / wf->time_osr;
-            after.time_sub = (uint8_t)(after_index % wf->time_osr);
+            set_candidate_time_index(&before, time_index - 1, wf->time_osr);
+            set_candidate_time_index(&after, time_index + 1, wf->time_osr);
             int score_before = ftx_candidate_sync_score(wf, &before);
             int score_after = ftx_candidate_sync_score(wf, &after);
             float denominator = (float)score_before - 2.0f * cand->score + (float)score_after;
@@ -247,6 +297,7 @@ int ft8808_decode_samples(const float* samples,
         // Linear-probe de-dup, identical to the upstream demo.
         int idx_hash = message.hash % FT8808_MAX_DECODED;
         bool found_empty = false, found_dup = false;
+        int probes = 0;
         do {
             if (decoded_hashtable[idx_hash] == NULL) {
                 found_empty = true;
@@ -256,10 +307,11 @@ int ft8808_decode_samples(const float* samples,
             } else {
                 idx_hash = (idx_hash + 1) % FT8808_MAX_DECODED;
             }
-        } while (!found_empty && !found_dup);
+        } while (!found_empty && !found_dup && ++probes < FT8808_MAX_DECODED);
 
-        if (!found_empty) continue; // duplicate
+        if (!found_empty) continue; // duplicate or a full de-duplication table
 
+        num_stored++;
         memcpy(&decoded[idx_hash], &message, sizeof(message));
         decoded_hashtable[idx_hash] = &decoded[idx_hash];
 
@@ -279,6 +331,7 @@ int ft8808_decode_samples(const float* samples,
     }
 
     monitor_free(&mon);
+    pthread_mutex_unlock(&g_decode_mutex);
     return num_out;
 }
 
@@ -287,14 +340,19 @@ int ft8808_decode_wav(const char* path,
                       ft8808_decoded_t* out,
                       int max_out) {
     // FT8 is ~15 s; allow a generous ceiling. 12 kHz * 30 s.
-    static float signal[12000 * 30];
-    int num_samples = sizeof(signal) / sizeof(signal[0]);
+    const int capacity = 12000 * 30;
+    float *signal = calloc((size_t)capacity, sizeof(*signal));
+    if (!signal) return -2;
+    int num_samples = capacity;
     int sample_rate = 0;
 
     if (load_wav(signal, &num_samples, &sample_rate, path) < 0) {
+        free(signal);
         return -1;
     }
-    return ft8808_decode_samples(signal, num_samples, sample_rate, protocol, out, max_out);
+    int decoded = ft8808_decode_samples(signal, num_samples, sample_rate, protocol, out, max_out);
+    free(signal);
+    return decoded;
 }
 
 // ---- Transmit path --------------------------------------------------------

@@ -19,9 +19,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2.252</string>
+	<string>2.257</string>
 	<key>CFBundleVersion</key>
-	<string>258</string>
+	<string>263</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>12.0</string>
 	<key>NSAudioCaptureUsageDescription</key>

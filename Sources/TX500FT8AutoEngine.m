@@ -657,13 +657,17 @@
             }
         }
 
-        if (callers.count > 0 && self.callFirstEnabled) {
-            // Best caller selection (highest SNR)
-            TX500FT8Message *bestCaller = callers[0];
+        TX500FT8Message *bestCaller = nil;
+        if (callers.count > 0) {
+            // Notify the operator even when automatic Call 1st is disabled.
+            bestCaller = callers[0];
             for (TX500FT8Message *c in callers) {
                 if (c.snrDb > bestCaller.snrDb) bestCaller = c;
             }
+            if (self.onCQReplyDetected) self.onCQReplyDetected(bestCaller);
+        }
 
+        if (bestCaller && self.callFirstEnabled) {
             _resumeCQAfterCurrentQSO = self.isAutoCQActive || self.qsoPhase == TX500FT8QSOPhaseCallingCQ;
             if (self.isAutoCQActive) {
                 self.isAutoCQActive = NO;
@@ -871,6 +875,7 @@
     _pendingCaller = [best copy];
     _pendingCallerParity = parity;
     _pendingCallerReceivedAt = [NSDate date];
+    if (self.onCQReplyDetected) self.onCQReplyDetected(best);
     if (self.logHandler) {
         self.logHandler([NSString stringWithFormat:
             @"[Auto-CQ] %@ also called us; queued ahead of the next CQ.", best.callerCall]);

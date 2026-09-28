@@ -266,6 +266,10 @@ int main(int argc, const char * argv[]) {
 
         TX500FT8AutoEngine *autoEng = [[TX500FT8AutoEngine alloc] init];
         autoEng.audioEngine = audioEng;
+        __block NSInteger cqReplyNotifications = 0;
+        autoEng.onCQReplyDetected = ^(TX500FT8Message *caller) {
+            if ([caller.callerCall isEqualToString:@"JA1ABC"]) cqReplyNotifications++;
+        };
 
         [autoEng startAutoCQWithLimit:5];
         AssertTrue(autoEng.isAutoCQActive, @"Auto-CQ active");
@@ -281,6 +285,7 @@ int main(int argc, const char * argv[]) {
                                                                   myCall:@"EP2AES" myGrid:@"KM35"];
         [autoEng processDecodedSlot:@[callerMsg] parity:1];
 
+        AssertTrue(cqReplyNotifications == 1, @"Directed reply to our CQ produces one operator alert event");
         AssertTrue(!autoEng.isAutoCQActive, @"Auto-CQ stopped on caller detection");
         AssertTrue([autoEng.activeDXCall isEqualToString:@"JA1ABC"], @"Locked onto caller JA1ABC");
         AssertTrue(autoEng.qsoPhase == TX500FT8QSOPhaseSendingReport, @"Transitioned to SendingReport (Tx 2)");

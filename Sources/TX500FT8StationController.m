@@ -9,6 +9,90 @@
 #import "TX500FT8StationController.h"
 #import "TX500LogbookManager.h"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+#include <math.h>
+
+static NSString * const kCQReplyAlertEnabled = @"TX500_FT8_CQReplyAlertEnabled";
+static NSString * const kQSOCompleteAlertEnabled = @"TX500_FT8_QSOCompleteAlertEnabled";
+static NSString * const kCQReplyAlertTone = @"TX500_FT8_CQReplyAlertTone";
+static NSString * const kQSOCompleteAlertTone = @"TX500_FT8_QSOCompleteAlertTone";
+static NSString * const kAlertOutputUID = @"TX500_FT8_AlertOutputUID";
+static NSString * const kAlertVolume = @"TX500_FT8_AlertVolume";
+
+static void TX500AppendBE16(NSMutableData *data, uint16_t value) {
+    uint8_t bytes[] = {(uint8_t)(value >> 8), (uint8_t)value};
+    [data appendBytes:bytes length:sizeof(bytes)];
+}
+
+static void TX500AppendBE32(NSMutableData *data, uint32_t value) {
+    uint8_t bytes[] = {(uint8_t)(value >> 24), (uint8_t)(value >> 16),
+                       (uint8_t)(value >> 8), (uint8_t)value};
+    [data appendBytes:bytes length:sizeof(bytes)];
+}
+
+// Small original chimes, synthesized as 44.1 kHz AIFF.  Their audio never
+// enters the FT8 transmitter's CoreAudio output queue.
+static NSData *TX500AlertChimeData(NSInteger kind) {
+    static const double frequencies[4][5] = {
+        {880, 1174.66, 1567.98, 0, 0},       // Signal Spark
+        {523.25, 783.99, 1046.50, 0, 0},     // Orbit Ping
+        {523.25, 659.25, 783.99, 1046.50, 0},// Victory Fanfare
+        {392, 523.25, 659.25, 783.99, 1046.50} // Pixel Win
+    };
+    static const double durations[4][5] = {
+        {0.12, 0.13, 0.27, 0, 0},
+        {0.19, 0.15, 0.27, 0, 0},
+        {0.13, 0.13, 0.14, 0.36, 0},
+        {0.09, 0.09, 0.09, 0.10, 0.28}
+    };
+    kind = MAX(0, MIN(3, kind));
+    const double sampleRate = 44100.0;
+    NSUInteger noteCount = kind == 3 ? 5 : (kind == 2 ? 4 : 3);
+    NSUInteger frameCount = 0;
+    for (NSUInteger n = 0; n < noteCount; n++) frameCount += (NSUInteger)llround(durations[kind][n] * sampleRate);
+    NSUInteger pcmBytes = frameCount * 2;
+    uint8_t *pcm = calloc(pcmBytes, 1);
+    if (!pcm) return nil;
+    NSUInteger cursor = 0;
+    for (NSUInteger n = 0; n < noteCount; n++) {
+        NSUInteger frames = (NSUInteger)llround(durations[kind][n] * sampleRate);
+        double phase = 0;
+        for (NSUInteger i = 0; i < frames; i++) {
+            double t = (double)i / sampleRate;
+            double progress = (double)i / (double)MAX((NSUInteger)1, frames);
+            double attack = MIN(1.0, t / 0.012);
+            double release = MIN(1.0, (double)(frames - i) / (sampleRate * 0.065));
+            double envelope = attack * release * (0.88 - 0.20 * progress);
+            double sweep = kind == 1 ? (0.86 + 0.14 * progress) : 1.0;
+            phase += 2.0 * M_PI * frequencies[kind][n] * sweep / sampleRate;
+            double fundamental = sin(phase);
+            double shimmer = 0.18 * sin(2.0 * phase) + (kind == 3 ? 0.10 * sin(3.0 * phase) : 0);
+            double harmony = (kind == 2 && n == 3) ? 0.24 * sin(phase * 1.5) : 0;
+            double value = 0.42 * envelope * (fundamental + shimmer + harmony);
+            int16_t sample = (int16_t)lrint(MAX(-1.0, MIN(1.0, value)) * 32767.0);
+            pcm[cursor * 2] = (uint8_t)((uint16_t)sample >> 8);
+            pcm[cursor * 2 + 1] = (uint8_t)sample;
+            cursor++;
+        }
+    }
+
+    NSMutableData *aiff = [NSMutableData dataWithCapacity:54 + pcmBytes];
+    [aiff appendBytes:"FORM" length:4];
+    TX500AppendBE32(aiff, (uint32_t)(46 + pcmBytes));
+    [aiff appendBytes:"AIFFCOMM" length:8];
+    TX500AppendBE32(aiff, 18);
+    TX500AppendBE16(aiff, 1);
+    TX500AppendBE32(aiff, (uint32_t)frameCount);
+    TX500AppendBE16(aiff, 16);
+    const uint8_t sampleRateExtended[] = {0x40, 0x0e, 0xac, 0x44, 0, 0, 0, 0, 0, 0};
+    [aiff appendBytes:sampleRateExtended length:sizeof(sampleRateExtended)];
+    [aiff appendBytes:"SSND" length:4];
+    TX500AppendBE32(aiff, (uint32_t)(8 + pcmBytes));
+    TX500AppendBE32(aiff, 0);
+    TX500AppendBE32(aiff, 0);
+    [aiff appendBytes:pcm length:pcmBytes];
+    free(pcm);
+    return aiff;
+}
 
 static NSString * const kColTime     = @"colTime";
 static NSString * const kColSNR      = @"colSNR";
@@ -373,6 +457,19 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
 @property (nonatomic, strong) NSSlider *hunterSNRSlider;
 @property (nonatomic, strong) NSTextField *hunterSNRLabel;
 @property (nonatomic, strong) NSTextField *autoHunterStatusLabel;
+@property (nonatomic, strong) NSButton *soundAlertsButton;
+@property (nonatomic, strong) NSPopover *soundAlertsPopover;
+@property (nonatomic, strong) NSButton *cqReplySoundCheckbox;
+@property (nonatomic, strong) NSButton *qsoCompleteSoundCheckbox;
+@property (nonatomic, strong) NSPopUpButton *cqReplyTonePopup;
+@property (nonatomic, strong) NSPopUpButton *qsoCompleteTonePopup;
+@property (nonatomic, strong) NSPopUpButton *alertOutputPopup;
+@property (nonatomic, strong) NSSlider *alertVolumeSlider;
+@property (nonatomic, strong) NSTextField *alertOutputStatusLabel;
+@property (nonatomic, strong) NSSound *activeAlertSound;
+@property (nonatomic, copy) NSString *lastCQAlertCall;
+@property (nonatomic, strong) NSDate *lastCQAlertDate;
+- (void)playAlertKind:(NSInteger)kind preview:(BOOL)preview;
 
 // UI Components - Main Dual Workstation (Band Activity & Rx Frequency)
 @property (nonatomic, strong) NSSegmentedControl *tableFilterSegment;
@@ -764,6 +861,22 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
     };
 
     // Auto-Engine Callbacks
+    self.autoEngine.onCQReplyDetected = ^(TX500FT8Message *caller) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf || caller.callerCall.length == 0) return;
+        NSString *call = caller.callerCall.uppercaseString;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            // A repeated decode from the same caller should not chime on
+            // every FT8 cycle while Call 1st is switched off.
+            if ([strongSelf.lastCQAlertCall isEqualToString:call] &&
+                strongSelf.lastCQAlertDate &&
+                -[strongSelf.lastCQAlertDate timeIntervalSinceNow] < 60.0) return;
+            strongSelf.lastCQAlertCall = call;
+            strongSelf.lastCQAlertDate = [NSDate date];
+            [strongSelf playAlertKind:0 preview:NO];
+        });
+    };
+
     self.autoEngine.onDXStationEngaged = ^(NSString *dxCall, NSString *dxGrid, NSString *report, TX500FT8QSOPhase phase) {
         (void)report;
         typeof(self) strongSelf = weakSelf;
@@ -828,6 +941,7 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
     self.autoEngine.onQSOLogged = ^(TX500FT8LoggedQSO *qso) {
         typeof(self) strongSelf = weakSelf;
         if (!strongSelf) return;
+        dispatch_async(dispatch_get_main_queue(), ^{ [strongSelf playAlertKind:1 preview:NO]; });
         [strongSelf appendToQSOConsole:[NSString stringWithFormat:@"★ QSO WITH %@ LOGGED! (Grid: %@, Band: %@)", qso.callsign, qso.grid ?: @"-", qso.band]];
         [strongSelf reloadSuccessfulContacts];
 
@@ -1936,10 +2050,16 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
     self.autoHunterStatusLabel.font = [NSFont systemFontOfSize:10.5 weight:NSFontWeightMedium];
     self.autoHunterStatusLabel.textColor = [NSColor colorWithCalibratedRed:0.05 green:0.40 blue:0.75 alpha:1.0];
 
+    self.soundAlertsButton = [NSButton buttonWithTitle:@"🔔 Alerts" target:self action:@selector(showSoundAlerts:)];
+    self.soundAlertsButton.bezelStyle = NSBezelStyleRounded;
+    self.soundAlertsButton.toolTip = @"Choose and preview Digital contact sounds and a safe listening output.";
+    [self.soundAlertsButton.widthAnchor constraintEqualToConstant:92].active = YES;
+
     NSStackView *algoStack = [NSStackView stackViewWithViews:@[
         self.autoCQButton, self.autoCQStepper, self.autoCQCountLabel, self.autoCQStatusLabel,
         algoSep,
-        self.autoHunterButton, self.hunterCriteriaPopup, self.autoHunterStatusLabel
+        self.autoHunterButton, self.hunterCriteriaPopup, self.autoHunterStatusLabel,
+        self.soundAlertsButton
     ]];
     algoStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     algoStack.alignment = NSLayoutAttributeCenterY;
@@ -2669,6 +2789,227 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
         if (self.autoEngine.isAutoCQActive) self.audioEngine.repeatArmedTransmission = YES;
         [self refreshTransmitButtonState];
     }
+}
+
+- (NSDictionary<NSString *, NSString *> *)safeAlertOutputWithUID:(NSString *)uid {
+    if (uid.length == 0 || [uid isEqualToString:self.audioEngine.selectedOutputDeviceUID]) return nil;
+    for (NSDictionary<NSString *, NSString *> *device in self.audioEngine.outputDevices) {
+        if (![device[@"uid"] isEqualToString:uid] ||
+            [device[@"isUSB"] isEqualToString:@"YES"] ||
+            [device[@"isVirtual"] isEqualToString:@"YES"]) continue;
+        NSString *name = [device[@"name"] lowercaseString];
+        if ([name containsString:@"usb audio"] || [name containsString:@"ad-508"] ||
+            [name containsString:@"ad-509"] || [name containsString:@"tx-500"] ||
+            [name containsString:@"digirig"] || [name containsString:@"codec"]) continue;
+        return device;
+    }
+    return nil;
+}
+
+- (void)playAlertKind:(NSInteger)kind preview:(BOOL)preview {
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    NSString *enabledKey = kind == 0 ? kCQReplyAlertEnabled : kQSOCompleteAlertEnabled;
+    id storedEnabled = [defaults objectForKey:enabledKey];
+    if (!preview && storedEnabled && ![storedEnabled boolValue]) return;
+
+    NSString *uid = [defaults stringForKey:kAlertOutputUID];
+    if (![self safeAlertOutputWithUID:uid]) {
+        if (preview && self.alertOutputStatusLabel)
+            self.alertOutputStatusLabel.stringValue = @"Choose a listening output to hear the preview.";
+        return;
+    }
+    NSInteger selection = [defaults integerForKey:(kind == 0 ? kCQReplyAlertTone : kQSOCompleteAlertTone)];
+    NSInteger chime = (kind == 0 ? 0 : 2) + MAX(0, MIN(1, selection));
+    NSSound *sound = [[NSSound alloc] initWithData:TX500AlertChimeData(chime)];
+    if (!sound) return;
+    [self.activeAlertSound stop];
+    sound.playbackDeviceIdentifier = uid;
+    id savedVolume = [defaults objectForKey:kAlertVolume];
+    sound.volume = savedVolume ? (float)MAX(0.1, MIN(1.0, [savedVolume doubleValue])) : 0.6f;
+    self.activeAlertSound = sound;
+    if (![sound play] && preview && self.alertOutputStatusLabel)
+        self.alertOutputStatusLabel.stringValue = @"That output is unavailable. Choose another speaker.";
+}
+
+- (void)alertPreviewClicked:(NSButton *)sender {
+    [self playAlertKind:sender.tag preview:YES];
+}
+
+- (void)alertSettingChanged:(id)sender {
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    if (sender == self.cqReplySoundCheckbox)
+        [defaults setBool:self.cqReplySoundCheckbox.state == NSControlStateValueOn forKey:kCQReplyAlertEnabled];
+    else if (sender == self.qsoCompleteSoundCheckbox)
+        [defaults setBool:self.qsoCompleteSoundCheckbox.state == NSControlStateValueOn forKey:kQSOCompleteAlertEnabled];
+    else if (sender == self.cqReplyTonePopup)
+        [defaults setInteger:self.cqReplyTonePopup.indexOfSelectedItem forKey:kCQReplyAlertTone];
+    else if (sender == self.qsoCompleteTonePopup)
+        [defaults setInteger:self.qsoCompleteTonePopup.indexOfSelectedItem forKey:kQSOCompleteAlertTone];
+    else if (sender == self.alertOutputPopup) {
+        NSString *uid = self.alertOutputPopup.selectedItem.representedObject;
+        if ([self safeAlertOutputWithUID:uid]) {
+            [defaults setObject:uid forKey:kAlertOutputUID];
+            self.alertOutputStatusLabel.stringValue = @"Alerts play only on this listening output.";
+        }
+    } else if (sender == self.alertVolumeSlider)
+        [defaults setDouble:self.alertVolumeSlider.doubleValue forKey:kAlertVolume];
+}
+
+- (void)showSoundAlerts:(id)sender {
+    (void)sender;
+    if (self.soundAlertsPopover.isShown) {
+        [self.soundAlertsPopover close];
+        return;
+    }
+    NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+    NSView *content = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 440, 326)];
+    content.translatesAutoresizingMaskIntoConstraints = NO;
+    NSStackView *stack = [[NSStackView alloc] initWithFrame:NSZeroRect];
+    stack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    stack.alignment = NSLayoutAttributeLeading;
+    stack.spacing = 9;
+    stack.translatesAutoresizingMaskIntoConstraints = NO;
+    [content addSubview:stack];
+    [NSLayoutConstraint activateConstraints:@[
+        [stack.topAnchor constraintEqualToAnchor:content.topAnchor constant:15],
+        [stack.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:15],
+        [stack.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-15],
+        [stack.bottomAnchor constraintLessThanOrEqualToAnchor:content.bottomAnchor constant:-12]
+    ]];
+
+    NSTextField *title = [NSTextField labelWithString:@"🔔  Digital sound alerts"];
+    title.font = [NSFont systemFontOfSize:16 weight:NSFontWeightSemibold];
+    NSTextField *subtitle = [NSTextField labelWithString:@"A little sparkle when a station calls — and a tiny celebration for a QSO."];
+    subtitle.font = [NSFont systemFontOfSize:11];
+    subtitle.textColor = NSColor.secondaryLabelColor;
+    [stack addArrangedSubview:title];
+    [stack addArrangedSubview:subtitle];
+
+    NSArray<NSString *> *names = @[@"CQ reply", @"QSO complete"];
+    NSArray<NSString *> *details = @[@"Hear when a station answers your CQ.", @"Hear after the exchange finishes successfully."];
+    NSArray<NSArray<NSString *> *> *tones = @[@[@"✨ Signal Spark", @"🛸 Orbit Ping"],
+                                               @[@"🏆 Victory Fanfare", @"🎮 Pixel Win"]];
+    for (NSInteger kind = 0; kind < 2; kind++) {
+        NSBox *card = [[NSBox alloc] initWithFrame:NSZeroRect];
+        card.boxType = NSBoxCustom;
+        card.cornerRadius = 9;
+        card.borderWidth = 1;
+        card.borderColor = NSColor.separatorColor;
+        card.fillColor = NSColor.controlBackgroundColor;
+        [card.heightAnchor constraintEqualToConstant:76].active = YES;
+        [card.widthAnchor constraintEqualToConstant:410].active = YES;
+
+        NSButton *toggle = [NSButton checkboxWithTitle:names[(NSUInteger)kind]
+                                                target:self action:@selector(alertSettingChanged:)];
+        toggle.font = [NSFont systemFontOfSize:12 weight:NSFontWeightSemibold];
+        id saved = [defaults objectForKey:(kind == 0 ? kCQReplyAlertEnabled : kQSOCompleteAlertEnabled)];
+        toggle.state = (!saved || [saved boolValue]) ? NSControlStateValueOn : NSControlStateValueOff;
+        if (kind == 0) self.cqReplySoundCheckbox = toggle;
+        else self.qsoCompleteSoundCheckbox = toggle;
+
+        NSPopUpButton *tone = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+        [tone addItemsWithTitles:tones[(NSUInteger)kind]];
+        tone.controlSize = NSControlSizeSmall;
+        tone.target = self;
+        tone.action = @selector(alertSettingChanged:);
+        NSInteger selected = [defaults integerForKey:(kind == 0 ? kCQReplyAlertTone : kQSOCompleteAlertTone)];
+        [tone selectItemAtIndex:MAX(0, MIN(1, selected))];
+        [tone.widthAnchor constraintEqualToConstant:155].active = YES;
+        if (kind == 0) self.cqReplyTonePopup = tone;
+        else self.qsoCompleteTonePopup = tone;
+
+        NSButton *preview = [NSButton buttonWithTitle:@"▶ Play" target:self action:@selector(alertPreviewClicked:)];
+        preview.bezelStyle = NSBezelStyleRounded;
+        preview.controlSize = NSControlSizeSmall;
+        preview.tag = kind;
+        [preview.widthAnchor constraintEqualToConstant:64].active = YES;
+
+        NSView *space = [NSView new];
+        [space setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+        NSStackView *row = [NSStackView stackViewWithViews:@[toggle, space, tone, preview]];
+        row.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+        row.alignment = NSLayoutAttributeCenterY;
+        row.spacing = 5;
+        NSTextField *detail = [NSTextField labelWithString:details[(NSUInteger)kind]];
+        detail.font = [NSFont systemFontOfSize:10.5];
+        detail.textColor = NSColor.secondaryLabelColor;
+        NSStackView *cardStack = [NSStackView stackViewWithViews:@[row, detail]];
+        cardStack.orientation = NSUserInterfaceLayoutOrientationVertical;
+        cardStack.alignment = NSLayoutAttributeLeading;
+        cardStack.spacing = 5;
+        cardStack.translatesAutoresizingMaskIntoConstraints = NO;
+        [card.contentView addSubview:cardStack];
+        [NSLayoutConstraint activateConstraints:@[
+            [cardStack.leadingAnchor constraintEqualToAnchor:card.contentView.leadingAnchor constant:10],
+            [cardStack.trailingAnchor constraintEqualToAnchor:card.contentView.trailingAnchor constant:-10],
+            [cardStack.centerYAnchor constraintEqualToAnchor:card.contentView.centerYAnchor],
+            [row.widthAnchor constraintEqualToAnchor:cardStack.widthAnchor]
+        ]];
+        [stack addArrangedSubview:card];
+    }
+
+    NSTextField *outputLabel = [NSTextField labelWithString:@"Listening output"];
+    outputLabel.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
+    self.alertOutputPopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+    self.alertOutputPopup.controlSize = NSControlSizeSmall;
+    self.alertOutputPopup.target = self;
+    self.alertOutputPopup.action = @selector(alertSettingChanged:);
+    [self.alertOutputPopup.widthAnchor constraintEqualToConstant:245].active = YES;
+    NSString *savedUID = [defaults stringForKey:kAlertOutputUID];
+    for (NSDictionary<NSString *, NSString *> *device in self.audioEngine.outputDevices) {
+        NSString *uid = device[@"uid"];
+        if (![self safeAlertOutputWithUID:uid]) continue;
+        [self.alertOutputPopup addItemWithTitle:device[@"name"] ?: @"Speaker"];
+        self.alertOutputPopup.lastItem.representedObject = uid;
+    }
+    if (self.alertOutputPopup.numberOfItems == 0) {
+        [self.alertOutputPopup addItemWithTitle:@"No listening output available"];
+        self.alertOutputPopup.enabled = NO;
+    } else {
+        NSInteger selected = [self.alertOutputPopup indexOfItemWithRepresentedObject:savedUID];
+        if (selected < 0) {
+            selected = 0;
+            [defaults setObject:self.alertOutputPopup.itemArray[0].representedObject forKey:kAlertOutputUID];
+        }
+        [self.alertOutputPopup selectItemAtIndex:selected];
+    }
+    NSStackView *outputRow = [NSStackView stackViewWithViews:@[outputLabel, self.alertOutputPopup]];
+    outputRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    outputRow.alignment = NSLayoutAttributeCenterY;
+    outputRow.spacing = 10;
+    [stack addArrangedSubview:outputRow];
+
+    NSTextField *volumeLabel = [NSTextField labelWithString:@"Volume"];
+    volumeLabel.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
+    self.alertVolumeSlider = [[NSSlider alloc] initWithFrame:NSZeroRect];
+    self.alertVolumeSlider.minValue = 0.1;
+    self.alertVolumeSlider.maxValue = 1.0;
+    id savedVolume = [defaults objectForKey:kAlertVolume];
+    self.alertVolumeSlider.doubleValue = savedVolume ? [savedVolume doubleValue] : 0.6;
+    self.alertVolumeSlider.target = self;
+    self.alertVolumeSlider.action = @selector(alertSettingChanged:);
+    [self.alertVolumeSlider.widthAnchor constraintEqualToConstant:242].active = YES;
+    NSStackView *volumeRow = [NSStackView stackViewWithViews:@[volumeLabel, self.alertVolumeSlider]];
+    volumeRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    volumeRow.alignment = NSLayoutAttributeCenterY;
+    volumeRow.spacing = 10;
+    [stack addArrangedSubview:volumeRow];
+
+    self.alertOutputStatusLabel = [NSTextField labelWithString:
+        self.alertOutputPopup.enabled ? @"Alerts play only on the selected listening output."
+                                      : @"Connect Mac speakers or headphones to hear alerts."];
+    self.alertOutputStatusLabel.font = [NSFont systemFontOfSize:10];
+    self.alertOutputStatusLabel.textColor = NSColor.secondaryLabelColor;
+    [stack addArrangedSubview:self.alertOutputStatusLabel];
+
+    NSViewController *controller = [NSViewController new];
+    controller.view = content;
+    self.soundAlertsPopover = [NSPopover new];
+    self.soundAlertsPopover.behavior = NSPopoverBehaviorTransient;
+    self.soundAlertsPopover.contentSize = NSMakeSize(440, 326);
+    self.soundAlertsPopover.contentViewController = controller;
+    [self.soundAlertsPopover showRelativeToRect:self.soundAlertsButton.bounds
+                                          ofView:self.soundAlertsButton preferredEdge:NSRectEdgeMaxY];
 }
 
 - (void)toggleAutoCQ:(id)sender {

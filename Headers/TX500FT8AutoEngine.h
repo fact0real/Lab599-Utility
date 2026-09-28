@@ -91,6 +91,7 @@ typedef NS_ENUM(NSInteger, TX500FT8HunterCriteria) {
 
 // Callbacks
 @property (nonatomic, copy, nullable) void (^onQSOStateChanged)(TX500FT8QSOPhase phase, NSString *statusText);
+@property (nonatomic, copy, nullable) void (^onCQReplyDetected)(TX500FT8Message *caller);
 @property (nonatomic, copy, nullable) void (^onDXStationEngaged)(NSString *dxCall, NSString *dxGrid, NSString *report, TX500FT8QSOPhase phase);
 @property (nonatomic, copy, nullable) void (^onQSOLogged)(TX500FT8LoggedQSO *qso);
 @property (nonatomic, copy, nullable) void (^onAlgorithmStatusUpdated)(NSString *autoCQStatus, NSString *autoHunterStatus);

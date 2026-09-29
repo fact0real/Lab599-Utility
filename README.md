@@ -4,16 +4,16 @@ A native macOS application for the Lab599 TX-500 family of transceivers. It incl
 
 **v2.263 (Build 269) · macOS 12+ · Apple Silicon and Intel · English interface · Persian guide included**
 
-[Download](https://github.com/fact0real/Lab599-Utility/releases) · [راهنمای فارسی](QUICKSTART-FA.md) · [Build instructions](UPDATER-README.md) · [Report an issue](https://github.com/fact0real/Lab599-Utility/issues/new)
+[Download v2.263](https://github.com/fact0real/Lab599-Utility/releases/tag/2.263) · [راهنمای فارسی](QUICKSTART-FA.md) · [Build instructions](UPDATER-README.md) · [Report an issue](https://github.com/fact0real/Lab599-Utility/issues/new)
 
 ## Download and install
 
-Once published, choose the **v2.263 pre-release** on the [GitHub Releases page](https://github.com/fact0real/Lab599-Utility/releases) and download `Lab599-Utility-v2.263-macOS-universal.zip` together with its `.sha256` file. Extract the ZIP and move `Lab599 Utility.app` to `/Applications`. The ZIP contains the app, English and Persian guides, and license notices; manufacturer firmware is not included.
+Download `Lab599-Utility-v2.263-macOS-universal.zip` from the [v2.263 release](https://github.com/fact0real/Lab599-Utility/releases/tag/2.263). Extract the ZIP and move `Lab599 Utility.app` to `/Applications`. The ZIP contains the app, English and Persian guides, and license notices; manufacturer firmware is not included.
 
 Verify the download before opening the app:
 
 ```sh
-shasum -a 256 -c Lab599-Utility-v2.263-macOS-universal.zip.sha256
+shasum -a 256 Lab599-Utility-v2.263-macOS-universal.zip
 ```
 
 The expected ZIP SHA-256 is `328d6fa51734eae86469a5c1672340c6a1f2423cebe8bedd4e8cf32ee8b1ccd6`. The app is ad-hoc signed, **not Apple notarized**. If macOS blocks the first launch, select this app in **System Settings → Privacy & Security → Open Anyway** after verifying the checksum.

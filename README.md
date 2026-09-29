@@ -119,10 +119,10 @@ The Xcode project is `Lab599-Utility.xcodeproj`; its target and scheme are **Lab
 
 Reports distinguish observed binary behaviour, deliberate improvements, and unresolved details. Disassembly, binary hashes, extraction scripts and tests are included. This is a behavioural reconstruction, not recovery of the manufacturer's original source code.
 
-**Physical-radio validation for this release remains outstanding.** Simulated responses verify the implemented protocol, but compatibility with every hardware revision, firmware version and USB driver has not been confirmed. Test firmware updates and transmit control carefully on the target hardware before relying on them. Settings acknowledgement contents and some reply framing remain unspecified by the original programs. Memory modem-control signals cannot be verified with pseudo-terminals.
+**Physical-radio result:** EP2AES used the macOS updater on his own TX-500 Discovery to update its firmware from 1.26.10 to 1.30.00. The transfer took about 20 seconds, and the radio restarted on 1.30.00. This is one successful real-radio update; it is separate from the v2.263 automated test run described above, which did not access a physical radio. Compatibility across other hardware revisions, firmware versions, USB adapters and radio models remains unconfirmed. Test firmware updates and transmit control carefully on the target hardware before relying on them. Settings acknowledgement contents and some reply framing remain unspecified by the original programs. Memory modem-control signals cannot be verified with pseudo-terminals.
 
 ## Project
 
-Independent software, not an official Lab599 product. GitHub repository: [fact0real/Lab599-Utility](https://github.com/fact0real/Lab599-Utility). Author: EP2AES; contact: `EP2AES@asis.sh`.
+Independent software, not an official Lab599 product. GitHub repository: [fact0real/Lab599-Utility](https://github.com/fact0real/Lab599-Utility). Author: EP2AES; [blog](https://ep2aes.asis.sh/); contact: `EP2AES@asis.sh`.
 
 See [LICENSE](LICENSE) (GNU GPL version 3) and [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for the bundled third-party components. Manufacturer executables and firmware files are not included in the release package.

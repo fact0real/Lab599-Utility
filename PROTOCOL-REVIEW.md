@@ -108,8 +108,11 @@ payload is sent before the header is accepted.
 
 These tests exercise the macOS serial code and reproduce the recovered host
 protocol. They do not simulate flash memory, bootloader internals, USB adapter
-timing or hardware faults. A successful physical update and reboot remain
-unverified until the user performs them on the radio.
+timing or hardware faults. At the time of this review, a successful physical
+update and reboot had not been verified. EP2AES subsequently used the macOS
+updater on his own TX-500 Discovery to update from firmware 1.26.10 to 1.30.00;
+the transfer took about 20 seconds, and the radio restarted on 1.30.00. This
+single-device result does not validate other models or hardware revisions.
 
 Rebuild and run tests from this directory with `sh build-updater.sh --test`.
 Build without rerunning tests with `sh build-updater.sh`. The application

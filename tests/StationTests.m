@@ -111,8 +111,11 @@ static void TestReporter(void) {
     NSDictionary *longReceiver=@{@"call":@"K1ABC",@"grid":@"FN42",@"antenna":[@"A" stringByPaddingToLength:254 withString:@"A" startingAtIndex:0]};
     for(int i=0;i<45;i++) { NSMutableDictionary *spot=[s mutableCopy]; spot[@"call"]=[NSString stringWithFormat:@"W%030dA",i]; spot[@"grid"]=@"FN31AA00"; [reporter enqueue:spot receiver:longReceiver]; }
     Check(reporter.pendingCount==45,@"Long but valid reports queue successfully");
-    [reporter setValue:@0 forKey:@"lastFlush"]; [reporter flush]; Check(reporter.pendingCount==45,@"Failed UDP submission retains queued reports");
-    fail=NO; [reporter setValue:@0 forKey:@"lastFlush"]; [reporter flush];
+    // Make the flush due relative to this machine's uptime. A fresh CI runner
+    // may have been up for less than 300 seconds, so lastFlush=0 is not due.
+    NSNumber *flushDue=@(NSProcessInfo.processInfo.systemUptime-301.0);
+    [reporter setValue:flushDue forKey:@"lastFlush"]; [reporter flush]; Check(reporter.pendingCount==45,@"Failed UDP submission retains queued reports");
+    fail=NO; [reporter setValue:flushDue forKey:@"lastFlush"]; [reporter flush];
     Check(reporter.pendingCount==0 && packets>=3 && records==45,@"Oversized batch splits without losing or duplicating reports");
     reporter.enabled=NO;
 

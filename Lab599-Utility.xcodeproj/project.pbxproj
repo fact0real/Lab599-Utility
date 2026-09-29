@@ -19,6 +19,7 @@
 		1000000B /* tx500_pro.png in Resources */ = {isa = PBXBuildFile; fileRef = 2000000B /* tx500_pro.png */; };
 		1000000C /* tx500_pro_altai.png in Resources */ = {isa = PBXBuildFile; fileRef = 2000000C /* tx500_pro_altai.png */; };
 		10000009 /* ftdi in Resources */ = {isa = PBXBuildFile; fileRef = 20000009 /* ftdi */; };
+		100000D0 /* Manual in Resources */ = {isa = PBXBuildFile; fileRef = 200000D0 /* Manual */; };
 		10000030 /* Lab599SerialPort.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000030 /* Lab599SerialPort.m */; };
 		10000031 /* TX500CATTest.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000031 /* TX500CATTest.m */; };
 		10000032 /* TX500Configuration.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000032 /* TX500Configuration.m */; };
@@ -100,6 +101,7 @@
 		2000000B /* tx500_pro.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = tx500_pro.png; sourceTree = "<group>"; };
 		2000000C /* tx500_pro_altai.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = tx500_pro_altai.png; sourceTree = "<group>"; };
 		20000009 /* ftdi */ = {isa = PBXFileReference; lastKnownFileType = folder; path = ftdi; sourceTree = "<group>"; };
+		200000D0 /* Manual */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Manual; sourceTree = "<group>"; };
 		20000011 /* Lab599FirmwareCatalog.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Lab599FirmwareCatalog.h; sourceTree = "<group>"; };
 		20000012 /* TX500Transfer.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TX500Transfer.h; sourceTree = "<group>"; };
 		20000013 /* TX500TimeSync.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TX500TimeSync.h; sourceTree = "<group>"; };
@@ -378,6 +380,7 @@
 				2000000B /* tx500_pro.png */,
 				2000000C /* tx500_pro_altai.png */,
 				20000009 /* ftdi */,
+				200000D0 /* Manual */,
 				20000020 /* Info.plist */,
 			);
 			path = Resources;
@@ -470,6 +473,7 @@
 				1000000B /* tx500_pro.png in Resources */,
 				1000000C /* tx500_pro_altai.png in Resources */,
 				10000009 /* ftdi in Resources */,
+				100000D0 /* Manual in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -700,7 +704,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 263;
+				CURRENT_PROJECT_VERSION = 268;
 				DEAD_CODE_STRIPPING = YES;
 				INFOPLIST_FILE = Resources/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Lab599 Utility";
@@ -709,8 +713,8 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
-				MARKETING_VERSION = 2.257;
-				PRODUCT_BUNDLE_IDENTIFIER = local.lab599.utility;
+				MARKETING_VERSION = 2.262;
+				PRODUCT_BUNDLE_IDENTIFIER = "ir.factoreal.lab599-utility";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 			};
 			name = Debug;
@@ -722,7 +726,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 263;
+				CURRENT_PROJECT_VERSION = 268;
 				DEAD_CODE_STRIPPING = YES;
 				INFOPLIST_FILE = Resources/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Lab599 Utility";
@@ -731,8 +735,8 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
-				MARKETING_VERSION = 2.257;
-				PRODUCT_BUNDLE_IDENTIFIER = local.lab599.utility;
+				MARKETING_VERSION = 2.262;
+				PRODUCT_BUNDLE_IDENTIFIER = "ir.factoreal.lab599-utility";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 			};
 			name = Release;

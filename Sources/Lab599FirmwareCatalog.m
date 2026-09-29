@@ -15,10 +15,52 @@
 
 @interface Lab599FirmwareCatalog () <NSURLSessionDownloadDelegate>
 @property(nonatomic, strong) NSURLSession *session;
+@property(nonatomic, strong) NSURLSession *catalogSession;
+@property(nonatomic, strong) NSURLSessionDownloadTask *currentDownloadTask;
 @property(nonatomic, copy) void (^currentProgressHandler)(double, int64_t, int64_t);
 @property(nonatomic, copy) void (^currentCompletionHandler)(NSURL * _Nullable, NSString * _Nullable, NSError * _Nullable);
 @property(nonatomic, strong) NSURL *currentDestinationURL;
 @end
+
+// These values were calculated from the files linked by lab599.com/downloads
+// and lab599.ru/downloads on 2026-09-29. A newly published file must be
+// reviewed and added here before the in-app downloader can use it.
+static NSDictionary<NSString *, NSString *> *KnownFirmwareHashes(void) {
+    static NSDictionary<NSString *, NSString *> *hashes;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        hashes = @{
+            @"/TX500/mtrx1.30.00.fw": @"2162fed7d27987507c8b412f3d38478c0a670a906a0c747578d7c975ad5a04ea",
+            @"/TX500/mtrx1.29.06.fw": @"190a3f29f05bc4aa3de993faa35b158c449645475b09ad6d69a1ef3ab5169425",
+            @"/TX500/mtrx1.29.01.fw": @"89324013f81ea4cca24de97026d8765b267bdd0e380839ae1893847d20e5f64f",
+            @"/TX500/mtrx1.26.06.fw": @"0f1ee814b6ee02356785359a2cd40e2c842e2da4b2da5210c6a0c7f5702e3635",
+            @"/TX500/mtrx1.25.06.fw": @"60fbee18d068752959613f07d782e74f450d9555f8f340e18026a083868062c6",
+            @"/TX500/mtrx1.23.09.fw": @"5323df8cb57e5e759222404110e7a9d9af2d13bbcfd8093676599f72a777f8ff",
+            @"/TX500/mtrx1.16.06.fw": @"56eac683c3ffb56ecb4776e6d1c95ee12b82de1f022c2945c30b2e8a674d9bc1",
+            @"/TX500/mtrx1.13.08.fw": @"b4f07877b6870b186c8cc03405fc8f2a464b9c1e311e7d7e570f319e78f59999",
+            @"/TX500MP/mtrxMP1.30.00.fw": @"a9c616bf783c4e38f0707803088c28362c72e5ba09ca40dfa44f3b97b801bf19",
+            @"/TX500MP/mtrxMP1.30.00b27.fw": @"38e9b5dedc5a301b15cb2b53ba4771d038690fb909f02dfbe1d023059fd3e49d",
+            @"/TX500MP/mtrxMP1.29.01.fw": @"05ee1ea8030149a35a03a83bee57b9ad703d51a6f77622bfda2abeaa70c1ed72",
+            @"/TX500MP/mtrxMP1.26.06.fw": @"ec85dbfa1385f6e961faa7e9c6ff647f11360cba18670b40eeeb6f722ae0c72a",
+            @"/TX500MP/mtrxMP1.25.06.fw": @"bdc2554739e5b36363e024d148136b62b01384bb7ad1e4d753ee6d083f16f1fd",
+            @"/TX500MP/mtrxMP1.24.23.fw": @"23b21fa6209ec6461b0bd917a03aeb7a493b0db9c16fefc58813221034251823",
+            @"/TX500PRO/mtrx_pro1.29.05.fw": @"ec7aaaf402ed242cc65c2200b74d8a180bf9fdc7f4df36c6f800f75bd341a6ae",
+            @"/TX500PRO/mtrx_alt1.29.05.fw": @"af65e2338671f6e10a93b7ab241d835d25e65f29d74509825949aa159a30f80f",
+            @"/TX500PRO/mtrx_pro1.23.09.fw": @"50515d9e22456bdf792097ffa1f5b14f12aeb82efe7a191466f88b47498b901a",
+            @"/TX500PRO/mtrx_pro1.17.13.fw": @"e26c60720b4171cf0c18b10c0893ea30b3602318cb3498a8d1cd01c4aadd84fe",
+            @"/TX500PRO/mtrx_pro1.21.01.fw": @"66fb5c02fc862c0bbedbc215483146271b848a58d6ab85650ee00bf5ea59a8b1"
+        };
+    });
+    return hashes;
+}
+
+static BOOL OfficialFirmwareURL(NSURL *url) {
+    return [url.scheme.lowercaseString isEqualToString:@"https"] &&
+        [url.host.lowercaseString isEqualToString:@"downloads.lab599.com"] &&
+        url.port == nil && url.user == nil && url.password == nil &&
+        url.query == nil && url.fragment == nil &&
+        KnownFirmwareHashes()[url.path] != nil;
+}
 
 @implementation Lab599FirmwareCatalog
 
@@ -39,6 +81,7 @@
         config.timeoutIntervalForRequest = 20.0;
         config.timeoutIntervalForResource = 60.0;
         self.session = [NSURLSession sessionWithConfiguration:config delegate:self delegateQueue:nil];
+        self.catalogSession = [NSURLSession sessionWithConfiguration:config];
     }
     return self;
 }
@@ -90,9 +133,9 @@
     proLatest.title = @"TX-500PRO Firmware v1.29.05";
     proLatest.model = @"TX-500PRO";
     proLatest.version = @"1.29.05";
-    proLatest.fileSizeString = @"245 KB";
-    proLatest.downloadURL = [NSURL URLWithString:@"https://downloads.lab599.ru/TX500PRO/mtrx_pro1.29.05.fw"];
-    proLatest.changelog = @"Official TX-500PRO commercial release.\n- Rotary volume & squelch knobs\n- Tactical audio DSP profiles";
+    proLatest.fileSizeString = @"225 KB";
+    proLatest.downloadURL = [NSURL URLWithString:@"https://downloads.lab599.com/TX500PRO/mtrx_pro1.29.05.fw"];
+    proLatest.changelog = @"Official TX-500PRO release, listed on lab599.ru/downloads.";
     proLatest.isLatest = YES;
     [items addObject:proLatest];
 
@@ -100,56 +143,67 @@
     altaiLatest.title = @"TX-500PRO ALTAI Firmware v1.29.05";
     altaiLatest.model = @"TX-500PRO ALTAI";
     altaiLatest.version = @"1.29.05";
-    altaiLatest.fileSizeString = @"245 KB";
-    altaiLatest.downloadURL = [NSURL URLWithString:@"https://downloads.lab599.ru/TX500PRO/mtrx_altai1.29.05.fw"];
-    altaiLatest.changelog = @"Official TX-500PRO ALTAI commercial release.\n- Keypad arrow navigation & channelized OS\n- Advanced encryption and remote control protocol";
+    altaiLatest.fileSizeString = @"223 KB";
+    altaiLatest.downloadURL = [NSURL URLWithString:@"https://downloads.lab599.com/TX500PRO/mtrx_alt1.29.05.fw"];
+    altaiLatest.changelog = @"Official TX-500PRO ALTAI release, listed on lab599.ru/downloads.";
     altaiLatest.isLatest = YES;
     [items addObject:altaiLatest];
 
+    for (Lab599FirmwareItem *item in items) item.expectedSHA256 = KnownFirmwareHashes()[item.downloadURL.path];
     return items;
 }
 
 - (void)fetchAvailableFirmwaresWithCompletion:(void (^)(NSArray<Lab599FirmwareItem *> *items, NSError * _Nullable error))completion {
-    NSURL *url = [NSURL URLWithString:@"https://lab599.com/downloads"];
-    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
-    [request setValue:@"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)" forHTTPHeaderField:@"User-Agent"];
+    // Both official pages are read; latest versions are compared after parsing.
+    NSArray<NSString *> *pages = @[@"https://lab599.com/downloads", @"https://lab599.ru/downloads"];
+    NSMutableArray *htmlPages = [NSMutableArray array];
+    for (NSUInteger i = 0; i < pages.count; i++) [htmlPages addObject:[NSNull null]];
+    __block NSError *lastError = nil;
+    dispatch_group_t group = dispatch_group_create();
 
-    NSURLSessionDataTask *task = [self.session dataTaskWithRequest:request completionHandler:^(NSData * _Nullable data, NSURLResponse * _Nullable response, NSError * _Nullable error) {
-        (void)response;
-        if (error || !data) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                completion([Lab599FirmwareCatalog fallbackFirmwareCatalog], error);
-            });
-            return;
-        }
+    for (NSUInteger i = 0; i < pages.count; i++) {
+        NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:pages[i]]];
+        [request setValue:@"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)" forHTTPHeaderField:@"User-Agent"];
+        dispatch_group_enter(group);
+        NSURLSessionDataTask *task = [self.catalogSession dataTaskWithRequest:request completionHandler:^(NSData * _Nullable data, NSURLResponse * _Nullable response, NSError * _Nullable error) {
+            NSString *html = nil;
+            NSHTTPURLResponse *http = [response isKindOfClass:NSHTTPURLResponse.class] ? (NSHTTPURLResponse *)response : nil;
+            BOOL sameHost = [response.URL.scheme.lowercaseString isEqualToString:@"https"] &&
+                [response.URL.host.lowercaseString isEqualToString:[NSURL URLWithString:pages[i]].host.lowercaseString];
+            if (data && !error && http.statusCode == 200 && sameHost && data.length <= 2 * 1024 * 1024) {
+                html = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+                if (!html) html = [[NSString alloc] initWithData:data encoding:NSISOLatin1StringEncoding];
+            }
+            @synchronized (htmlPages) {
+                if (html) {
+                    htmlPages[i] = html;
+                } else {
+                    lastError = error ?: [NSError errorWithDomain:@"Lab599" code:-1 userInfo:@{NSLocalizedDescriptionKey: @"Invalid firmware catalog response"}];
+                }
+            }
+            dispatch_group_leave(group);
+        }];
+        [task resume];
+    }
 
-        NSString *html = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-        if (!html) html = [[NSString alloc] initWithData:data encoding:NSISOLatin1StringEncoding];
-        if (!html) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                completion([Lab599FirmwareCatalog fallbackFirmwareCatalog], [NSError errorWithDomain:@"Lab599" code:-1 userInfo:@{NSLocalizedDescriptionKey: @"Unable to decode web content"}]);
-            });
-            return;
-        }
-
-        NSArray<Lab599FirmwareItem *> *parsed = [self parseFirmwareItemsFromHTML:html];
+    dispatch_group_notify(group, dispatch_get_main_queue(), ^{
+        NSMutableArray<NSString *> *loaded = [NSMutableArray array];
+        for (id page in htmlPages) if ([page isKindOfClass:NSString.class]) [loaded addObject:page];
+        NSArray<Lab599FirmwareItem *> *parsed = loaded.count ? [self parseFirmwareItemsFromHTML:[loaded componentsJoinedByString:@"\n"]] : @[];
         if (parsed.count == 0) {
-            parsed = [Lab599FirmwareCatalog fallbackFirmwareCatalog];
+            completion([Lab599FirmwareCatalog fallbackFirmwareCatalog], lastError);
+            return;
         }
-
-        dispatch_async(dispatch_get_main_queue(), ^{
-            completion(parsed, nil);
-        });
-    }];
-    [task resume];
+        completion(parsed, nil);
+    });
 }
 
 - (NSArray<Lab599FirmwareItem *> *)parseFirmwareItemsFromHTML:(NSString *)html {
     NSMutableArray<Lab599FirmwareItem *> *results = [NSMutableArray array];
     NSMutableDictionary<NSString *, Lab599FirmwareItem *> *itemByUrl = [NSMutableDictionary dictionary];
 
-    // Find all links to .fw files (.com or .ru)
-    NSRegularExpression *linkRegex = [NSRegularExpression regularExpressionWithPattern:@"<a\\s+[^>]*href=[\"'](https?://downloads\\.lab599\\.(?:com|ru)/[^\"'\\s]+\\.fw)[\"'][^>]*>(.*?)</a>"
+    // Accept only HTTPS links on the exact official download host.
+    NSRegularExpression *linkRegex = [NSRegularExpression regularExpressionWithPattern:@"<a\\s+[^>]*href=[\"'](https://downloads\\.lab599\\.com/[^\"'\\s]+\\.fw)[\"'][^>]*>(.*?)</a>"
                                                                                options:NSRegularExpressionCaseInsensitive | NSRegularExpressionDotMatchesLineSeparators
                                                                                  error:nil];
     NSArray<NSTextCheckingResult *> *matches = [linkRegex matchesInString:html options:0 range:NSMakeRange(0, html.length)];
@@ -157,6 +211,8 @@
     for (NSTextCheckingResult *match in matches) {
         NSString *urlString = [html substringWithRange:[match rangeAtIndex:1]];
         NSString *rawText = [html substringWithRange:[match rangeAtIndex:2]];
+        NSURL *firmwareURL = [NSURL URLWithString:urlString];
+        if (!OfficialFirmwareURL(firmwareURL)) continue;
 
         NSString *cleanText = [rawText stringByReplacingOccurrencesOfString:@"<[^>]+>" withString:@"" options:NSRegularExpressionSearch range:NSMakeRange(0, rawText.length)];
         cleanText = [cleanText stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
@@ -164,7 +220,8 @@
         Lab599FirmwareItem *existing = itemByUrl[urlString];
         if (!existing) {
             existing = [Lab599FirmwareItem new];
-            existing.downloadURL = [NSURL URLWithString:urlString];
+            existing.downloadURL = firmwareURL;
+            existing.expectedSHA256 = KnownFirmwareHashes()[firmwareURL.path];
             itemByUrl[urlString] = existing;
             [results addObject:existing];
         }
@@ -183,33 +240,33 @@
     // Determine model and fallback titles for each item
     for (Lab599FirmwareItem *item in results) {
         NSString *path = item.downloadURL.path;
-        NSString *lastComp = item.downloadURL.lastPathComponent.lowercaseString;
-        if ([path containsString:@"ALTAI"] || [item.title containsString:@"ALTAI"] || [lastComp containsString:@"altai"] || [lastComp containsString:@"_alt"]) {
+        if ([path hasPrefix:@"/TX500PRO/mtrx_alt"]) {
             item.model = @"TX-500PRO ALTAI";
-        } else if ([path containsString:@"TX500PRO"] || [item.title containsString:@"TX-500PRO"] || [item.title containsString:@"Discovery Pro"] || [lastComp containsString:@"pro"]) {
+        } else if ([path hasPrefix:@"/TX500PRO/mtrx_pro"]) {
             item.model = @"TX-500PRO";
-        } else if ([path containsString:@"TX500MP"] || [item.title containsString:@"TX-500MP"] || [lastComp containsString:@"mp"]) {
+        } else if ([path hasPrefix:@"/TX500MP/mtrxMP"]) {
             item.model = @"TX-500MP";
-        } else if ([path containsString:@"TX500"] || [item.title containsString:@"TX-500"]) {
+        } else if ([path hasPrefix:@"/TX500/mtrx"]) {
             item.model = @"TX-500 Discovery";
         } else {
             item.model = @"Lab599 Transceiver";
         }
 
-        if (!item.title || item.title.length == 0) {
-            item.title = [NSString stringWithFormat:@"%@ %@", item.model, item.downloadURL.lastPathComponent];
-        }
-
-        // Extract version
+        // Derive the displayed target and version from the reviewed URL path,
+        // never from catalog HTML text that could mislabel another model.
         NSRegularExpression *verRegex = [NSRegularExpression regularExpressionWithPattern:@"v?(\\d+\\.\\d+\\.\\d+([A-Za-z0-9]+)?)"
                                                                                   options:NSRegularExpressionCaseInsensitive
                                                                                     error:nil];
-        NSTextCheckingResult *verMatch = [verRegex firstMatchInString:item.title options:0 range:NSMakeRange(0, item.title.length)];
+        NSString *filename = item.downloadURL.lastPathComponent;
+        NSTextCheckingResult *verMatch = [verRegex firstMatchInString:filename options:0 range:NSMakeRange(0, filename.length)];
         if (verMatch) {
-            item.version = [item.title substringWithRange:[verMatch rangeAtIndex:1]];
+            item.version = [filename substringWithRange:[verMatch rangeAtIndex:1]];
         } else {
-            item.version = item.downloadURL.lastPathComponent.stringByDeletingPathExtension;
+            item.version = filename.stringByDeletingPathExtension;
         }
+        BOOL patchRelease = [filename.lowercaseString containsString:@"b27"];
+        item.title = [NSString stringWithFormat:@"%@ %@ v%@", item.model,
+            patchRelease ? @"HAM-Bands Patch" : @"Firmware", item.version];
 
         // Search for nearby changelog in HTML
         NSRange urlRange = [html rangeOfString:item.downloadURL.absoluteString];
@@ -237,14 +294,17 @@
         }
     }
 
-    // Mark the latest version per model
-    NSMutableSet<NSString *> *seenModels = [NSMutableSet set];
+    // A duplicate or stale page must not make an older release look newest.
+    NSMutableDictionary<NSString *, Lab599FirmwareItem *> *latest = [NSMutableDictionary dictionary];
     for (Lab599FirmwareItem *item in results) {
-        if (![seenModels containsObject:item.model] && ![item.title containsString:@"Patch"]) {
-            item.isLatest = YES;
-            [seenModels addObject:item.model];
-        }
+        BOOL patchRelease = [item.title localizedCaseInsensitiveContainsString:@"Patch"] ||
+            [item.downloadURL.lastPathComponent.lowercaseString containsString:@"b27"];
+        if (patchRelease) continue;
+        Lab599FirmwareItem *previous = latest[item.model];
+        if (!previous || [item.version compare:previous.version options:NSNumericSearch] == NSOrderedDescending)
+            latest[item.model] = item;
     }
+    for (Lab599FirmwareItem *item in latest.allValues) item.isLatest = YES;
 
     return results;
 }
@@ -252,6 +312,13 @@
 - (NSURLSessionDownloadTask *)downloadFirmware:(Lab599FirmwareItem *)item
                                      progress:(void (^)(double progress, int64_t bytesWritten, int64_t totalExpected))progressHandler
                                    completion:(void (^)(NSURL * _Nullable localFileURL, NSString * _Nullable sha256, NSError * _Nullable error))completionHandler {
+    NSString *expected = KnownFirmwareHashes()[item.downloadURL.path];
+    if (!OfficialFirmwareURL(item.downloadURL) || ![item.expectedSHA256 isEqualToString:expected] || self.currentDownloadTask) {
+        NSError *error = [NSError errorWithDomain:@"Lab599" code:-3 userInfo:@{NSLocalizedDescriptionKey:
+            @"This firmware release is not in the reviewed SHA-256 list, or another download is active."}];
+        dispatch_async(dispatch_get_main_queue(), ^{ completionHandler(nil, nil, error); });
+        return nil;
+    }
     self.currentProgressHandler = progressHandler;
     self.currentCompletionHandler = completionHandler;
 
@@ -264,72 +331,95 @@
     [request setValue:@"Mozilla/5.0" forHTTPHeaderField:@"User-Agent"];
 
     NSURLSessionDownloadTask *task = [self.session downloadTaskWithRequest:request];
+    self.currentDownloadTask = task;
     [task resume];
     return task;
 }
 
 #pragma mark - NSURLSessionDownloadDelegate
 
+- (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task
+    willPerformHTTPRedirection:(NSHTTPURLResponse *)response newRequest:(NSURLRequest *)request
+             completionHandler:(void (^)(NSURLRequest * _Nullable))completionHandler {
+    (void)session; (void)response;
+    // A redirect may not turn an approved download into another origin or file.
+    completionHandler(OfficialFirmwareURL(request.URL) &&
+                      [request.URL.absoluteString isEqualToString:task.originalRequest.URL.absoluteString] ? request : nil);
+}
+
+- (void)finishDownloadWithURL:(NSURL *)url hash:(NSString *)hash error:(NSError *)error {
+    void (^completion)(NSURL *, NSString *, NSError *) = self.currentCompletionHandler;
+    self.currentCompletionHandler = nil;
+    self.currentProgressHandler = nil;
+    self.currentDownloadTask = nil;
+    if (completion) dispatch_async(dispatch_get_main_queue(), ^{ completion(url, hash, error); });
+}
+
 - (void)URLSession:(NSURLSession *)session downloadTask:(NSURLSessionDownloadTask *)downloadTask didWriteData:(int64_t)bytesWritten totalBytesWritten:(int64_t)totalBytesWritten totalBytesExpectedToWrite:(int64_t)totalBytesExpectedToWrite {
     (void)session;
-    (void)downloadTask;
     (void)bytesWritten;
+    if (downloadTask != self.currentDownloadTask) return;
+    if (totalBytesWritten > 1024 * 1024 || totalBytesExpectedToWrite > 1024 * 1024) {
+        [downloadTask cancel];
+        return;
+    }
     if (self.currentProgressHandler) {
+        void (^progress)(double, int64_t, int64_t) = self.currentProgressHandler;
         double p = totalBytesExpectedToWrite > 0 ? (double)totalBytesWritten / (double)totalBytesExpectedToWrite : 0.0;
         dispatch_async(dispatch_get_main_queue(), ^{
-            self.currentProgressHandler(p, totalBytesWritten, totalBytesExpectedToWrite);
+            progress(p, totalBytesWritten, totalBytesExpectedToWrite);
         });
     }
 }
 
 - (void)URLSession:(NSURLSession *)session downloadTask:(NSURLSessionDownloadTask *)downloadTask didFinishDownloadingToURL:(NSURL *)location {
     (void)session;
-    (void)downloadTask;
-    NSError *error = nil;
-    if ([[NSFileManager defaultManager] fileExistsAtPath:self.currentDestinationURL.path]) {
-        [[NSFileManager defaultManager] removeItemAtURL:self.currentDestinationURL error:nil];
+    if (downloadTask != self.currentDownloadTask) return;
+    NSHTTPURLResponse *http = [downloadTask.response isKindOfClass:NSHTTPURLResponse.class] ? (NSHTTPURLResponse *)downloadTask.response : nil;
+    if (http.statusCode != 200 || !OfficialFirmwareURL(downloadTask.response.URL) ||
+        ![downloadTask.response.URL.absoluteString isEqualToString:downloadTask.originalRequest.URL.absoluteString]) {
+        NSError *invalid = [NSError errorWithDomain:@"Lab599" code:-4 userInfo:@{NSLocalizedDescriptionKey: @"Firmware download came from an unexpected response or URL."}];
+        [self finishDownloadWithURL:nil hash:nil error:invalid];
+        return;
     }
-    [[NSFileManager defaultManager] moveItemAtURL:location toURL:self.currentDestinationURL error:&error];
-    if (error) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (self.currentCompletionHandler) self.currentCompletionHandler(nil, nil, error);
-        });
+    NSError *error = nil;
+    NSDictionary *attributes = [[NSFileManager defaultManager] attributesOfItemAtPath:location.path error:&error];
+    if (!attributes || [attributes fileSize] > 1024 * 1024) {
+        NSError *large = error ?: [NSError errorWithDomain:@"Lab599" code:-5 userInfo:@{NSLocalizedDescriptionKey: @"Firmware exceeds the 1 MB safety limit."}];
+        [self finishDownloadWithURL:nil hash:nil error:large];
         return;
     }
 
-    NSData *data = [NSData dataWithContentsOfURL:self.currentDestinationURL options:0 error:&error];
+    NSData *data = [NSData dataWithContentsOfURL:location options:0 error:&error];
     if (!data) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (self.currentCompletionHandler) self.currentCompletionHandler(nil, nil, error);
-        });
+        [self finishDownloadWithURL:nil hash:nil error:error];
         return;
     }
 
     NSString *validation = TXFirmwareValidationError(data);
     if (validation) {
         NSError *vError = [NSError errorWithDomain:@"Lab599" code:-2 userInfo:@{NSLocalizedDescriptionKey: validation}];
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (self.currentCompletionHandler) self.currentCompletionHandler(nil, nil, vError);
-        });
+        [self finishDownloadWithURL:nil hash:nil error:vError];
         return;
     }
 
     NSString *hash = TXFirmwareSHA256(data);
-    dispatch_async(dispatch_get_main_queue(), ^{
-        if (self.currentCompletionHandler) {
-            self.currentCompletionHandler(self.currentDestinationURL, hash, nil);
-        }
-    });
+    NSString *expected = KnownFirmwareHashes()[downloadTask.originalRequest.URL.path];
+    if (![hash isEqualToString:expected]) {
+        NSError *mismatch = [NSError errorWithDomain:@"Lab599" code:-6 userInfo:@{NSLocalizedDescriptionKey: @"Firmware SHA-256 does not match the reviewed release."}];
+        [self finishDownloadWithURL:nil hash:nil error:mismatch];
+        return;
+    }
+    if (![data writeToURL:self.currentDestinationURL options:NSDataWritingAtomic error:&error]) {
+        [self finishDownloadWithURL:nil hash:nil error:error];
+        return;
+    }
+    [self finishDownloadWithURL:self.currentDestinationURL hash:hash error:nil];
 }
 
 - (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error {
     (void)session;
-    (void)task;
-    if (error && self.currentCompletionHandler) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            self.currentCompletionHandler(nil, nil, error);
-        });
-    }
+    if (task == self.currentDownloadTask && error) [self finishDownloadWithURL:nil hash:nil error:error];
 }
 
 @end

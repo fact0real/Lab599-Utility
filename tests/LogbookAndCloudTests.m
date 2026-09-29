@@ -302,6 +302,24 @@ int main(int argc, const char * argv[]) {
         AssertTrue([[NSFileManager defaultManager] fileExistsAtPath:tqslDir isDirectory:&isDir] && isDir, @"~/.tqsl directory exists");
         NSLog(@"PASS: isolated TQSL storage directory verification and creation passed.");
 
+        // Club Log must acknowledge the upload explicitly; error text and
+        // redirects must never mark a QSO as uploaded.
+        NSURL *clubURL = [NSURL URLWithString:@"https://clublog.org/realtime.php"];
+        NSHTTPURLResponse *clubOK = [[NSHTTPURLResponse alloc] initWithURL:clubURL statusCode:200 HTTPVersion:@"HTTP/1.1" headerFields:nil];
+        NSHTTPURLResponse *clubError = [[NSHTTPURLResponse alloc] initWithURL:clubURL statusCode:403 HTTPVersion:@"HTTP/1.1" headerFields:nil];
+        NSHTTPURLResponse *otherHost = [[NSHTTPURLResponse alloc] initWithURL:[NSURL URLWithString:@"https://example.org/realtime.php"] statusCode:200 HTTPVersion:@"HTTP/1.1" headerFields:nil];
+        NSHTTPURLResponse *otherPath = [[NSHTTPURLResponse alloc] initWithURL:[NSURL URLWithString:@"https://clublog.org/account.php"] statusCode:200 HTTPVersion:@"HTTP/1.1" headerFields:nil];
+        AssertTrue(TX500ClubLogResponseIsSuccess(clubOK, [@"OK\n" dataUsingEncoding:NSUTF8StringEncoding]), @"Club Log exact success accepted");
+        AssertTrue(TX500ClubLogResponseIsSuccess(clubOK, [@"QSO Duplicate" dataUsingEncoding:NSUTF8StringEncoding]), @"Club Log documented duplicate accepted");
+        AssertTrue(TX500ClubLogResponseIsSuccess(clubOK, [@"QSO Modified" dataUsingEncoding:NSUTF8StringEncoding]), @"Club Log documented modification accepted");
+        AssertTrue(!TX500ClubLogResponseIsSuccess(clubOK, [@"Upload rejected: callbook error" dataUsingEncoding:NSUTF8StringEncoding]), @"Club Log embedded ok rejected");
+        AssertTrue(!TX500ClubLogResponseIsSuccess(clubOK, [@"Token expired" dataUsingEncoding:NSUTF8StringEncoding]), @"Club Log expired token rejected");
+        AssertTrue(!TX500ClubLogResponseIsSuccess(clubOK, NSData.data), @"Club Log empty response rejected");
+        AssertTrue(!TX500ClubLogResponseIsSuccess(clubOK, [NSData dataWithBytes:"\xff" length:1]), @"Club Log invalid UTF-8 rejected");
+        AssertTrue(!TX500ClubLogResponseIsSuccess(clubError, [@"OK" dataUsingEncoding:NSUTF8StringEncoding]), @"Club Log HTTP error rejected");
+        AssertTrue(!TX500ClubLogResponseIsSuccess(otherHost, [@"OK" dataUsingEncoding:NSUTF8StringEncoding]), @"Club Log redirect rejected");
+        AssertTrue(!TX500ClubLogResponseIsSuccess(otherPath, [@"OK" dataUsingEncoding:NSUTF8StringEncoding]), @"Club Log unexpected path rejected");
+
         // 12. WebKit 2FA Session Persistence Helpers
         [TX500WebAuthenticatorController clearSessionForService:TX500AuthServiceQRZ];
         AssertTrue(![TX500WebAuthenticatorController hasSavedSessionForService:TX500AuthServiceQRZ], @"QRZ session cleared initially");

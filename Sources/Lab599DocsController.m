@@ -31,6 +31,21 @@
 @property(nonatomic, strong) Lab599DocItem *currentlyDownloadingItem;
 @end
 
+// Show every size the same way ("224 KB", "1.87 MB"): lab599.com writes
+// Kb/Mb, lab599.ru writes Кб/Мб, and the built-in list uses KB/MB.
+static NSString *NormalizedFileSize(NSString *raw) {
+    if (raw.length == 0) return raw;
+    NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:@"([0-9]+(?:[.,][0-9]+)?)\\s*([KkMmКкМм])[BbБб]"
+                                                                        options:0
+                                                                          error:nil];
+    NSTextCheckingResult *m = [re firstMatchInString:raw options:0 range:NSMakeRange(0, raw.length)];
+    if (!m) return raw;
+    NSString *number = [[raw substringWithRange:[m rangeAtIndex:1]] stringByReplacingOccurrencesOfString:@"," withString:@"."];
+    NSString *prefix = [[raw substringWithRange:[m rangeAtIndex:2]] uppercaseString];
+    NSString *unit = ([prefix isEqualToString:@"M"] || [prefix isEqualToString:@"М"]) ? @"MB" : @"KB";
+    return [NSString stringWithFormat:@"%@ %@", number, unit];
+}
+
 @implementation Lab599DocsController
 
 static NSTextField *Label(NSString *text, BOOL bold, CGFloat size, NSColor *color) {
@@ -625,7 +640,7 @@ static NSTextField *Label(NSString *text, BOOL bold, CGFloat size, NSColor *colo
             [clean rangeOfString:@"MB" options:NSCaseInsensitiveSearch].location != NSNotFound ||
             [clean rangeOfString:@"Мб" options:NSCaseInsensitiveSearch].location != NSNotFound ||
             [clean rangeOfString:@"Кб" options:NSCaseInsensitiveSearch].location != NSNotFound) {
-            it.fileSizeString = clean;
+            it.fileSizeString = NormalizedFileSize(clean);
         }
 
         if ([ext isEqualToString:@"pdf"] || [ext isEqualToString:@"txt"]) {

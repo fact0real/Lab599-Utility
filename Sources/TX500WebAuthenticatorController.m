@@ -8,6 +8,7 @@
 //
 
 #import "TX500WebAuthenticatorController.h"
+#import "TX500SecretStore.h"
 
 static NSString * const kQRZCookieKey = @"TX500_QRZ_2FASessionCookies";
 static NSString * const kQRZActiveKey = @"TX500_QRZ_2FA_Active";
@@ -269,7 +270,11 @@ static NSString * const kClubLogActiveKey = @"TX500_ClubLog_2FA_Active";
             }
             NSString *cookieKey = (self.service == TX500AuthServiceQRZ) ? kQRZCookieKey : kClubLogCookieKey;
             NSString *activeKey = (self.service == TX500AuthServiceQRZ) ? kQRZActiveKey : kClubLogActiveKey;
-            [NSUserDefaults.standardUserDefaults setObject:[pairs componentsJoinedByString:@"; "] forKey:cookieKey];
+            if (!TX500StoreSecret(cookieKey, [pairs componentsJoinedByString:@"; "])) {
+                self.doneButton.enabled = YES;
+                self.statusLabel.stringValue = @"Could not save the session in Keychain. Unlock Keychain and retry.";
+                return;
+            }
             [NSUserDefaults.standardUserDefaults setBool:YES forKey:activeKey];
             [self finishWithSuccess:YES message:@"Browser session saved."];
         });
@@ -315,7 +320,7 @@ static NSString * const kClubLogActiveKey = @"TX500_ClubLog_2FA_Active";
 
 + (BOOL)hasSavedSessionForService:(TX500AuthService)service {
     NSString *cookieKey = (service == TX500AuthServiceQRZ) ? kQRZCookieKey : kClubLogCookieKey;
-    NSString *cookies = [[NSUserDefaults standardUserDefaults] stringForKey:cookieKey];
+    NSString *cookies = TX500SecretValue(cookieKey);
     if (cookies.length == 0) return NO;
 
     NSString *activeKey = (service == TX500AuthServiceQRZ) ? kQRZActiveKey : kClubLogActiveKey;
@@ -329,7 +334,7 @@ static NSString * const kClubLogActiveKey = @"TX500_ClubLog_2FA_Active";
     NSString *activeKey = (service == TX500AuthServiceQRZ) ? kQRZActiveKey : kClubLogActiveKey;
     NSString *cookieKey = (service == TX500AuthServiceQRZ) ? kQRZCookieKey : kClubLogCookieKey;
     [[NSUserDefaults standardUserDefaults] removeObjectForKey:activeKey];
-    [[NSUserDefaults standardUserDefaults] removeObjectForKey:cookieKey];
+    if (!TX500RemoveSecret(cookieKey)) NSLog(@"Could not remove browser session from Keychain.");
     if (service == TX500AuthServiceQRZ) {
         [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"TX500_QRZ_2FAActive"];
     } else {
@@ -342,7 +347,9 @@ static NSString * const kClubLogActiveKey = @"TX500_ClubLog_2FA_Active";
     [store.httpCookieStore getAllCookies:^(NSArray<NSHTTPCookie *> *cookies) {
         NSString *targetDomain = (service == TX500AuthServiceQRZ) ? @"qrz.com" : @"clublog.org";
         for (NSHTTPCookie *c in cookies) {
-            if ([c.domain containsString:targetDomain]) {
+            NSString *domain = c.domain.lowercaseString;
+            if ([domain hasPrefix:@"."]) domain = [domain substringFromIndex:1];
+            if ([domain isEqualToString:targetDomain] || [domain hasSuffix:[@"." stringByAppendingString:targetDomain]]) {
                 [store.httpCookieStore deleteCookie:c completionHandler:nil];
             }
         }
@@ -350,8 +357,9 @@ static NSString * const kClubLogActiveKey = @"TX500_ClubLog_2FA_Active";
 }
 
 + (nullable NSString *)cookieHeaderForService:(TX500AuthService)service {
+    if (![self hasSavedSessionForService:service]) return nil;
     NSString *cookieKey = (service == TX500AuthServiceQRZ) ? kQRZCookieKey : kClubLogCookieKey;
-    return [[NSUserDefaults standardUserDefaults] stringForKey:cookieKey];
+    return TX500SecretValue(cookieKey);
 }
 
 @end

@@ -5,10 +5,34 @@
 //  Zero-Click Amateur Radio Cloud Synchronization Engine
 //
 
+#import "TX500SecretStore.h"
 #import "TX500CloudSyncEngine.h"
 #import "TX500WebAuthenticatorController.h"
 
 NSString * const TX500CloudSyncStatusDidChangeNotification = @"TX500CloudSyncStatusDidChangeNotification";
+
+static BOOL TX500CloudResponseMatchesEndpoint(NSURLResponse *response, NSString *endpoint) {
+    return [response isKindOfClass:NSHTTPURLResponse.class] &&
+        ((NSHTTPURLResponse *)response).statusCode == 200 &&
+        [response.URL.absoluteString isEqualToString:endpoint];
+}
+
+BOOL TX500ClubLogResponseIsSuccess(NSHTTPURLResponse *response, NSData *data) {
+    if (![response isKindOfClass:NSHTTPURLResponse.class] || response.statusCode != 200 ||
+        ![response.URL.scheme.lowercaseString isEqualToString:@"https"] ||
+        ![response.URL.host.lowercaseString isEqualToString:@"clublog.org"] ||
+        ![response.URL.path isEqualToString:@"/realtime.php"] ||
+        response.URL.port != nil || response.URL.user != nil ||
+        response.URL.password != nil || response.URL.query != nil ||
+        response.URL.fragment != nil || !data.length) return NO;
+    NSString *body = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    if (!body) return NO;
+    NSString *trimmed = [body stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    for (NSString *ack in @[@"OK", @"QSO OK", @"QSO Duplicate", @"QSO Modified"]) {
+        if ([trimmed caseInsensitiveCompare:ack] == NSOrderedSame) return YES;
+    }
+    return NO;
+}
 
 static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
     NSString *value = NSProcessInfo.processInfo.environment[@"TX500_TEST_MODE"];
@@ -27,7 +51,7 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
 }
 @end
 
-@interface TX500CloudSyncEngine ()
+@interface TX500CloudSyncEngine () <NSURLSessionTaskDelegate>
 
 @property (nonatomic, copy, readwrite) NSString *lastStatusMessage;
 @property (nonatomic, assign, readwrite) BOOL isUploading;
@@ -58,9 +82,17 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
         NSURLSessionConfiguration *config = [NSURLSessionConfiguration ephemeralSessionConfiguration];
         config.timeoutIntervalForRequest = 20.0;
         config.timeoutIntervalForResource = 30.0;
-        _urlSession = [NSURLSession sessionWithConfiguration:config];
+        _urlSession = [NSURLSession sessionWithConfiguration:config delegate:self delegateQueue:nil];
     }
     return self;
+}
+
+- (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task
+    willPerformHTTPRedirection:(NSHTTPURLResponse *)response newRequest:(NSURLRequest *)request
+             completionHandler:(void (^)(NSURLRequest * _Nullable))completionHandler {
+    (void)session; (void)task; (void)response; (void)request;
+    // Upload bodies contain credentials. Never replay one to a redirected URL.
+    completionHandler(nil);
 }
 
 - (NSArray<TX500CloudUploadItem *> *)recentUploads {
@@ -138,8 +170,8 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
 
     NSString *pass = password;
     if (pass.length == 0) {
-        pass = [[NSUserDefaults standardUserDefaults] stringForKey:@"TX500_LoTW_CertificatePassword"] ?:
-               [[NSUserDefaults standardUserDefaults] stringForKey:@"TX500_LoTW_Password"];
+        pass = TX500SecretValue(@"TX500_LoTW_CertificatePassword") ?:
+               TX500SecretValue(@"TX500_LoTW_Password");
     }
     if (pass.length > 0) {
         [args addObjectsFromArray:@[@"-p", pass]];
@@ -176,15 +208,15 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
     BOOL uploadEQSL = [ud objectForKey:@"TX500_Cloud_UploadEQSL"] ? [ud boolForKey:@"TX500_Cloud_UploadEQSL"] : YES;
     BOOL uploadLoTW = [ud objectForKey:@"TX500_Cloud_UploadLoTW"] ? [ud boolForKey:@"TX500_Cloud_UploadLoTW"] : YES;
 
-    NSString *qrzKey = [ud stringForKey:@"TX500_QRZ_APIKey"] ?: @"";
+    NSString *qrzKey = TX500SecretValue(@"TX500_QRZ_APIKey") ?: @"";
     NSString *clubEmail = [ud stringForKey:@"TX500_ClubLog_Email"] ?: @"";
     NSString *clubCall = [ud stringForKey:@"TX500_ClubLog_Callsign"] ?: @"";
-    NSString *clubPass = [ud stringForKey:@"TX500_ClubLog_Password"] ?: @"";
-    NSString *clubKey = [ud stringForKey:@"TX500_ClubLog_APIKey"] ?: @"";
+    NSString *clubPass = TX500SecretValue(@"TX500_ClubLog_Password") ?: @"";
+    NSString *clubKey = TX500SecretValue(@"TX500_ClubLog_APIKey") ?: @"";
     NSString *eqslUser = [ud stringForKey:@"TX500_EQSL_Username"] ?: @"";
-    NSString *eqslPass = [ud stringForKey:@"TX500_EQSL_Password"] ?: @"";
+    NSString *eqslPass = TX500SecretValue(@"TX500_EQSL_Password") ?: @"";
     NSString *lotwLoc = [ud stringForKey:@"TX500_LoTW_StationLocation"] ?: @"";
-    NSString *lotwPass = [ud stringForKey:@"TX500_LoTW_Password"] ?: @"";
+    NSString *lotwPass = TX500SecretValue(@"TX500_LoTW_Password") ?: @"";
     NSString *tqslPath = [TX500CloudSyncEngine discoverTQSLBinaryPath];
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
@@ -319,13 +351,13 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
     }
 
     [[self.urlSession dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
-        (void)resp;
         if (err) {
             completion(NO, err.localizedDescription);
             return;
         }
         NSString *respText = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
-        if ([respText containsString:@"RESULT=OK"] || [respText containsString:@"DUPLICATE"]) {
+        if (TX500CloudResponseMatchesEndpoint(resp, endpoint) &&
+            ([respText containsString:@"RESULT=OK"] || [respText containsString:@"DUPLICATE"])) {
             completion(YES, @"OK");
         } else {
             NSString *reason = [self extractQRZReason:respText];
@@ -358,16 +390,16 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
     }
 
     [[self.urlSession dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
-        (void)resp;
         if (err) {
             completion(NO, err.localizedDescription);
             return;
         }
         NSString *resText = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
-        if ([resText localizedCaseInsensitiveContainsString:@"OK"] || resText.length == 0) {
+        if (TX500ClubLogResponseIsSuccess((NSHTTPURLResponse *)resp, data)) {
             completion(YES, @"OK");
         } else {
-            completion(NO, [resText substringToIndex:MIN(50, resText.length)]);
+            completion(NO, resText.length ? [resText substringToIndex:MIN(50, resText.length)] :
+                [NSString stringWithFormat:@"Club Log returned HTTP %ld with no success response", (long)((NSHTTPURLResponse *)resp).statusCode]);
         }
     }] resume];
 }
@@ -388,14 +420,14 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
     [req setValue:@"TX500-macOS/1.0" forHTTPHeaderField:@"User-Agent"];
 
     [[self.urlSession dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
-        (void)resp;
         if (err) {
             completion(NO, err.localizedDescription);
             return;
         }
         NSString *resText = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
-        if ([resText localizedCaseInsensitiveContainsString:@"Success"] ||
-            [resText localizedCaseInsensitiveContainsString:@"Result: 1"]) {
+        if (TX500CloudResponseMatchesEndpoint(resp, endpoint) &&
+            ([resText localizedCaseInsensitiveContainsString:@"Success"] ||
+             [resText localizedCaseInsensitiveContainsString:@"Result: 1"])) {
             completion(YES, @"OK");
         } else {
             completion(NO, [resText substringToIndex:MIN(60, resText.length)]);
@@ -496,7 +528,7 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
 
     NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
     NSString *location = [ud stringForKey:@"TX500_LoTW_StationLocation"];
-    NSString *password = [ud stringForKey:@"TX500_LoTW_Password"];
+    NSString *password = TX500SecretValue(@"TX500_LoTW_Password");
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSString *tempFile = [NSTemporaryDirectory() stringByAppendingPathComponent:@"tx500_full_lotw.adi"];
@@ -583,7 +615,7 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
 
     NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
     NSString *location = [ud stringForKey:@"TX500_LoTW_StationLocation"];
-    NSString *password = [ud stringForKey:@"TX500_LoTW_CertificatePassword"] ?: [ud stringForKey:@"TX500_LoTW_Password"];
+    NSString *password = TX500SecretValue(@"TX500_LoTW_CertificatePassword") ?: TX500SecretValue(@"TX500_LoTW_Password");
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSString *tempFile = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"tx500_lotw_batch_%@.adi", [[NSUUID UUID] UUIDString]]];
@@ -660,7 +692,6 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
         [req setValue:@"TX500-macOS/1.0" forHTTPHeaderField:@"User-Agent"];
 
         [[self.urlSession dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
-            (void)resp;
             if (err) {
                 dispatch_async(dispatch_get_main_queue(), ^{
                     completion(NO, err.localizedDescription);
@@ -668,7 +699,8 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
                 return;
             }
             NSString *resText = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
-            BOOL ok = [resText containsString:@"RESULT=OK"];
+            BOOL ok = TX500CloudResponseMatchesEndpoint(resp, endpoint) &&
+                      [resText containsString:@"RESULT=OK"];
             NSString *msg = ok ? @"QRZ Logbook API Key is valid and active!" : [self extractQRZReason:resText];
             dispatch_async(dispatch_get_main_queue(), ^{
                 completion(ok, msg);
@@ -696,7 +728,6 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
         [req setValue:@"application/x-www-form-urlencoded" forHTTPHeaderField:@"Content-Type"];
 
         [[self.urlSession dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
-            (void)resp;
             if (err) {
                 dispatch_async(dispatch_get_main_queue(), ^{
                     completion(NO, err.localizedDescription);
@@ -704,7 +735,7 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
                 return;
             }
             NSString *resText = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
-            BOOL ok = [resText localizedCaseInsensitiveContainsString:@"OK"] || resText.length == 0;
+            BOOL ok = TX500ClubLogResponseIsSuccess((NSHTTPURLResponse *)resp, data);
             NSString *msg = ok ? @"ClubLog Credentials Verified!" : resText;
             dispatch_async(dispatch_get_main_queue(), ^{
                 completion(ok, msg);
@@ -728,7 +759,6 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
         [req setValue:@"application/x-www-form-urlencoded" forHTTPHeaderField:@"Content-Type"];
 
         [[self.urlSession dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
-            (void)resp;
             if (err) {
                 dispatch_async(dispatch_get_main_queue(), ^{
                     completion(NO, err.localizedDescription);
@@ -736,8 +766,9 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
                 return;
             }
             NSString *resText = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
-            BOOL ok = [resText localizedCaseInsensitiveContainsString:@"Success"] ||
-                      [resText localizedCaseInsensitiveContainsString:@"Result: 1"];
+            BOOL ok = TX500CloudResponseMatchesEndpoint(resp, endpoint) &&
+                      ([resText localizedCaseInsensitiveContainsString:@"Success"] ||
+                       [resText localizedCaseInsensitiveContainsString:@"Result: 1"]);
             NSString *msg = ok ? @"eQSL.cc Login Verified!" : resText;
             dispatch_async(dispatch_get_main_queue(), ^{
                 completion(ok, msg);

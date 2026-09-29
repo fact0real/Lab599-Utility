@@ -40,6 +40,22 @@ static void TestCore(void) {
     Check([c send:@"KY ;RX;" owner:@"CW" error:nil] && !c.ownsTX,@"CW abort confirms RX even when clearing the queue fails");
     Check(![c tune:100 mode:2 owner:@"CW" error:nil],@"Invalid RF frequency rejected");
 }
+static void TestReceiveRecoveryReconnect(void) {
+    TX500StationCore *core=[TX500StationCore new];
+    FakeStationRadio *stalled=[FakeStationRadio new];
+    FakeStationRadio *reopened=[FakeStationRadio new];
+    stalled.failRX=YES;
+    __block NSUInteger opens=0;
+    core.transportFactory=^id(NSString *path) { (void)path; return ++opens==1 ? stalled : reopened; };
+    Check([core selectOwner:@"Digital" port:@"fake-reconnect" error:nil],@"Recovery fixture selects CAT port");
+    Check([core transmit:YES owner:@"Digital" error:nil],@"Recovery fixture confirms initial TX");
+    Check(![core transmit:NO owner:@"Digital" error:nil] && core.ownsTX,@"First missing RX acknowledgement keeps TX ownership");
+    Check(![core transmit:NO owner:@"Digital" error:nil] && core.ownsTX && opens==2,
+          @"Repeated missing RX acknowledgement reopens CAT without clearing TX fault");
+    Check([stalled.commands containsObject:@"CLOSE"],@"Stale CAT descriptor is closed");
+    Check([core transmit:NO owner:@"Digital" error:nil] && !core.ownsTX,
+          @"Only a confirmed RX on reopened CAT clears TX ownership");
+}
 static void TestStore(NSURL *root) {
     NSString *suite=NSUUID.UUID.UUIDString; NSUserDefaults *d=[[NSUserDefaults alloc] initWithSuiteName:suite]; [d setObject:@"K1ABC" forKey:@"TX500_OperatorCallsign"]; [d setObject:@"FN42" forKey:@"TX500_OperatorGrid"];
     NSURL *url=[root URLByAppendingPathComponent:@"station.json"]; TX500StationStore *s=[[TX500StationStore alloc] initWithURL:url defaults:d];
@@ -101,7 +117,7 @@ static void TestReporter(void) {
     reporter.enabled=NO;
 
 }
-int main(int argc,const char *argv[]) { @autoreleasepool { (void)argc;(void)argv; char path[]="/tmp/StationTests.XXXXXX"; Check(mkdtemp(path)!=NULL,@"Isolated test directory"); NSURL *root=[NSURL fileURLWithPath:[NSString stringWithUTF8String:path]]; TestCore(); TestStore(root); TestReporter();
+int main(int argc,const char *argv[]) { @autoreleasepool { (void)argc;(void)argv; char path[]="/tmp/StationTests.XXXXXX"; Check(mkdtemp(path)!=NULL,@"Isolated test directory"); NSURL *root=[NSURL fileURLWithPath:[NSString stringWithUTF8String:path]]; TestCore(); TestReceiveRecoveryReconnect(); TestStore(root); TestReporter();
     if([NSProcessInfo.processInfo.arguments containsObject:@"--render"]) { setenv("TX500_STATION_TEST_ROOT",path,1); [NSApplication sharedApplication];
         for(NSNumber *width in @[@940,@560]) for(NSNumber *tab in @[@0,@1,@2,@3]) {
             TX500StationController *c=[TX500StationController new]; c.core=[TX500StationCore new]; NSWindow *w=[[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,width.doubleValue,1100) styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO]; w.appearance=[NSAppearance appearanceNamed:NSAppearanceNameDarkAqua]; w.contentView=c.view;

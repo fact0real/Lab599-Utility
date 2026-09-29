@@ -609,11 +609,13 @@ static NSBox *CreateCardBox(void) {
 
 - (void)openGuidePDF:(id)sender {
     (void)sender;
-    NSArray<NSString *> *candidates = @[
-        @"/Users/factoreal/Downloads/TX-500/Manual/tx500_ft8_macos_v6.pdf",
-        @"Manual/tx500_ft8_macos_v6.pdf",
-        @"../Manual/tx500_ft8_macos_v6.pdf"
-    ];
+    // The guide ships inside the app (Resources/Manual). The relative paths
+    // only help when running from a source checkout.
+    NSMutableArray<NSString *> *candidates = [NSMutableArray array];
+    NSString *bundled = [[NSBundle mainBundle] pathForResource:@"tx500_ft8_macos_v6" ofType:@"pdf" inDirectory:@"Manual"];
+    if (bundled) [candidates addObject:bundled];
+    [candidates addObject:@"Manual/tx500_ft8_macos_v6.pdf"];
+    [candidates addObject:@"../Manual/tx500_ft8_macos_v6.pdf"];
     for (NSString *cand in candidates) {
         if ([[NSFileManager defaultManager] fileExistsAtPath:cand]) {
             [[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:cand]];
@@ -623,9 +625,13 @@ static NSBox *CreateCardBox(void) {
     }
     NSAlert *alert = [NSAlert new];
     alert.messageText = @"Guide PDF Not Found";
-    alert.informativeText = @"tx500_ft8_macos_v6.pdf could not be found in the Manual directory.";
+    alert.informativeText = @"tx500_ft8_macos_v6.pdf is not included in this build. You can open Lab599's official digital modes setup guide instead.";
     alert.alertStyle = NSAlertStyleInformational;
-    [alert runModal];
+    [alert addButtonWithTitle:@"Open Lab599 Guide"];
+    [alert addButtonWithTitle:@"Close"];
+    if ([alert runModal] == NSAlertFirstButtonReturn) {
+        [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://downloads.lab599.com/TX500/Lab599-TX500-DIG-mode-setup-EN.pdf"]];
+    }
 }
 
 @end

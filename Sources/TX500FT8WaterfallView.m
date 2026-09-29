@@ -16,6 +16,7 @@
     uint32_t *_pixelBuffer;
     NSLock *_bufferLock;
     atomic_bool _displayInvalidationPending;
+    float _currentTransmitToneHz;
     NSDictionary<NSAttributedStringKey, id> *_rulerTextAttributes;
     NSDictionary<NSAttributedStringKey, id> *_rxTextAttributes;
     NSDictionary<NSAttributedStringKey, id> *_txTextAttributes;
@@ -251,6 +252,16 @@ static inline uint32_t ColorForMagnitude(float mag, TX500FT8Palette pal) {
     return (0xFF000000) | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
 }
 
+static inline uint32_t ColorForTransmitMagnitude(float magnitude) {
+    float m = fminf(1.0f, fmaxf(0.0f, magnitude));
+    // A stable warm palette makes transmitted audio unmistakable even when
+    // the operator has selected a blue or green receive palette.
+    uint8_t r = (uint8_t)(22.0f + 233.0f * powf(m, 0.65f));
+    uint8_t g = (uint8_t)(10.0f + 229.0f * powf(m, 1.4f));
+    uint8_t b = (uint8_t)(22.0f + 167.0f * powf(m, 2.2f));
+    return 0xFF000000 | ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
+}
+
 - (void)appendSpectrumRow:(const float *)magnitudes count:(NSInteger)count {
     if (!magnitudes || count <= 0) return;
 
@@ -261,6 +272,17 @@ static inline uint32_t ColorForMagnitude(float mag, TX500FT8Palette pal) {
     }
 
     int steps = (self.scrollSpeed > 0 && self.scrollSpeed <= 4) ? (int)self.scrollSpeed : 1;
+    BOOL txPreview = self.isTransmitting || self.isTuning;
+    float peak = 0.0f;
+    NSInteger peakBin = 0;
+    if (txPreview) {
+        for (NSInteger i = 0; i < count; i++) {
+            if (magnitudes[i] > peak) { peak = magnitudes[i]; peakBin = i; }
+        }
+        _currentTransmitToneHz = peak > 0.2f ? (float)peakBin * 3000.0f / (float)count : 0.0f;
+    } else {
+        _currentTransmitToneHz = 0.0f;
+    }
     for (int s = 0; s < steps; s++) {
         // Scroll down: move rows 0..WF_HEIGHT-2 down to rows 1..WF_HEIGHT-1
         memmove(_pixelBuffer + WF_WIDTH, _pixelBuffer, (WF_HEIGHT - 1) * WF_WIDTH * sizeof(uint32_t));
@@ -283,7 +305,7 @@ static inline uint32_t ColorForMagnitude(float mag, TX500FT8Palette pal) {
                 rawMag = fmaxf(rawMag, magnitudes[idx]);
             }
             float scaledMag = fmaxf(0.0f, fminf(1.0f, (rawMag - blackPoint) * gainVal * 1.35f));
-            _pixelBuffer[x] = ColorForMagnitude(scaledMag, self.palette);
+            _pixelBuffer[x] = txPreview ? ColorForTransmitMagnitude(scaledMag) : ColorForMagnitude(scaledMag, self.palette);
         }
     }
     [_bufferLock unlock];
@@ -310,6 +332,7 @@ static inline uint32_t ColorForMagnitude(float mag, TX500FT8Palette pal) {
     CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
     CGContextRef bitmapCtx = NULL;
     CGImageRef imageRef = NULL;
+    float currentTransmitToneHz = _currentTransmitToneHz;
     if (_pixelBuffer && colorSpace) {
         bitmapCtx = CGBitmapContextCreate(_pixelBuffer, WF_WIDTH, WF_HEIGHT, 8,
                                          WF_WIDTH * 4, colorSpace,
@@ -329,6 +352,43 @@ static inline uint32_t ColorForMagnitude(float mag, TX500FT8Palette pal) {
     if (bitmapCtx) CGContextRelease(bitmapCtx);
     if (colorSpace) CGColorSpaceRelease(colorSpace);
     [_bufferLock unlock];
+
+    if (self.isTransmitting || self.isTuning) {
+        NSRect accent = NSMakeRect(0, NSMaxY(wfRect) - 3.0, bounds.size.width, 3.0);
+        NSColor *accentColor = self.isWaitingForReceive ?
+            [NSColor colorWithCalibratedRed:0.95 green:0.65 blue:0.18 alpha:0.92] :
+            [NSColor colorWithCalibratedRed:0.95 green:0.31 blue:0.15 alpha:0.92];
+        [accentColor setFill];
+        NSRectFillUsingOperation(accent, NSCompositingOperationSourceOver);
+
+        NSString *title = self.isReceiveRecoveryStalled ? @"⚠ RX NOT CONFIRMED · CHECK RADIO" :
+            (self.isWaitingForReceive ? @"◌ WAIT RX · AUDIO MUTED" :
+            (self.isTuning ? (self.isSimulationMode ? @"◆ SIM TUNE" : @"◆ TUNE AUDIO") :
+             (self.isSimulationMode ? @"▲ SIM TX AUDIO" : @"▲ TX AUDIO PREVIEW")));
+        NSDictionary *badgeAttrs = @{
+            NSFontAttributeName: [NSFont monospacedSystemFontOfSize:9.0 weight:NSFontWeightBold],
+            NSForegroundColorAttributeName: NSColor.whiteColor
+        };
+        NSSize titleSize = [title sizeWithAttributes:badgeAttrs];
+        NSRect badge = NSMakeRect(8.0, NSMaxY(wfRect) - 24.0, titleSize.width + 14.0, 17.0);
+        NSColor *badgeColor = self.isWaitingForReceive ?
+            [NSColor colorWithCalibratedRed:0.45 green:0.28 blue:0.06 alpha:0.94] :
+            [NSColor colorWithCalibratedRed:0.48 green:0.08 blue:0.07 alpha:0.94];
+        [badgeColor setFill];
+        [[NSBezierPath bezierPathWithRoundedRect:badge xRadius:4.0 yRadius:4.0] fill];
+        [title drawAtPoint:NSMakePoint(badge.origin.x + 7.0, badge.origin.y + 3.0) withAttributes:badgeAttrs];
+
+        if (currentTransmitToneHz > 0.0f) {
+            CGFloat toneX = (CGFloat)currentTransmitToneHz / 3000.0 * bounds.size.width;
+            NSBezierPath *toneMarker = [NSBezierPath bezierPath];
+            [toneMarker moveToPoint:NSMakePoint(toneX, NSMaxY(wfRect) - 3.0)];
+            [toneMarker lineToPoint:NSMakePoint(toneX - 5.0, NSMaxY(wfRect) - 11.0)];
+            [toneMarker lineToPoint:NSMakePoint(toneX + 5.0, NSMaxY(wfRect) - 11.0)];
+            [toneMarker closePath];
+            [[NSColor colorWithCalibratedRed:1.0 green:0.82 blue:0.31 alpha:1.0] setFill];
+            [toneMarker fill];
+        }
+    }
 
     // Subtle frequency grid lines across spectrum
     [[NSColor colorWithCalibratedWhite:1.0 alpha:0.08] setStroke];
@@ -403,7 +463,7 @@ static inline uint32_t ColorForMagnitude(float mag, TX500FT8Palette pal) {
         [NSColor colorWithCalibratedRed:0.90 green:0.15 blue:0.15 alpha:1.0] :
         [NSColor colorWithCalibratedRed:0.80 green:0.20 blue:0.20 alpha:0.90];
 
-    [[txColor colorWithAlphaComponent:self.isTransmitting ? 0.35 : 0.18] setFill];
+    [[txColor colorWithAlphaComponent:self.isTransmitting ? 0.13 : 0.18] setFill];
     NSRectFillUsingOperation(txReticle, NSCompositingOperationSourceOver);
 
     [txColor setStroke];
@@ -423,10 +483,12 @@ static inline uint32_t ColorForMagnitude(float mag, TX500FT8Palette pal) {
 
     // TX Tag on ruler
     NSDictionary<NSAttributedStringKey, id> *txTagAttrs = _txTextAttributes ?: @{};
-    [@"TX" drawAtPoint:NSMakePoint(txX - 7.0, bounds.size.height - RULER_HEIGHT + 7.0) withAttributes:txTagAttrs];
+    if (!self.isTransmitting && !self.isTuning) {
+        [@"TX" drawAtPoint:NSMakePoint(txX - 7.0, bounds.size.height - RULER_HEIGHT + 7.0) withAttributes:txTagAttrs];
+    }
 
     // 6. Callsign Tags HUD Overlay
-    if (self.showCallsignTags && self.activeStationTags.count > 0) {
+    if (!self.isTransmitting && !self.isTuning && self.showCallsignTags && self.activeStationTags.count > 0) {
         NSFont *tagFont = [NSFont monospacedSystemFontOfSize:9.0 weight:NSFontWeightBold];
         NSDictionary *cqAttrs = @{
             NSFontAttributeName: tagFont,

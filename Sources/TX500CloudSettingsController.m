@@ -8,6 +8,7 @@
 //
 
 #import "TX500CloudSettingsController.h"
+#import "TX500SecretStore.h"
 #import "TX500CloudSyncEngine.h"
 #import "TX500WebAuthenticatorController.h"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
@@ -473,7 +474,7 @@ NSString * const TX500CloudSettingsDidChangeNotification = @"TX500CloudSettingsD
     lblApiKey.font = [NSFont systemFontOfSize:12.0 weight:NSFontWeightMedium];
     [v addSubview:lblApiKey];
 
-    self.qrzApiKeyField = [[NSTextField alloc] initWithFrame:NSZeroRect];
+    self.qrzApiKeyField = [[NSSecureTextField alloc] initWithFrame:NSZeroRect];
     self.qrzApiKeyField.translatesAutoresizingMaskIntoConstraints = NO;
     self.qrzApiKeyField.placeholderString = @"e.g. 1234-5678-ABCD-EF01";
     [v addSubview:self.qrzApiKeyField];
@@ -650,7 +651,7 @@ NSString * const TX500CloudSettingsDidChangeNotification = @"TX500CloudSettingsD
     lblApiKey.font = [NSFont systemFontOfSize:12.0 weight:NSFontWeightMedium];
     [v addSubview:lblApiKey];
 
-    self.clubLogApiKeyField = [[NSTextField alloc] initWithFrame:NSZeroRect];
+    self.clubLogApiKeyField = [[NSSecureTextField alloc] initWithFrame:NSZeroRect];
     self.clubLogApiKeyField.translatesAutoresizingMaskIntoConstraints = NO;
     self.clubLogApiKeyField.placeholderString = @"Public Club Log API Key";
     [v addSubview:self.clubLogApiKeyField];
@@ -918,33 +919,33 @@ NSString * const TX500CloudSettingsDidChangeNotification = @"TX500CloudSettingsD
 
     // LoTW
     self.lotwUsernameField.stringValue = [ud stringForKey:@"TX500_LoTW_Username"] ?: [ud stringForKey:@"TX500_OperatorCallsign"] ?: @"";
-    self.lotwPasswordField.stringValue = [ud stringForKey:@"TX500_LoTW_Password"] ?: @"";
+    self.lotwPasswordField.stringValue = TX500SecretValue(@"TX500_LoTW_Password") ?: @"";
     self.lotwStationLocationField.stringValue = [ud stringForKey:@"TX500_LoTW_StationLocation"] ?: @"";
     NSString *cert = [ud stringForKey:@"TX500_LoTW_CertificatePath"];
     self.lotwCertPathLabel.stringValue = (cert.length > 0) ? cert : @"No certificate container selected";
     self.btnRemoveCert.enabled = (cert.length > 0);
-    self.lotwCertPasswordField.stringValue = [ud stringForKey:@"TX500_LoTW_CertificatePassword"] ?: @"";
+    self.lotwCertPasswordField.stringValue = TX500SecretValue(@"TX500_LoTW_CertificatePassword") ?: @"";
 
     // QRZ
-    self.qrzApiKeyField.stringValue = [ud stringForKey:@"TX500_QRZ_APIKey"] ?: @"";
+    self.qrzApiKeyField.stringValue = TX500SecretValue(@"TX500_QRZ_APIKey") ?: @"";
     self.qrzUsernameField.stringValue = [ud stringForKey:@"TX500_QRZ_Username"] ?: @"";
-    self.qrzPasswordField.stringValue = [ud stringForKey:@"TX500_QRZ_Password"] ?: @"";
+    self.qrzPasswordField.stringValue = TX500SecretValue(@"TX500_QRZ_Password") ?: @"";
     [self update2FABadges];
 
     // Club Log
     self.clubLogCallsignField.stringValue = [ud stringForKey:@"TX500_ClubLog_Callsign"] ?: @"";
     self.clubLogEmailField.stringValue = [ud stringForKey:@"TX500_ClubLog_Email"] ?: @"";
-    self.clubLogPasswordField.stringValue = [ud stringForKey:@"TX500_ClubLog_Password"] ?: @"";
-    self.clubLogApiKeyField.stringValue = [ud stringForKey:@"TX500_ClubLog_APIKey"] ?: @"";
+    self.clubLogPasswordField.stringValue = TX500SecretValue(@"TX500_ClubLog_Password") ?: @"";
+    self.clubLogApiKeyField.stringValue = TX500SecretValue(@"TX500_ClubLog_APIKey") ?: @"";
 
     // eQSL
     self.eqslUsernameField.stringValue = [ud stringForKey:@"TX500_EQSL_Username"] ?: @"";
-    self.eqslPasswordField.stringValue = [ud stringForKey:@"TX500_EQSL_Password"] ?: @"";
+    self.eqslPasswordField.stringValue = TX500SecretValue(@"TX500_EQSL_Password") ?: @"";
     self.eqslNicknameField.stringValue = [ud stringForKey:@"TX500_EQSL_Nickname"] ?: @"";
 
     // HamQTH
     self.hamQTHUsernameField.stringValue = [ud stringForKey:@"TX500_HamQTH_Username"] ?: @"";
-    self.hamQTHPasswordField.stringValue = [ud stringForKey:@"TX500_HamQTH_Password"] ?: @"";
+    self.hamQTHPasswordField.stringValue = TX500SecretValue(@"TX500_HamQTH_Password") ?: @"";
 }
 
 - (void)update2FABadges {
@@ -987,16 +988,14 @@ NSString * const TX500CloudSettingsDidChangeNotification = @"TX500CloudSettingsD
 
 - (void)saveLoTWPasswordClicked {
     NSString *p = self.lotwPasswordField.stringValue;
-    [[NSUserDefaults standardUserDefaults] setObject:p forKey:@"TX500_LoTW_Password"];
-    [[NSUserDefaults standardUserDefaults] synchronize];
-    self.lotwTQSLSyncStatusLabel.stringValue = @"Password saved securely.";
+    self.lotwTQSLSyncStatusLabel.stringValue = TX500StoreSecret(@"TX500_LoTW_Password", p) ?
+        @"Password saved in Keychain." : @"Could not save password in Keychain.";
 }
 
 - (void)removeLoTWPasswordClicked {
     self.lotwPasswordField.stringValue = @"";
-    [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"TX500_LoTW_Password"];
-    [[NSUserDefaults standardUserDefaults] synchronize];
-    self.lotwTQSLSyncStatusLabel.stringValue = @"Password removed.";
+    self.lotwTQSLSyncStatusLabel.stringValue = TX500RemoveSecret(@"TX500_LoTW_Password") ?
+        @"Password removed." : @"Could not remove password from Keychain.";
 }
 
 - (void)syncTQSLDataClicked {
@@ -1040,14 +1039,14 @@ NSString * const TX500CloudSettingsDidChangeNotification = @"TX500CloudSettingsD
 
 - (void)saveCertPasswordClicked {
     NSString *p = self.lotwCertPasswordField.stringValue;
-    [[NSUserDefaults standardUserDefaults] setObject:p forKey:@"TX500_LoTW_CertificatePassword"];
-    [[NSUserDefaults standardUserDefaults] synchronize];
+    if (!TX500StoreSecret(@"TX500_LoTW_CertificatePassword", p))
+        self.lotwTQSLSyncStatusLabel.stringValue = @"Could not save certificate password in Keychain.";
 }
 
 - (void)removeCertPasswordClicked {
     self.lotwCertPasswordField.stringValue = @"";
-    [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"TX500_LoTW_CertificatePassword"];
-    [[NSUserDefaults standardUserDefaults] synchronize];
+    if (!TX500RemoveSecret(@"TX500_LoTW_CertificatePassword"))
+        self.lotwTQSLSyncStatusLabel.stringValue = @"Could not remove certificate password from Keychain.";
 }
 
 - (void)qrz2FALoginClicked {
@@ -1097,45 +1096,57 @@ NSString * const TX500CloudSettingsDidChangeNotification = @"TX500CloudSettingsD
 
 - (void)saveAndApplyClicked {
     NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    BOOL secretsSaved = YES;
 
     // LoTW
-    [ud setObject:self.lotwUsernameField.stringValue forKey:@"TX500_LoTW_Username"];
     if (self.lotwPasswordField.stringValue.length > 0) {
-        [ud setObject:self.lotwPasswordField.stringValue forKey:@"TX500_LoTW_Password"];
+        secretsSaved &= TX500StoreSecret(@"TX500_LoTW_Password", self.lotwPasswordField.stringValue);
     }
-    [ud setObject:self.lotwStationLocationField.stringValue forKey:@"TX500_LoTW_StationLocation"];
     if (self.lotwCertPasswordField.stringValue.length > 0) {
-        [ud setObject:self.lotwCertPasswordField.stringValue forKey:@"TX500_LoTW_CertificatePassword"];
+        secretsSaved &= TX500StoreSecret(@"TX500_LoTW_CertificatePassword", self.lotwCertPasswordField.stringValue);
     }
 
     // QRZ
-    [ud setObject:self.qrzApiKeyField.stringValue forKey:@"TX500_QRZ_APIKey"];
-    [ud setObject:self.qrzUsernameField.stringValue forKey:@"TX500_QRZ_Username"];
+    secretsSaved &= self.qrzApiKeyField.stringValue.length ?
+        TX500StoreSecret(@"TX500_QRZ_APIKey", self.qrzApiKeyField.stringValue) : TX500RemoveSecret(@"TX500_QRZ_APIKey");
     if (self.qrzPasswordField.stringValue.length > 0) {
-        [ud setObject:self.qrzPasswordField.stringValue forKey:@"TX500_QRZ_Password"];
+        secretsSaved &= TX500StoreSecret(@"TX500_QRZ_Password", self.qrzPasswordField.stringValue);
     }
 
     // Club Log
-    [ud setObject:self.clubLogCallsignField.stringValue forKey:@"TX500_ClubLog_Callsign"];
-    [ud setObject:self.clubLogEmailField.stringValue forKey:@"TX500_ClubLog_Email"];
     if (self.clubLogPasswordField.stringValue.length > 0) {
-        [ud setObject:self.clubLogPasswordField.stringValue forKey:@"TX500_ClubLog_Password"];
+        secretsSaved &= TX500StoreSecret(@"TX500_ClubLog_Password", self.clubLogPasswordField.stringValue);
     }
-    [ud setObject:self.clubLogApiKeyField.stringValue forKey:@"TX500_ClubLog_APIKey"];
+    secretsSaved &= self.clubLogApiKeyField.stringValue.length ?
+        TX500StoreSecret(@"TX500_ClubLog_APIKey", self.clubLogApiKeyField.stringValue) : TX500RemoveSecret(@"TX500_ClubLog_APIKey");
 
     // eQSL
-    [ud setObject:self.eqslUsernameField.stringValue forKey:@"TX500_EQSL_Username"];
     if (self.eqslPasswordField.stringValue.length > 0) {
-        [ud setObject:self.eqslPasswordField.stringValue forKey:@"TX500_EQSL_Password"];
+        secretsSaved &= TX500StoreSecret(@"TX500_EQSL_Password", self.eqslPasswordField.stringValue);
     }
-    [ud setObject:self.eqslNicknameField.stringValue forKey:@"TX500_EQSL_Nickname"];
 
     // HamQTH
-    [ud setObject:self.hamQTHUsernameField.stringValue forKey:@"TX500_HamQTH_Username"];
     if (self.hamQTHPasswordField.stringValue.length > 0) {
-        [ud setObject:self.hamQTHPasswordField.stringValue forKey:@"TX500_HamQTH_Password"];
+        secretsSaved &= TX500StoreSecret(@"TX500_HamQTH_Password", self.hamQTHPasswordField.stringValue);
     }
 
+    if (!secretsSaved) {
+        NSAlert *alert = [NSAlert new];
+        alert.alertStyle = NSAlertStyleCritical;
+        alert.messageText = @"Some credentials could not be saved in Keychain";
+        alert.informativeText = @"Unlock your login Keychain and try Save & Apply again. Credentials were not written to preferences.";
+        [alert runModal];
+        return;
+    }
+
+    [ud setObject:self.lotwUsernameField.stringValue forKey:@"TX500_LoTW_Username"];
+    [ud setObject:self.lotwStationLocationField.stringValue forKey:@"TX500_LoTW_StationLocation"];
+    [ud setObject:self.qrzUsernameField.stringValue forKey:@"TX500_QRZ_Username"];
+    [ud setObject:self.clubLogCallsignField.stringValue forKey:@"TX500_ClubLog_Callsign"];
+    [ud setObject:self.clubLogEmailField.stringValue forKey:@"TX500_ClubLog_Email"];
+    [ud setObject:self.eqslUsernameField.stringValue forKey:@"TX500_EQSL_Username"];
+    [ud setObject:self.eqslNicknameField.stringValue forKey:@"TX500_EQSL_Nickname"];
+    [ud setObject:self.hamQTHUsernameField.stringValue forKey:@"TX500_HamQTH_Username"];
     [ud synchronize];
 
     [[NSNotificationCenter defaultCenter] postNotificationName:TX500CloudSettingsDidChangeNotification object:nil];

@@ -35,12 +35,14 @@ if [ "${1:-}" = "--test" ] || [ "${1:-}" = "--test-only" ]; then
         -mmacosx-version-min=12.0 -framework Foundation \
         -IHeaders -ISources \
         tests/UtilityTests.m Sources/Lab599SerialPort.m Sources/TX500CATTest.m Sources/TX500Configuration.m Sources/TX500ProfilesAndBackup.m Sources/TX500SettingsModel.m -o build/UtilityTests
-    ./build/UtilityTests
+    UTILITY_TEST_HOME=$(mktemp -d /tmp/Lab599UtilityTests.XXXXXX)
+    (trap 'rm -rf "$UTILITY_TEST_HOME"' EXIT; CFFIXED_USER_HOME="$UTILITY_TEST_HOME" ./build/UtilityTests)
     clang -O2 -Wall -Wextra -Wno-unused-parameter -Werror -fobjc-arc \
         -mmacosx-version-min=12.0 -framework Cocoa \
         -IHeaders -ISources \
         tests/DriverAndDocsTests.m Sources/Lab599DriverController.m Sources/Lab599DocsController.m Sources/Lab599FirmwareCatalog.m Sources/TX500Transfer.m -o build/DriverAndDocsTests
     ./build/DriverAndDocsTests
+    sh tests/run-firmware-catalog-security-tests.sh
     clang -O2 -Wall -Wextra -Wno-unused-parameter -Werror -fobjc-arc \
         -mmacosx-version-min=12.0 -framework Cocoa \
         -IHeaders -ISources \
@@ -58,7 +60,7 @@ if [ "${1:-}" = "--test" ] || [ "${1:-}" = "--test-only" ]; then
     ./build/ScreenCaptureTests
     clang -O2 -Wall -Wextra -Wno-unused-parameter -Werror -fobjc-arc \
         -mmacosx-version-min=12.0 -framework Cocoa -framework UniformTypeIdentifiers -framework AVFoundation -framework CoreAudio -framework AudioToolbox -framework WebKit -framework Security -lsqlite3 \
-        -IHeaders -ISources -IHeaders/cft8 -ISources/cft8 \
+        -DTX500_TEST_SECRET_STORE -IHeaders -ISources -IHeaders/cft8 -ISources/cft8 \
         tests/CWStationTests.m Sources/TX500CWAudioDecoder.m Sources/TX500CWKeyer.m Sources/TX500CWQSOAssistant.m Sources/TX500CWSpectrumView.m Sources/TX500CWStationController.m \
         Sources/TX500LogbookManager.m Sources/TX500CallsignLookupService.m Sources/TX500CloudSyncEngine.m Sources/TX500WebAuthenticatorController.m -o build/CWStationTests
     ./build/CWStationTests
@@ -70,7 +72,7 @@ if [ "${1:-}" = "--test" ] || [ "${1:-}" = "--test-only" ]; then
     ./build/AudioMonitorTests
     clang -O2 -Wall -Wextra -Wno-unused-parameter -Werror -fobjc-arc \
         -mmacosx-version-min=12.0 -framework Cocoa -framework CoreAudio -framework AudioToolbox -framework AVFoundation -framework WebKit -framework Security -lsqlite3 \
-        -IHeaders -ISources -IHeaders/cft8 -ISources/cft8 \
+        -DTX500_TEST_SECRET_STORE -IHeaders -ISources -IHeaders/cft8 -ISources/cft8 \
         tests/FT8StationTests.m Sources/TX500FT8Message.m Sources/TX500FT8AudioEngine.m Sources/TX500FT8AutoEngine.m Sources/TX500TimeDiscipline.m \
         Sources/TX500LogbookManager.m Sources/TX500CallsignLookupService.m Sources/TX500CloudSyncEngine.m Sources/TX500WebAuthenticatorController.m \
         Sources/cft8/ft8/constants.c Sources/cft8/ft8/crc.c Sources/cft8/ft8/encode.c Sources/cft8/ft8/decode.c Sources/cft8/ft8/ldpc.c Sources/cft8/ft8/message.c Sources/cft8/ft8/text.c Sources/cft8/fft/kiss_fft.c Sources/cft8/fft/kiss_fftr.c Sources/cft8/common/wave.c Sources/cft8/common/monitor.c Sources/cft8/shim/tx500_ft8_shim.c \
@@ -89,7 +91,7 @@ if [ "${1:-}" = "--test" ] || [ "${1:-}" = "--test-only" ]; then
     ./build/FT8WaterfallTests
     clang -O2 -Wall -Wextra -Wno-unused-parameter -Werror -fobjc-arc \
         -mmacosx-version-min=12.0 -framework Cocoa -framework UniformTypeIdentifiers -framework AVFoundation -framework CoreAudio -framework AudioToolbox -framework WebKit -framework Security -lsqlite3 \
-        -IHeaders -ISources -IHeaders/cft8 -ISources/cft8 \
+        -DTX500_TEST_SECRET_STORE -IHeaders -ISources -IHeaders/cft8 -ISources/cft8 \
         tests/LogbookAndCloudTests.m Sources/TX500LogbookManager.m Sources/TX500LogbookController.m Sources/TX500CallsignLookupService.m Sources/TX500CloudSyncEngine.m \
         Sources/TX500FT8AutoEngine.m Sources/TX500CWQSOAssistant.m Sources/TX500FT8Message.m Sources/TX500FT8AudioEngine.m Sources/TX500TimeDiscipline.m \
         Sources/TX500WebAuthenticatorController.m Sources/TX500CloudSettingsController.m \
@@ -153,6 +155,10 @@ clang -O2 -Wall -Wextra -Wno-unused-parameter -Werror -fobjc-arc \
 /bin/cp Resources/lab599_logo.png "$APP_NAME/Contents/Resources/lab599_logo.png"
 /bin/mkdir -p "$APP_NAME/Contents/Resources/ftdi"
 /bin/cp -R Resources/ftdi/ "$APP_NAME/Contents/Resources/ftdi/"
+if [ -f Resources/Manual/tx500_ft8_macos_v6.pdf ]; then
+    /bin/mkdir -p "$APP_NAME/Contents/Resources/Manual"
+    /bin/cp Resources/Manual/tx500_ft8_macos_v6.pdf "$APP_NAME/Contents/Resources/Manual/"
+fi
 xattr -cr "$APP_NAME" Resources/ftdi 2>/dev/null || true
 
 codesign --force --sign - "$APP_NAME"

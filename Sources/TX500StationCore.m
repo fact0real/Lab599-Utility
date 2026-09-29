@@ -10,7 +10,7 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
     NSString *_port, *_owner, *_status;
     NSDictionary *_snapshot, *_published;
     BOOL _ownsTX, _faulted;
-    NSUInteger _queryCount, _failureCount;
+    NSUInteger _queryCount, _failureCount, _receiveFailureStreak;
     double _lastLatency;
 }
 - (instancetype)init { if((self=[super init])) { _lock=[NSRecursiveLock new]; _owner=@""; _port=@""; _status=@"Disconnected"; _snapshot=@{}; [self cacheState]; } return self; }
@@ -35,7 +35,7 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
 - (BOOL)selectOwner:(NSString *)owner port:(NSString *)path error:(NSError **)error {
     [_lock lock];
     if(_ownsTX && (![_owner isEqual:owner] || ![_port isEqual:path])) { BOOL r=[self reject:@"Stop the current transmission before changing radio control." error:error]; [self cacheState]; [_lock unlock]; return r; }
-    if(![_port isEqual:path]) { [_transport close]; _transport=nil; _snapshot=@{}; _port=[path copy] ?: @""; }
+    if(![_port isEqual:path]) { [_transport close]; _transport=nil; _snapshot=@{}; _port=[path copy] ?: @""; _receiveFailureStreak=0; }
     _owner=[owner copy];
     if(!_transport && path.length) _transport=self.transportFactory ? self.transportFactory(path) : [[TX500VoiceCATRadio alloc] initWithPort:path];
     [self publish:path.length ? [NSString stringWithFormat:@"%@ controls the radio",owner] : @"Select a CAT port to connect"];
@@ -85,9 +85,19 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
     }
     BOOL ok=[_transport setTransmit:active error:error];
     if(ok) { NSMutableDictionary *s=[_snapshot mutableCopy]; s[@"tx"]=@(active); _snapshot=[s copy]; }
-    if(ok && !active) { _ownsTX=NO; _faulted=NO; }
+    if(ok && !active) { _ownsTX=NO; _faulted=NO; _receiveFailureStreak=0; }
     if(!ok) _faulted=YES;
     if(!ok) _failureCount++;
+    if(!ok && !active) {
+        _receiveFailureStreak++;
+        // A USB serial adapter can retain a stale descriptor after an RF or
+        // cable transient. Reopen it periodically while preserving TX ownership
+        // and the fault latch. Only a later PT0 readback may clear either.
+        if(_receiveFailureStreak >= 2 && (_receiveFailureStreak-2)%3 == 0) {
+            [_transport close];
+            _transport=self.transportFactory ? self.transportFactory(_port) : [[TX500VoiceCATRadio alloc] initWithPort:_port];
+        }
+    }
     [self publish:ok ? (active ? @"TX confirmed" : @"RX confirmed") : @"PTT acknowledgement missing • press Stop and check the radio"];
     [self cacheState]; [_lock unlock]; return ok;
 }

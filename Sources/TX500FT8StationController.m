@@ -7,7 +7,9 @@
 //
 
 #import "TX500FT8StationController.h"
+#import "TX500FT8Frequency.h"
 #import "TX500LogbookManager.h"
+#import "TX500TimeDiscipline.h"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include <math.h>
 
@@ -152,6 +154,8 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
     uint64_t hz = (uint64_t)digits.longLongValue;
     return (hz >= 500000 && hz <= 56000000) ? hz : 0;
 }
+
+static NSString * const kFT8CustomBandTitle = @"Custom…";
 
 @interface TX500FT8SlotProgressView : NSView
 @property (nonatomic, assign) double slotSecond;
@@ -397,7 +401,7 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
 
 @end
 
-@interface TX500FT8StationController ()
+@interface TX500FT8StationController () <NSPopoverDelegate>
 
 @property (nonatomic, strong, readwrite) NSView *view;
 @property (nonatomic, strong, readwrite) TX500FT8AudioEngine *audioEngine;
@@ -411,6 +415,10 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
 @property (nonatomic, strong) NSSegmentedControl *modeSegment;
 @property (nonatomic, strong) NSPopUpButton *bandPopup;
 @property (nonatomic, strong) NSTextField *dialFreqLabel;
+@property (nonatomic, strong) NSButton *customFrequencyButton;
+@property (nonatomic, strong) NSPopover *customFrequencyPopover;
+@property (nonatomic, strong) NSTextField *customFrequencyField;
+@property (nonatomic, strong) NSTextField *customFrequencyStatusLabel;
 @property (nonatomic, assign) NSUInteger frequencyRequestGeneration;
 @property (nonatomic, assign) BOOL frequencyOperationPending;
 @property (nonatomic, assign) NSUInteger frequencyPollFailures;
@@ -555,6 +563,7 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
 @property (nonatomic, strong) NSTextField *cycleDetailLabel;
 @property (nonatomic, strong) NSTextField *cycleClockLabel;
 @property (nonatomic, assign) NSUInteger lastDecodesCount;
+@property (nonatomic, assign) NSTimeInterval lastDecodeSummaryUntilUTC;
 
 - (void)manuallyEngageMessage:(TX500FT8Message *)message;
 
@@ -690,6 +699,11 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
     self.audioEngine.onSpectrumUpdated = ^(const float *magnitudes, NSInteger count) {
         typeof(self) strongSelf = weakSelf;
         if (!strongSelf) return;
+        strongSelf.waterfallView.isTuning = strongSelf.audioEngine.isTuning;
+        strongSelf.waterfallView.isSimulationMode = strongSelf.audioEngine.isSimulationMode;
+        strongSelf.waterfallView.isTransmitting = strongSelf.audioEngine.isTransmitting;
+        strongSelf.waterfallView.isWaitingForReceive = strongSelf.audioEngine.isReceiveRecoveryPending;
+        strongSelf.waterfallView.isReceiveRecoveryStalled = strongSelf.audioEngine.isReceiveRecoveryStalled;
         [strongSelf.waterfallView appendSpectrumRow:magnitudes count:count];
     };
 
@@ -726,6 +740,7 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
         if (!strongSelf) return;
         dispatch_async(dispatch_get_main_queue(), ^{
             [strongSelf updateLiveCycleStatusBannerWithSlotSec:0.0 parity:parity];
+            [strongSelf refreshAutoCQStatusLabel];
         });
     };
 
@@ -734,6 +749,9 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
         typeof(self) strongSelf = weakSelf;
         if (!strongSelf) return;
         strongSelf.waterfallView.isTransmitting = transmitting;
+        strongSelf.waterfallView.isTuning = strongSelf.audioEngine.isTuning;
+        strongSelf.waterfallView.isWaitingForReceive = strongSelf.audioEngine.isReceiveRecoveryPending;
+        strongSelf.waterfallView.isReceiveRecoveryStalled = strongSelf.audioEngine.isReceiveRecoveryStalled;
         [strongSelf.waterfallView setNeedsDisplay:YES];
 
         if (transmitting) {
@@ -769,6 +787,12 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
                 [strongSelf.rxFreqTableView reloadData];
             }
         } else {
+            if (!strongSelf.audioEngine.isReceiveRecoveryPending && !strongSelf.audioEngine.isMonitoring) {
+                NSString *mode = strongSelf.protocol == TX500_FT8_PROTOCOL_FT4 ? @"FT4" : @"FT8";
+                strongSelf.startStopButton.title = [NSString stringWithFormat:@"Start %@", mode];
+                strongSelf.startStopButton.enabled = YES;
+                strongSelf.startStopButton.toolTip = nil;
+            }
             [strongSelf.autoEngine noteTransmissionEnded];
             [strongSelf applyPendingRadioSettings];
             if (strongSelf.audioEngine.swrMeterValid) {
@@ -792,7 +816,28 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
             }
         }
         [strongSelf refreshTransmitButtonState];
+        [strongSelf refreshAutoCQStatusLabel];
         [strongSelf updateLiveCycleStatusBannerWithSlotSec:strongSelf.audioEngine.currentSlotSecond parity:strongSelf.audioEngine.currentSlotParity];
+    };
+
+    self.audioEngine.onReceiveRecoveryStalled = ^(NSUInteger attempts) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        [strongSelf appendToQSOConsole:[NSString stringWithFormat:
+            @"[RX unconfirmed] No CAT PT0 after %lu release attempts. Automatic operation is paused. Check the radio's TX/RX indicator and CAT USB connection; transmitting remains blocked.",
+            (unsigned long)attempts]];
+        if (strongSelf.audioEngine.isMonitoring || strongSelf.autoEngine.isAutoCQActive ||
+            strongSelf.autoEngine.isAutoHunterActive || strongSelf.autoEngine.isQSOActive) {
+            [strongSelf stopStation];
+        }
+        strongSelf.startStopButton.title = @"Retry RX";
+        strongSelf.startStopButton.toolTip = @"After checking the radio PTT and CAT USB cable, send one RX command and require a PT0 reply.";
+        strongSelf.startStopButton.enabled = YES;
+        strongSelf.waterfallView.isReceiveRecoveryStalled = YES;
+        [strongSelf.waterfallView setNeedsDisplay:YES];
+        [strongSelf refreshTransmitButtonState];
+        [strongSelf updateLiveCycleStatusBannerWithSlotSec:strongSelf.audioEngine.currentSlotSecond
+                                                   parity:strongSelf.audioEngine.currentSlotParity];
     };
 
     // Decoded Messages from Slot
@@ -849,7 +894,15 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
         [strongSelf applyTableFilters];
 
         strongSelf.lastDecodesCount = messages.count;
-        [strongSelf updateLiveCycleStatusBannerWithSlotSec:strongSelf.audioEngine.currentSlotSecond parity:parity];
+        double period = strongSelf.audioEngine.currentSlotPeriod;
+        if (parity == strongSelf.audioEngine.currentSlotParity) {
+            strongSelf.lastDecodeSummaryUntilUTC = [[TX500DisciplinedClock sharedClock] utcTimeInterval] +
+                MAX(0.0, period - strongSelf.audioEngine.currentSlotSecond);
+        } else {
+            strongSelf.lastDecodeSummaryUntilUTC = 0.0;
+        }
+        [strongSelf updateLiveCycleStatusBannerWithSlotSec:strongSelf.audioEngine.currentSlotSecond
+                                                   parity:strongSelf.audioEngine.currentSlotParity];
 
         // Trigger Country Alert for newly arrived cycle messages ONLY
         [strongSelf checkAndTriggerAlertsForNewMessages:messages];
@@ -887,6 +940,7 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
             [strongSelf dxCallEdited:nil];
             [strongSelf updateTransmitMatrixLabels];
             [strongSelf refreshTransmitButtonState];
+            [strongSelf refreshAutoCQStatusLabel];
             if (strongSelf.audioEngine.lockTxRxFrequencies) {
                 strongSelf.txFreqField.stringValue = strongSelf.rxFreqField.stringValue;
                 strongSelf.waterfallView.txFrequencyHz = strongSelf.audioEngine.txAudioFrequencyHz;
@@ -923,7 +977,7 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
         });
     };
 
-    self.autoEngine.onAlgorithmStatusUpdated = ^(NSString *cqStatus, NSString *hunterStatus) {
+    self.autoEngine.onAlgorithmStatusUpdated = ^(__unused NSString *cqStatus, __unused NSString *hunterStatus) {
         typeof(self) strongSelf = weakSelf;
         if (!strongSelf) return;
         // Decode and slot callbacks are delivered from the audio worker.  UI
@@ -933,8 +987,8 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
         dispatch_async(dispatch_get_main_queue(), ^{
             typeof(strongSelf) uiSelf = strongSelf;
             if (!uiSelf) return;
-            uiSelf.autoCQStatusLabel.stringValue = cqStatus ?: @"Auto-CQ: Idle";
-            uiSelf.autoHunterStatusLabel.stringValue = hunterStatus ?: @"Auto-Hunter: Inactive";
+            [uiSelf refreshAutoCQStatusLabel];
+            uiSelf.autoHunterStatusLabel.stringValue = uiSelf.autoEngine.autoHunterStatus ?: @"Auto-Hunter: Inactive";
         });
     };
 
@@ -1125,11 +1179,15 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
     // Refresh Band presets popup with appropriate dial frequencies
     [self refreshBandPopupForCurrentProtocol];
 
-    // A protocol change also selects its dial preset, but the displayed dial
-    // must come from CAT readback rather than the requested value.
+    // Keep a manually chosen dial when changing the FT8/FT4 decoder. Both
+    // modes use the same radio DIG mode; only preset selections retune it.
     NSString *selectedBand = self.bandPopup.titleOfSelectedItem ?: @"20m";
-    uint64_t newDialHz = [self defaultFrequencyForBand:selectedBand protocol:proto];
-    if (newDialHz > 0) [self requestRadioFrequencyHz:newDialHz];
+    if ([selectedBand isEqualToString:kFT8CustomBandTitle]) {
+        [self syncBandPopupToConfirmedFrequency:self.audioEngine.dialFrequencyHz];
+    } else {
+        uint64_t newDialHz = [self defaultFrequencyForBand:selectedBand protocol:proto];
+        if (newDialHz > 0) [self requestRadioFrequencyHz:newDialHz];
+    }
 
     [self appendToQSOConsole:[NSString stringWithFormat:@"[Protocol Switched] Active mode: %@ (%.1fs slot).",
                               mName, self.audioEngine.currentSlotPeriod]];
@@ -1170,11 +1228,27 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
             [self.bandPopup addItemWithTitle:[NSString stringWithUTF8String:kFT8Presets[i].band]];
         }
     }
+    [[self.bandPopup menu] addItem:[NSMenuItem separatorItem]];
+    [self.bandPopup addItemWithTitle:kFT8CustomBandTitle];
     if (currentSelection && [self.bandPopup itemWithTitle:currentSelection]) {
         [self.bandPopup selectItemWithTitle:currentSelection];
     } else {
         [self.bandPopup selectItemWithTitle:@"20m"];
     }
+}
+
+- (void)syncBandPopupToConfirmedFrequency:(uint64_t)frequencyHz {
+    if (!frequencyHz) return;
+    const BOOL isFT4 = self.protocol == TX500_FT8_PROTOCOL_FT4;
+    for (NSUInteger i = 0; (isFT4 ? kFT4Presets[i].band : kFT8Presets[i].band) != NULL; i++) {
+        uint64_t presetHz = isFT4 ? kFT4Presets[i].freqHz : kFT8Presets[i].freqHz;
+        if (frequencyHz == presetHz) {
+            const char *name = isFT4 ? kFT4Presets[i].band : kFT8Presets[i].band;
+            [self.bandPopup selectItemWithTitle:[NSString stringWithUTF8String:name]];
+            return;
+        }
+    }
+    [self.bandPopup selectItemWithTitle:kFT8CustomBandTitle];
 }
 
 - (void)setSerialCommandSender:(BOOL (^)(NSString *))serialCommandSender {
@@ -1379,6 +1453,10 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
 
 - (void)startStation {
     if (self.audioEngine.isMonitoring || self.monitoringStartInProgress) return;
+    if (self.audioEngine.isReceiveRecoveryPending) {
+        [self appendToQSOConsole:@"[FT8 blocked] Radio RX is not confirmed over CAT. Check the radio and USB CAT connection; automatic recovery continues without transmitting."];
+        return;
+    }
     if (self.diagnosticSessionStateChangedHandler) self.diagnosticSessionStateChangedHandler(YES);
     // Connect serial port command sender & PTT handler
     self.audioEngine.serialCommandSender = self.serialCommandSender;
@@ -1465,6 +1543,12 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
     if (self.autoEngine.isQSOActive) [self.autoEngine abortQSO];
     [self.audioEngine disarmTransmit];
     [self.audioEngine stopMonitoring];
+    self.waterfallView.isTransmitting = self.audioEngine.isTransmitting;
+    self.waterfallView.isTuning = self.audioEngine.isTuning;
+    self.waterfallView.isWaitingForReceive = self.audioEngine.isReceiveRecoveryPending;
+    self.waterfallView.isReceiveRecoveryStalled = self.audioEngine.isReceiveRecoveryStalled;
+    [self.waterfallView setNeedsDisplay:YES];
+    self.lastDecodeSummaryUntilUTC = 0.0;
     NSString *mName = (self.protocol == TX500_FT8_PROTOCOL_FT4) ? @"FT4" : @"FT8";
     self.startStopButton.title = [NSString stringWithFormat:@"Start %@", mName];
     self.startStopButton.bezelColor = nil;
@@ -1472,6 +1556,8 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
     if (self.stationStateChangedHandler) self.stationStateChangedHandler(NO);
     if (self.diagnosticSessionStateChangedHandler) self.diagnosticSessionStateChangedHandler(NO);
     [self refreshTransmitButtonState];
+    [self refreshAutoCQStatusLabel];
+    [self updateLiveCycleStatusBannerWithSlotSec:self.audioEngine.currentSlotSecond parity:self.audioEngine.currentSlotParity];
 }
 
 - (void)refreshTransmitButtonState {
@@ -1481,7 +1567,8 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
                             self.audioEngine.isReceiveRecoveryPending ||
                             self.autoEngine.isAutoCQActive ||
                             self.autoEngine.isQSOActive;
-    if (self.audioEngine.isReceiveRecoveryPending) title = @"WAIT RX";
+    if (self.audioEngine.isReceiveRecoveryStalled) title = @"CHECK RX";
+    else if (self.audioEngine.isReceiveRecoveryPending) title = @"WAIT RX";
     else if (self.audioEngine.isTransmitting) title = @"TX ACTIVE";
     else if (self.audioEngine.isTransmitArmed)
         title = (self.autoEngine.isAutoCQActive && self.autoEngine.qsoPhase == TX500FT8QSOPhaseCallingCQ) ? @"STOP CQ" : @"TX ARMED";
@@ -1503,22 +1590,10 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
     double mhz = (double)freqHz / 1000000.0;
     self.dialFreqLabel.stringValue = [NSString stringWithFormat:@"%.6f MHz %@", mhz, mode ?: @"DIG"];
     self.dialFreqLabel.textColor = [NSColor colorWithCalibratedRed:0.80 green:0.48 blue:0.0 alpha:1.0];
-    self.dialFreqLabel.toolTip = @"Frequency confirmed by the connected radio.";
-    // Reading a manually tuned radio must also update the band selector.
-    struct { uint64_t low, high; const char *name; } bands[] = {
-        {1800000, 2000000, "160m"}, {3500000, 4000000, "80m"},
-        {7000000, 7300000, "40m"}, {10100000, 10150000, "30m"},
-        {14000000, 14350000, "20m"}, {18068000, 18168000, "17m"},
-        {21000000, 21450000, "15m"}, {24890000, 24990000, "12m"},
-        {28000000, 29700000, "10m"}, {50000000, 54000000, "6m"}
-    };
-    for (NSUInteger i = 0; i < sizeof(bands) / sizeof(bands[0]); i++) {
-        if (freqHz >= bands[i].low && freqHz <= bands[i].high) {
-            NSString *band = [NSString stringWithUTF8String:bands[i].name];
-            if ([self.bandPopup itemWithTitle:band]) [self.bandPopup selectItemWithTitle:band];
-            break;
-        }
-    }
+    self.dialFreqLabel.toolTip = self.audioEngine.isSimulationMode ?
+        @"Simulated digital dial frequency; no RF transmission." :
+        @"Dial frequency read back from the connected radio.";
+    [self syncBandPopupToConfirmedFrequency:freqHz];
 }
 
 - (void)showRadioFrequencyUnavailable {
@@ -1613,6 +1688,7 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
 }
 
 - (void)requestRadioFrequencyHz:(uint64_t)requested {
+    if (requested < 500000 || requested > 56000000 || self.frequencyOperationPending) return;
     if (self.audioEngine.isSimulationMode) {
         [self updateFrequencyHz:requested mode:@"DIG · SIM"];
         return;
@@ -1629,7 +1705,9 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
     NSUInteger generation = ++self.frequencyRequestGeneration;
     self.frequencyOperationPending = YES;
     self.bandPopup.enabled = NO;
+    self.customFrequencyButton.enabled = NO;
     self.modeSegment.enabled = NO;
+    self.simCheckbox.enabled = NO;
     self.armTxButton.enabled = NO;
     self.dialFreqLabel.stringValue = @"Tuning radio…";
     self.audioEngine.dialFrequencyHz = 0;
@@ -1637,7 +1715,9 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
     if (!self.serialCommandSender || !self.catQueryHandler) {
         self.frequencyOperationPending = NO;
         self.bandPopup.enabled = YES;
+        self.customFrequencyButton.enabled = YES;
         self.modeSegment.enabled = YES;
+        self.simCheckbox.enabled = YES;
         self.armTxButton.enabled = YES;
         [self showRadioFrequencyUnavailable];
         [self appendToQSOConsole:@"[CAT] No radio control connection is available for band selection."];
@@ -1665,7 +1745,9 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
             mainSelf.frequencyOperationPending = NO;
             mainSelf.frequencyPollFailures = 0;
             mainSelf.bandPopup.enabled = YES;
+            mainSelf.customFrequencyButton.enabled = YES;
             mainSelf.modeSegment.enabled = YES;
+            mainSelf.simCheckbox.enabled = YES;
             mainSelf.armTxButton.enabled = YES;
             if (actual) {
                 [mainSelf updateFrequencyHz:actual mode:modeVerified ? @"DIG" : @"MD?"];
@@ -1717,11 +1799,17 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
     [self refreshBandPopupForCurrentProtocol];
     self.bandPopup.target = self;
     self.bandPopup.action = @selector(bandSelected:);
-    [self.bandPopup.widthAnchor constraintEqualToConstant:72].active = YES;
+    self.bandPopup.toolTip = @"Choose a digital dial preset or enter a custom radio frequency.";
+    [self.bandPopup.widthAnchor constraintEqualToConstant:90].active = YES;
 
-    self.dialFreqLabel = [NSTextField labelWithString:@"14.074.000 MHz DIG"];
+    self.dialFreqLabel = [NSTextField labelWithString:@"Reading radio…"];
     self.dialFreqLabel.font = [NSFont monospacedSystemFontOfSize:12.0 weight:NSFontWeightBold];
     self.dialFreqLabel.textColor = [NSColor colorWithCalibratedRed:0.80 green:0.48 blue:0.0 alpha:1.0];
+    self.customFrequencyButton = [NSButton buttonWithTitle:@"Set MHz…" target:self action:@selector(showCustomFrequencyEditor:)];
+    self.customFrequencyButton.bezelStyle = NSBezelStyleInline;
+    self.customFrequencyButton.controlSize = NSControlSizeSmall;
+    self.customFrequencyButton.toolTip = @"Enter an exact dial frequency for FT8 or FT4.";
+    self.customFrequencyButton.accessibilityLabel = @"Set custom digital frequency";
 
     self.audioInPopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
     __weak typeof(self) weakSelf = self;
@@ -1838,7 +1926,8 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
     [spacerR1 setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
 
     NSStackView *row1Stack = [NSStackView stackViewWithViews:@[
-        self.startStopButton, self.modeSegment, self.bandPopup, self.dialFreqLabel, sepRow1_1,
+        self.startStopButton, self.modeSegment, self.bandPopup, self.dialFreqLabel,
+        self.customFrequencyButton, sepRow1_1,
         self.audioInPopup, self.audioLevelMeter, sepRow1_2, self.simCheckbox, spacerR1
     ]];
     row1Stack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
@@ -2610,7 +2699,8 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
         kColTime: @64, kColSNR: @40, kColDT: @44, kColFreq: @52,
         kColMsg: @120, kColCountry: @80, kColGrid: @46, kColDistance: @55
     };
-    col.minWidth = minimumWidths[ident] ? minimumWidths[ident].doubleValue : w * 0.7;
+    NSNumber *minimumWidth = minimumWidths[ident];
+    col.minWidth = minimumWidth != nil ? minimumWidth.doubleValue : w * 0.7;
     col.resizingMask = NSTableColumnAutoresizingMask | NSTableColumnUserResizingMask;
     [table addTableColumn:col];
 }
@@ -2619,6 +2709,16 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
 
 - (void)toggleMonitoring:(id)sender {
     (void)sender;
+    if (self.audioEngine.isReceiveRecoveryPending) {
+        if (!self.audioEngine.isReceiveRecoveryStalled) {
+            [self stopStation];
+        } else if ([self.audioEngine retryReceiveRecovery]) {
+            self.startStopButton.title = @"Checking RX…";
+            self.startStopButton.enabled = NO;
+            [self appendToQSOConsole:@"[RX RECOVERY] Manual RX confirmation requested; transmitting remains blocked."];
+        }
+        return;
+    }
     if (self.audioEngine.isMonitoring) {
         [self stopStation];
     } else {
@@ -2629,10 +2729,128 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
 - (void)bandSelected:(id)sender {
     (void)sender;
     NSString *band = self.bandPopup.titleOfSelectedItem;
-    if (band.length > 0) {
+    if ([band isEqualToString:kFT8CustomBandTitle]) {
+        [self showCustomFrequencyEditor:nil];
+    } else if (band.length > 0) {
         uint64_t freq = [self defaultFrequencyForBand:band protocol:self.protocol];
         if (freq > 0) [self requestRadioFrequencyHz:freq];
     }
+}
+
+- (void)showCustomFrequencyEditor:(id)sender {
+    (void)sender;
+    if (self.customFrequencyPopover.isShown) return;
+    NSPopover *popover = [[NSPopover alloc] init];
+    popover.behavior = NSPopoverBehaviorTransient;
+    NSViewController *controller = [[NSViewController alloc] init];
+    BOOL activeContact = self.autoEngine.isQSOActive || self.autoEngine.isAutoCQActive;
+    NSView *content = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 355, activeContact ? 235 : 215)];
+    controller.view = content;
+    popover.contentViewController = controller;
+
+    NSTextField *heading = [NSTextField labelWithString:@"Custom digital frequency"];
+    heading.font = [NSFont systemFontOfSize:15 weight:NSFontWeightSemibold];
+    NSTextField *description = [NSTextField labelWithString:@"Set the radio dial for FT8 or FT4. RX and TX use the confirmed frequency."];
+    description.font = [NSFont systemFontOfSize:11 weight:NSFontWeightRegular];
+    description.textColor = NSColor.secondaryLabelColor;
+    description.maximumNumberOfLines = 2;
+    description.lineBreakMode = NSLineBreakByWordWrapping;
+
+    self.customFrequencyField = [NSTextField textFieldWithString:
+        self.audioEngine.dialFrequencyHz ?
+            [NSString stringWithFormat:@"%.6f", self.audioEngine.dialFrequencyHz / 1e6] : @""];
+    self.customFrequencyField.placeholderString = @"14.074000";
+    self.customFrequencyField.font = [NSFont monospacedDigitSystemFontOfSize:17 weight:NSFontWeightMedium];
+    self.customFrequencyField.alignment = NSTextAlignmentRight;
+    self.customFrequencyField.target = self;
+    self.customFrequencyField.action = @selector(applyCustomFrequency:);
+    self.customFrequencyField.accessibilityLabel = @"Custom radio dial frequency in MHz";
+    [self.customFrequencyField setContentHuggingPriority:NSLayoutPriorityDefaultLow
+                                          forOrientation:NSLayoutConstraintOrientationHorizontal];
+    NSTextField *unit = [NSTextField labelWithString:@"MHz"];
+    unit.font = [NSFont systemFontOfSize:12 weight:NSFontWeightSemibold];
+    NSStackView *entry = [NSStackView stackViewWithViews:@[self.customFrequencyField, unit]];
+    entry.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    entry.alignment = NSLayoutAttributeCenterY;
+    entry.spacing = 8;
+    [unit.widthAnchor constraintEqualToConstant:34].active = YES;
+
+    self.customFrequencyStatusLabel = [NSTextField labelWithString:@"0.500000–56.000000 MHz · up to 1 Hz precision"];
+    self.customFrequencyStatusLabel.font = [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
+    self.customFrequencyStatusLabel.textColor = NSColor.secondaryLabelColor;
+    NSTextField *safety = [NSTextField labelWithString:@"TX remains blocked until CAT confirms the dial and DIG mode."];
+    safety.font = [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
+    safety.textColor = NSColor.secondaryLabelColor;
+    NSTextField *activeContactNote = [NSTextField labelWithString:@"Changing frequency will stop the active QSO or Auto-CQ."];
+    activeContactNote.font = [NSFont systemFontOfSize:10 weight:NSFontWeightMedium];
+    activeContactNote.textColor = NSColor.systemOrangeColor;
+
+    NSButton *cancel = [NSButton buttonWithTitle:@"Cancel" target:self action:@selector(cancelCustomFrequency:)];
+    NSButton *apply = [NSButton buttonWithTitle:@"Set frequency" target:self action:@selector(applyCustomFrequency:)];
+    apply.bezelStyle = NSBezelStyleRounded;
+    apply.keyEquivalent = @"\r";
+    NSView *spacer = [NSView new];
+    [spacer setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+    NSStackView *actions = [NSStackView stackViewWithViews:@[spacer, cancel, apply]];
+    actions.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    actions.spacing = 8;
+
+    NSMutableArray<NSView *> *bodyViews = [NSMutableArray arrayWithArray:@[heading, description, entry,
+                                                                           self.customFrequencyStatusLabel, safety]];
+    if (activeContact) [bodyViews addObject:activeContactNote];
+    [bodyViews addObject:actions];
+    NSStackView *body = [NSStackView stackViewWithViews:bodyViews];
+    body.orientation = NSUserInterfaceLayoutOrientationVertical;
+    body.alignment = NSLayoutAttributeLeading;
+    body.spacing = 8;
+    body.translatesAutoresizingMaskIntoConstraints = NO;
+    [content addSubview:body];
+    [NSLayoutConstraint activateConstraints:@[
+        [body.topAnchor constraintEqualToAnchor:content.topAnchor constant:16],
+        [body.leadingAnchor constraintEqualToAnchor:content.leadingAnchor constant:16],
+        [body.trailingAnchor constraintEqualToAnchor:content.trailingAnchor constant:-16],
+        [body.bottomAnchor constraintLessThanOrEqualToAnchor:content.bottomAnchor constant:-14],
+        [description.widthAnchor constraintEqualToAnchor:body.widthAnchor],
+        [entry.widthAnchor constraintEqualToAnchor:body.widthAnchor],
+        [actions.widthAnchor constraintEqualToAnchor:body.widthAnchor]
+    ]];
+    self.customFrequencyPopover = popover;
+    popover.delegate = self;
+    [popover showRelativeToRect:self.customFrequencyButton.bounds ofView:self.customFrequencyButton preferredEdge:NSRectEdgeMaxY];
+    [self.customFrequencyButton.window makeFirstResponder:self.customFrequencyField];
+}
+
+- (void)cancelCustomFrequency:(id)sender {
+    (void)sender;
+    [self.customFrequencyPopover close];
+}
+
+- (void)popoverDidClose:(NSNotification *)notification {
+    if (notification.object != self.customFrequencyPopover) return;
+    [self syncBandPopupToConfirmedFrequency:self.audioEngine.dialFrequencyHz];
+    self.customFrequencyPopover = nil;
+    self.customFrequencyField = nil;
+    self.customFrequencyStatusLabel = nil;
+}
+
+- (void)applyCustomFrequency:(id)sender {
+    (void)sender;
+    uint64_t requested = 0;
+    if (!TX500ParseDigitalDialMHz(self.customFrequencyField.stringValue, &requested)) {
+        self.customFrequencyStatusLabel.stringValue = @"Enter 0.500000–56.000000 MHz using up to six decimal places.";
+        self.customFrequencyStatusLabel.textColor = NSColor.systemRedColor;
+        [self.customFrequencyButton.window makeFirstResponder:self.customFrequencyField];
+        return;
+    }
+    if (self.audioEngine.isTransmitting || self.audioEngine.isTuning || self.frequencyOperationPending) {
+        self.customFrequencyStatusLabel.stringValue = @"Wait until the radio is in RX and the current CAT operation finishes.";
+        self.customFrequencyStatusLabel.textColor = NSColor.systemOrangeColor;
+        return;
+    }
+    [self.customFrequencyPopover close];
+    if (requested == self.audioEngine.dialFrequencyHz &&
+        (self.audioEngine.isSimulationMode || self.audioEngine.catDialAndModeVerified)) return;
+    [self requestRadioFrequencyHz:requested];
 }
 
 - (void)toggleSimulation:(id)sender {
@@ -2641,6 +2859,13 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
 }
 
 - (void)setSimulationEnabled:(BOOL)enabled {
+    if (self.audioEngine.isTransmitting || self.audioEngine.isTuning ||
+        self.audioEngine.isReceiveRecoveryPending) {
+        self.simCheckbox.state = self.audioEngine.isSimulationMode ?
+            NSControlStateValueOn : NSControlStateValueOff;
+        [self appendToQSOConsole:@"[Simulation blocked] Wait for confirmed radio RX before changing modes."];
+        return;
+    }
     self.simCheckbox.state = enabled ? NSControlStateValueOn : NSControlStateValueOff;
     self.audioEngine.isSimulationMode = enabled;
     // Do NOT persist simulation mode as default across app launches.
@@ -2651,7 +2876,10 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
     if (enabled) {
         ++self.frequencyRequestGeneration;
         self.frequencyOperationPending = NO;
-        uint64_t simulatedHz = [self defaultFrequencyForBand:self.bandPopup.titleOfSelectedItem ?: @"20m" protocol:self.protocol];
+        uint64_t simulatedHz = self.audioEngine.dialFrequencyHz;
+        if (!simulatedHz || ![self.bandPopup.titleOfSelectedItem isEqualToString:kFT8CustomBandTitle]) {
+            simulatedHz = [self defaultFrequencyForBand:self.bandPopup.titleOfSelectedItem ?: @"20m" protocol:self.protocol];
+        }
         [self updateFrequencyHz:simulatedHz mode:@"DIG · SIM"];
         [self appendToQSOConsole:@"⚠️ [Simulation Mode] Activated: Synthetic FT8 signals generated. Physical RF transmission is INHIBITED for bench testing."];
         if (self.allDecodes.count == 0) {
@@ -3050,6 +3278,10 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
 
 - (void)toggleAutoHunter:(id)sender {
     (void)sender;
+    if (!self.autoEngine.isAutoHunterActive && self.audioEngine.isReceiveRecoveryPending) {
+        [self appendToQSOConsole:@"[Auto-Hunter blocked] Confirm radio RX over CAT before restarting automatic contacts."];
+        return;
+    }
     if (self.autoEngine.isAutoHunterActive) {
         [self.autoEngine stopAutoHunter];
         self.autoHunterButton.title = @"Auto-Hunter";
@@ -3062,7 +3294,7 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
             [self startStation];
         }
         [self.autoEngine startAutoHunter];
-        self.autoHunterButton.title = @"Stop Hunter";
+        self.autoHunterButton.title = self.autoEngine.isAutoHunterActive ? @"Stop Hunter" : @"Auto-Hunter";
     }
     [self refreshTransmitButtonState];
 }
@@ -4588,8 +4820,41 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
     [self.rxFreqTableView reloadData];
 }
 
+- (void)refreshAutoCQStatusLabel {
+    if (!self.autoCQStatusLabel) return;
+    NSString *status = @"Auto-CQ: Idle";
+    if (self.autoEngine.isQSOActive && self.autoEngine.activeDXCall.length > 0) {
+        status = [NSString stringWithFormat:@"🔒 QSO with %@ · in progress",
+                  self.autoEngine.activeDXCall];
+    } else if (self.autoEngine.isAutoCQActive) {
+        NSString *limit = self.autoEngine.autoCQTargetCount > 0 ?
+            [NSString stringWithFormat:@"%ld", (long)self.autoEngine.autoCQTargetCount] : @"∞";
+        if (self.audioEngine.isTransmitting && !self.audioEngine.isReceiveRecoveryPending) {
+            status = [NSString stringWithFormat:@"📡 Sending CQ %ld / %@",
+                      (long)self.autoEngine.autoCQCurrentCount, limit];
+        } else if (self.audioEngine.isTransmitArmed) {
+            status = [NSString stringWithFormat:@"📡 Listening · %ld / %@ CQs sent",
+                      (long)self.autoEngine.autoCQCurrentCount, limit];
+        } else {
+            status = @"Auto-CQ: Waiting for RX confirmation";
+        }
+    }
+    if (![self.autoCQStatusLabel.stringValue isEqualToString:status]) {
+        self.autoCQStatusLabel.stringValue = status;
+    }
+}
+
 - (void)updateLiveCycleStatusBannerWithSlotSec:(double)slotSec parity:(NSInteger)parity {
     if (!self.cycleBannerBox) return;
+
+    if (!self.audioEngine.isMonitoring && !self.audioEngine.isReceiveRecoveryPending) {
+        self.cycleBadge.stringValue = @"○ IDLE";
+        self.cycleBadge.textColor = NSColor.secondaryLabelColor;
+        self.cycleDetailLabel.stringValue = @"Digital monitoring stopped";
+        self.cycleDetailLabel.textColor = NSColor.secondaryLabelColor;
+        self.cycleClockLabel.stringValue = @"—";
+        return;
+    }
 
     NSString *slotName;
     if (self.protocol == TX500_FT8_PROTOCOL_FT4) {
@@ -4601,7 +4866,24 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
     double period = self.audioEngine.currentSlotPeriod;
     self.cycleClockLabel.stringValue = [NSString stringWithFormat:@"%4.1fs / %.0fs", slotSec, period];
 
-    if (self.audioEngine.isTransmitting) {
+    if (self.audioEngine.isReceiveRecoveryStalled) {
+        self.cycleBadge.stringValue = @"⚠ RX UNCONFIRMED";
+        self.cycleBadge.textColor = NSColor.systemRedColor;
+        self.cycleDetailLabel.stringValue = @"Automatic TX paused · check radio PTT and CAT USB · then click Retry RX";
+        self.cycleDetailLabel.textColor = NSColor.systemRedColor;
+        self.cycleClockLabel.stringValue = @"—";
+    } else if (self.audioEngine.isReceiveRecoveryPending) {
+        self.cycleBadge.stringValue = @"◌ WAIT RX";
+        self.cycleBadge.textColor = NSColor.systemOrangeColor;
+        self.cycleDetailLabel.stringValue = @"TX audio muted · waiting for radio RX confirmation";
+        self.cycleDetailLabel.textColor = NSColor.systemOrangeColor;
+    } else if (self.audioEngine.isTuning) {
+        self.cycleBadge.stringValue = self.audioEngine.isSimulationMode ? @"⚠️ SIM TUNE" : @"◆ TUNE";
+        self.cycleBadge.textColor = NSColor.systemOrangeColor;
+        self.cycleDetailLabel.stringValue = self.audioEngine.isSimulationMode ?
+            @"Simulated carrier · no RF" : @"Continuous tune audio is being sent";
+        self.cycleDetailLabel.textColor = NSColor.systemOrangeColor;
+    } else if (self.audioEngine.isTransmitting) {
         NSString *txText = self.audioEngine.queuedTxMessage;
         if (self.audioEngine.isSimulationMode) {
             self.cycleBadge.stringValue = [NSString stringWithFormat:@"⚠️ SIM TX %@", slotName];
@@ -4630,14 +4912,15 @@ static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
                 self.cycleDetailLabel.stringValue = @"Listening · TX armed for next cycle";
             }
             self.cycleDetailLabel.textColor = [NSColor colorWithCalibratedRed:0.80 green:0.45 blue:0.0 alpha:1.0];
-        } else if (self.autoEngine.isQSOActive) {
+        } else if (self.autoEngine.isQSOActive && self.autoEngine.activeDXCall.length > 0) {
             self.cycleDetailLabel.stringValue = [NSString stringWithFormat:
                 @"Listening · TX enabled; QSO locked to %@ and waiting for its reply",
                 self.autoEngine.activeDXCall.length > 0 ? self.autoEngine.activeDXCall : @"current station"];
             self.cycleDetailLabel.textColor = [NSColor colorWithCalibratedRed:0.80 green:0.45 blue:0.0 alpha:1.0];
         } else {
-            if (self.lastDecodesCount > 0) {
-                self.cycleDetailLabel.stringValue = [NSString stringWithFormat:@"Listening · %lu decodes in previous cycle", (unsigned long)self.lastDecodesCount];
+            if (self.lastDecodesCount > 0 &&
+                [[TX500DisciplinedClock sharedClock] utcTimeInterval] < self.lastDecodeSummaryUntilUTC) {
+                self.cycleDetailLabel.stringValue = [NSString stringWithFormat:@"Decoded %lu signals in this slot", (unsigned long)self.lastDecodesCount];
             } else {
                 self.cycleDetailLabel.stringValue = @"Listening for digital signals...";
             }

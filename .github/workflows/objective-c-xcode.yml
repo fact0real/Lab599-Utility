@@ -28,3 +28,19 @@ jobs:
           if [ "`ls -A | grep -i \\.xcworkspace\$`" ]; then filetype_parameter="workspace" && file_to_build="`ls -A | grep -i \\.xcworkspace\$`"; else filetype_parameter="project" && file_to_build="`ls -A | grep -i \\.xcodeproj\$`"; fi
           file_to_build=`echo $file_to_build | awk '{$1=$1;print}'`
           xcodebuild clean build analyze -scheme "$scheme" -"$filetype_parameter" "$file_to_build" -destination 'platform=macOS' | xcpretty && exit ${PIPESTATUS[0]}
+
+  tests:
+    name: Run the test suite (build-utility.sh --test-only)
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Fetch the official firmware used by the transfer tests
+        run: |
+          curl -fsSL --retry 3 --proto '=https' --proto-redir '=https' --max-time 60 -o mtrx1.30.00.fw https://downloads.lab599.com/TX500/mtrx1.30.00.fw
+          echo "2162fed7d27987507c8b412f3d38478c0a670a906a0c747578d7c975ad5a04ea  mtrx1.30.00.fw" | shasum -a 256 -c -
+      - name: Run tests
+        run: sh build-utility.sh --test-only
+      - name: Real-audio FT8 test
+        run: sh tests/run-ft8-real-audio-tests.sh

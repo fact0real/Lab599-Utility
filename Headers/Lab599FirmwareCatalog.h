@@ -9,6 +9,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property(nonatomic, copy) NSString *version;
 @property(nonatomic, copy) NSString *fileSizeString;
 @property(nonatomic, strong) NSURL *downloadURL;
+@property(nonatomic, copy, nullable) NSString *expectedSHA256;
 @property(nonatomic, copy) NSString *changelog;
 @property(nonatomic) BOOL isLatest;
 
@@ -20,12 +21,12 @@ NS_ASSUME_NONNULL_BEGIN
 
 + (instancetype)sharedCatalog;
 
-// Fetches the latest firmware listing from https://lab599.com/downloads
+// Fetches the firmware listings from the two official Lab599 pages.
 - (void)fetchAvailableFirmwaresWithCompletion:(void (^)(NSArray<Lab599FirmwareItem *> *items, NSError * _Nullable error))completion;
 
 // Downloads a specific firmware item to the application cache/temporary directory
-- (NSURLSessionDownloadTask *)downloadFirmware:(Lab599FirmwareItem *)item
-                                     progress:(void (^)(double progress, int64_t bytesWritten, int64_t totalExpected))progressHandler
+- (nullable NSURLSessionDownloadTask *)downloadFirmware:(Lab599FirmwareItem *)item
+                                     progress:(nullable void (^)(double progress, int64_t bytesWritten, int64_t totalExpected))progressHandler
                                    completion:(void (^)(NSURL * _Nullable localFileURL, NSString * _Nullable sha256, NSError * _Nullable error))completionHandler;
 
 // Static list of verified known firmwares as reliable fallback

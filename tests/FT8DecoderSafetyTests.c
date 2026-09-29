@@ -3,6 +3,9 @@
 #include "../Sources/cft8/shim/tx500_ft8_shim.c"
 
 #include <stdio.h>
+#include <limits.h>
+#include <math.h>
+#include <unistd.h>
 
 static void check(bool condition, const char *message) {
     if (!condition) {
@@ -76,6 +79,53 @@ static void test_noise_decode(void) {
     free(samples);
 }
 
+static void test_malformed_wav(void) {
+    char path[] = "/tmp/tx500-wav-safety.XXXXXX";
+    int fd = mkstemp(path);
+    check(fd >= 0, "temporary WAV fixture created");
+    float samples[8] = {0};
+    int count = 8, rate = 0;
+    check(write(fd, "RIFF", 4) == 4, "truncated WAV fixture written");
+    close(fd);
+    check(load_wav(samples, &count, &rate, path) < 0,
+          "truncated WAV header rejected");
+
+    // Valid 44-byte header claiming 20 bytes of audio, with no audio data.
+    unsigned char header[44] = {
+        'R','I','F','F', 56,0,0,0, 'W','A','V','E',
+        'f','m','t',' ', 16,0,0,0, 1,0, 1,0,
+        0xe0,0x2e,0,0, 0xc0,0x5d,0,0, 2,0, 16,0,
+        'd','a','t','a', 20,0,0,0
+    };
+    FILE *f = fopen(path, "wb");
+    check(f != NULL && fwrite(header, 1, sizeof header, f) == sizeof header,
+          "oversized WAV header written");
+    fclose(f);
+    check(load_wav(samples, &count, &rate, path) == -4,
+          "WAV exceeding caller buffer rejected before reading");
+    count = 10;
+    check(load_wav(samples, &count, &rate, path) < 0,
+          "WAV with truncated audio rejected");
+    unlink(path);
+}
+
+static void test_synthesis_bounds(void) {
+    unsigned char tones[FT8_NN] = {0};
+    float sample = 0;
+    check(ft8808_synthesize(tones, INT_MAX, 1500, FT8808_PROTOCOL_FT8,
+                            12000, &sample, 1) < 0,
+          "oversized tone count rejected");
+    check(ft8808_synthesize(tones, FT8_NN, 1500, FT8808_PROTOCOL_FT8,
+                            INT_MAX, &sample, 1) < 0,
+          "oversized sample rate rejected");
+    check(ft8808_synthesize(tones, FT8_NN, NAN, FT8808_PROTOCOL_FT8,
+                            12000, &sample, 1) < 0,
+          "nonfinite tone frequency rejected");
+    check(ft8808_synthesize(tones, FT8_NN, 1500, FT8808_PROTOCOL_FT8,
+                            12000, &sample, 1) < 0,
+          "undersized output buffer rejected");
+}
+
 static void *decode_in_parallel(void *context) {
     const float *samples = context;
     for (int i = 0; i < 2; ++i) {
@@ -132,6 +182,8 @@ int main(void) {
     test_time_indices();
     test_callsign_cache();
     test_noise_decode();
+    test_malformed_wav();
+    test_synthesis_bounds();
     test_two_slot_hash();
     test_parallel_decodes();
     puts("FT8 decoder safety tests passed");

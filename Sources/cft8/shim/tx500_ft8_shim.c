@@ -18,6 +18,7 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <math.h>
+#include <limits.h>
 #include <pthread.h>
 
 // ---- Decode tuning (Optimized for Deep FT8 Decoding) ------------------------
@@ -394,21 +395,27 @@ static void ft8808_gfsk_pulse(int n_spsym, float symbol_bt, float* pulse) {
 int ft8808_synthesize(const unsigned char* tones, int num_tones, float f0,
                       ft8808_protocol_t protocol, int sample_rate,
                       float* signal, int max_samples) {
-    if (tones == NULL || signal == NULL || num_tones <= 0 || sample_rate <= 0) return -2;
+    if (tones == NULL || signal == NULL ||
+        (protocol != FT8808_PROTOCOL_FT8 && protocol != FT8808_PROTOCOL_FT4) ||
+        num_tones != (protocol == FT8808_PROTOCOL_FT4 ? FT4_NN : FT8_NN) ||
+        sample_rate < 8000 || sample_rate > 192000 || max_samples <= 0 ||
+        !isfinite(f0) || f0 < 0 || f0 >= sample_rate / 2.0f) return -2;
     bool is_ft4 = (protocol == FT8808_PROTOCOL_FT4);
     float symbol_period = is_ft4 ? FT4_SYMBOL_PERIOD : FT8_SYMBOL_PERIOD;
     float symbol_bt = is_ft4 ? FT4_SYMBOL_BT : FT8_SYMBOL_BT;
 
     int n_spsym = (int)(0.5f + sample_rate * symbol_period); // samples per symbol
-    int n_wave = num_tones * n_spsym;                        // output samples
-    if (n_wave > max_samples) return -3;
+    int64_t n_wave_wide = (int64_t)num_tones * n_spsym;
+    if (n_spsym <= 0 || n_wave_wide > max_samples ||
+        n_wave_wide > INT_MAX - 2LL * n_spsym) return -3;
+    int n_wave = (int)n_wave_wide;                           // output samples
 
     float hmod = 1.0f;
     float dphi_peak = 2 * M_PI * hmod / n_spsym;
     int dphi_len = n_wave + 2 * n_spsym;
 
-    float* dphi = (float*)malloc(sizeof(float) * (size_t)dphi_len);
-    float* pulse = (float*)malloc(sizeof(float) * (size_t)(3 * n_spsym));
+    float* dphi = (float*)calloc((size_t)dphi_len, sizeof(float));
+    float* pulse = (float*)calloc((size_t)(3 * n_spsym), sizeof(float));
     if (dphi == NULL || pulse == NULL) { free(dphi); free(pulse); return -4; }
 
     for (int i = 0; i < dphi_len; ++i) dphi[i] = 2 * M_PI * f0 / sample_rate;

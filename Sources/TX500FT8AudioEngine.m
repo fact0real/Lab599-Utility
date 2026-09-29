@@ -48,6 +48,10 @@ static dispatch_queue_t TX500FT8DecodeQueue(void) {
     int _txBufferTotalSamples;
     int _txBufferReadIndex;
     NSLock *_txBufferLock;
+    unsigned char _activeTxTones[FT8808_MAX_TONES];
+    int _activeTxToneCount;
+    int _activeTxSamplesPerSymbol;
+    float _activeTxBaseAudioHz;
 
     // Waterfall FFT buffer & live audio circular buffer
     float *_waterfallMag;
@@ -105,6 +109,10 @@ static dispatch_queue_t TX500FT8DecodeQueue(void) {
     // Keep the state keyed while recovery retries are in flight so another TX
     // cannot begin over an unresolved PTT state.
     BOOL _receiveReleaseInProgress;
+    BOOL _receiveRecoveryStalled;
+    BOOL _receiveReleaseRequestInFlight;
+    BOOL _activeTransmissionWasSimulation;
+    BOOL _receiveReleaseRequiresCATConfirmation;
     NSUInteger _receiveReleaseGeneration;
     NSUInteger _receiveReleaseAttempt;
     double _lastInputCallbackMonotonic;
@@ -135,6 +143,8 @@ static dispatch_queue_t TX500FT8DecodeQueue(void) {
 
 // Fast Radix-2 FFT for Waterfall Spectrum Display
 static void TX500FT8ComputeFFT(const float *realIn, float *magnitudesOut, int n) {
+    if (!realIn || !magnitudesOut || n < 2 || n > TX500_FT8_FFT_SIZE ||
+        (n & (n - 1)) != 0) return;
     float real[TX500_FT8_FFT_SIZE];
     float imag[TX500_FT8_FFT_SIZE];
 
@@ -317,6 +327,10 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
 
 - (void)setIsSimulationMode:(BOOL)isSimulationMode {
     if (_isSimulationMode == isSimulationMode) return;
+    if (_isTransmitting || _isTuning || _receiveReleaseInProgress) {
+        if (self.logHandler) self.logHandler(@"[Simulation blocked] Wait until radio RX is confirmed before changing live/simulation mode.");
+        return;
+    }
     _isSimulationMode = isSimulationMode;
     if (self.isMonitoring) {
         if (_isSimulationMode) {
@@ -608,6 +622,10 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
 #pragma mark - Monitoring & Slot Timer
 
 - (BOOL)startMonitoring:(NSError **)error {
+    if (_receiveReleaseInProgress) {
+        if (error) *error = [NSError errorWithDomain:@"TX500AudioErrorDomain" code:2 userInfo:@{NSLocalizedDescriptionKey:@"Radio RX has not been confirmed over CAT. Check PTT and the CAT cable before restarting digital monitoring."}];
+        return NO;
+    }
     if (self.isMonitoring) return YES;
 
     [self resetSWRReading];
@@ -835,9 +853,10 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
 
     double waterfallNow = [[TX500DisciplinedClock sharedClock] monotonicTime];
     // A 16384-point FFT yields 0.73 Hz source bins and 4096 independently
-    // coloured pixels across the 0-3000 Hz passband. Ten rows per second keep
-    // the time axis fluid and preserve short FT8 tone transitions.
-    if (waterfallNow - _lastWaterfallUpdateMonotonic >= 0.10) {
+    // coloured pixels across the 0-3000 Hz passband. During TX, a 20 Hz
+    // cadence follows short FT4 tone steps without increasing RX FFT work.
+    double waterfallInterval = (_isTransmitting || _isTuning) ? 0.05 : 0.10;
+    if (waterfallNow - _lastWaterfallUpdateMonotonic >= waterfallInterval) {
         _lastWaterfallUpdateMonotonic = waterfallNow;
         [self updateWaterfallStream];
     }
@@ -1092,6 +1111,7 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
 
 - (void)beginTransmission {
     if (self.queuedTxMessage.length == 0 || _receiveReleaseInProgress) return;
+    _receiveRecoveryStalled = NO;
     if (!self.isSimulationMode && (self.dialFrequencyHz == 0 ||
         (self.requiresVerifiedCATDial && !self.catDialAndModeVerified))) {
         self.isTransmitArmed = NO;
@@ -1149,7 +1169,15 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
                                                  _txBuffer, FT8_MAX_SLOT_SAMPLES);
     _txBufferReadIndex = 0;
     BOOL synthesisFailed = _txBufferTotalSamples <= 0;
-    if (synthesisFailed) _txBufferTotalSamples = 0;
+    if (synthesisFailed) {
+        _txBufferTotalSamples = 0;
+        _activeTxToneCount = 0;
+    } else {
+        memcpy(_activeTxTones, tones, (size_t)numTones);
+        _activeTxToneCount = numTones;
+        _activeTxSamplesPerSymbol = self.protocol == TX500_FT8_PROTOCOL_FT4 ? 576 : 1920;
+        _activeTxBaseAudioHz = synthAudioFreq;
+    }
     [_txBufferLock unlock];
 
     if (synthesisFailed) {
@@ -1178,7 +1206,7 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
                 [self restoreNominalDialAfterFakeIt];
                 _fakeItVfoShiftHz=0;
             }
-            [_txBufferLock lock]; _txBufferTotalSamples=0; _txBufferReadIndex=0; [_txBufferLock unlock];
+            [_txBufferLock lock]; _txBufferTotalSamples=0; _txBufferReadIndex=0; _activeTxToneCount=0; [_txBufferLock unlock];
             if(self.logHandler) self.logHandler(@"[TX blocked] PTT was not confirmed; audio transmission cancelled.");
             if(self.onTransmitStateChanged) self.onTransmitStateChanged(NO,@"");
             return;
@@ -1186,6 +1214,7 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
     }
 
     _isTransmitting=YES;
+    _activeTransmissionWasSimulation = self.isSimulationMode;
     if (!self.repeatArmedTransmission) self.isTransmitArmed = NO;
     if (self.logHandler) {
         NSString *pttMethod = self.isSimulationMode ? @"[Simulation - No RF]" : @"[CAT TX confirmed]";
@@ -1204,11 +1233,14 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
     if (!_isTransmitting || _receiveReleaseInProgress) return;
 
     _receiveReleaseInProgress = YES;
+    _receiveReleaseRequiresCATConfirmation = !_activeTransmissionWasSimulation;
+    _receiveReleaseRequestInFlight = NO;
     _receiveReleaseAttempt = 0;
     NSUInteger releaseGeneration = ++_receiveReleaseGeneration;
     [_txBufferLock lock];
     _txBufferTotalSamples = 0;
     _txBufferReadIndex = 0;
+    _activeTxToneCount = 0;
     [_txBufferLock unlock];
 
     [self stopSWRPolling];
@@ -1217,7 +1249,9 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
 }
 
 - (void)requestReceiveReleaseForGeneration:(NSUInteger)generation {
-    if (generation != _receiveReleaseGeneration || !_receiveReleaseInProgress) return;
+    if (generation != _receiveReleaseGeneration || !_receiveReleaseInProgress ||
+        _receiveReleaseRequestInFlight) return;
+    _receiveReleaseRequestInFlight = YES;
     _receiveReleaseAttempt++;
     NSUInteger attempt = _receiveReleaseAttempt;
     __weak typeof(self) weakSelf = self;
@@ -1226,7 +1260,7 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         typeof(self) strongSelf = weakSelf;
         if (!strongSelf) return;
-        BOOL released = strongSelf.isSimulationMode;
+        BOOL released = !strongSelf->_receiveReleaseRequiresCATConfirmation;
         if (!released) {
             released = strongSelf.pttControlHandler ? strongSelf.pttControlHandler(NO) :
                        (strongSelf.serialCommandSender ? strongSelf.serialCommandSender(@"RX;") : NO);
@@ -1235,6 +1269,7 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
             typeof(self) mainSelf = weakSelf;
             if (!mainSelf || generation != mainSelf->_receiveReleaseGeneration ||
                 !mainSelf->_receiveReleaseInProgress) return;
+            mainSelf->_receiveReleaseRequestInFlight = NO;
             if (released) {
                 [mainSelf finishReceiveTransitionAfterRecovery:(attempt > 1)];
                 return;
@@ -1245,13 +1280,21 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
             // the radio has explicitly confirmed PT0.
             if (mainSelf.logHandler) {
                 mainSelf.logHandler([NSString stringWithFormat:
-                    @"[RX RECOVERY] Radio has not confirmed RX (attempt %lu). TX audio is muted; retrying RX automatically.",
-                    (unsigned long)attempt]);
+                    @"[RX RECOVERY] Radio has not confirmed RX (attempt %lu). TX audio is muted.%@",
+                    (unsigned long)attempt,
+                    attempt < 3 ? @" Retrying RX automatically." : @""]);
             }
 
-            // Retry quickly through relay/USB transients, then continue at a calm rate.
-            // Never declare RX or permit another transmission without PT0 confirmation.
-            NSTimeInterval delay = (attempt < 4) ? 0.25 : 1.0;
+            if (attempt >= 3) {
+                mainSelf->_receiveRecoveryStalled = YES;
+                if (mainSelf.logHandler) mainSelf.logHandler(@"[RX RECOVERY] Automatic RX retries stopped. Check radio PTT and USB CAT connection, then use Retry RX. No further TX is allowed until PT0 is confirmed.");
+                if (mainSelf.onReceiveRecoveryStalled) mainSelf.onReceiveRecoveryStalled(attempt);
+                return;
+            }
+
+            // Three automatic attempts cover brief USB transients. Thereafter
+            // only an explicit operator Retry RX may issue another CAT write.
+            NSTimeInterval delay = 0.25;
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)),
                            dispatch_get_main_queue(), ^{
                 [weakSelf requestReceiveReleaseForGeneration:generation];
@@ -1262,6 +1305,9 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
 
 - (void)finishReceiveTransitionAfterRecovery:(BOOL)recovered {
     _receiveReleaseInProgress = NO;
+    _receiveRecoveryStalled = NO;
+    _receiveReleaseRequestInFlight = NO;
+    _receiveReleaseRequiresCATConfirmation = NO;
     _isTransmitting = NO;
 
     if (_fakeItVfoShiftHz != 0) {
@@ -1302,6 +1348,17 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
 
 - (BOOL)isReceiveRecoveryPending {
     return _receiveReleaseInProgress;
+}
+
+- (BOOL)isReceiveRecoveryStalled {
+    return _receiveRecoveryStalled;
+}
+
+- (BOOL)retryReceiveRecovery {
+    if (!_receiveReleaseInProgress || !_receiveRecoveryStalled ||
+        _receiveReleaseRequestInFlight) return NO;
+    [self requestReceiveReleaseForGeneration:_receiveReleaseGeneration];
+    return YES;
 }
 
 - (void)verifyReceiveCaptureAfterRestart:(NSUInteger)generation restartedAt:(double)restartedAt {
@@ -1540,6 +1597,7 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
         }
     }
     _isTuning=YES;
+    _activeTransmissionWasSimulation = self.isSimulationMode;
     if (self.logHandler) {
         NSString *pttMethod = self.isSimulationMode ? @"[Simulation - No RF]" : @"[CAT TX confirmed]";
         self.logHandler([NSString stringWithFormat:@"[Tune Carrier] Tone at %.0f Hz started %@", self.txAudioFrequencyHz, pttMethod]);
@@ -1555,6 +1613,8 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
     // keeps all new transmissions blocked until the radio answers PT0.
     _isTransmitting = YES;
     _receiveReleaseInProgress = YES;
+    _receiveReleaseRequiresCATConfirmation = !_activeTransmissionWasSimulation;
+    _receiveReleaseRequestInFlight = NO;
     _receiveReleaseAttempt = 0;
     NSUInteger releaseGeneration = ++_receiveReleaseGeneration;
     if (self.logHandler) self.logHandler(@"[Tune Carrier] Tone muted; confirming RX.");
@@ -1643,7 +1703,47 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
 
 #pragma mark - Real-Time Waterfall Stream
 
+- (void)updateTransmitWaterfallSpectrum {
+    // The receiver is unavailable during TX. Draw a clearly labelled preview
+    // from the exact encoded tones whose samples are being sent to CoreAudio.
+    // Fake-It shifts the radio VFO, so add that shift to show the RF offset
+    // relative to the nominal dial rather than the 1500 Hz soundcard tone.
+    float toneHz = 0.0f;
+    if (_isTuning) {
+        toneHz = self.txAudioFrequencyHz;
+    } else if (_isTransmitting && !_receiveReleaseInProgress) {
+        [_txBufferLock lock];
+        if (_activeTxToneCount > 0 && _activeTxSamplesPerSymbol > 0 &&
+            _txBufferReadIndex < _txBufferTotalSamples) {
+            int sample = MAX(0, _txBufferReadIndex - 120); // output queue is about one 10 ms buffer ahead
+            int symbol = MIN(_activeTxToneCount - 1, sample / _activeTxSamplesPerSymbol);
+            float position = (float)(sample % _activeTxSamplesPerSymbol) / (float)_activeTxSamplesPerSymbol;
+            float current = (float)_activeTxTones[symbol];
+            float previous = (float)_activeTxTones[MAX(0, symbol - 1)];
+            float blend = fminf(1.0f, position * 4.0f);
+            blend = blend * blend * (3.0f - 2.0f * blend);
+            float spacing = self.protocol == TX500_FT8_PROTOCOL_FT4 ? 20.833333f : 6.25f;
+            toneHz = _activeTxBaseAudioHz + (float)_fakeItVfoShiftHz +
+                (previous + (current - previous) * blend) * spacing;
+        }
+        [_txBufferLock unlock];
+    }
+
+    for (int i = 0; i < FT8_WATERFALL_BINS; i++) {
+        float binHz = (float)i * 3000.0f / (float)FT8_WATERFALL_BINS;
+        float distance = binHz - toneHz;
+        float core = toneHz > 0.0f ? expf(-0.5f * (distance / 2.0f) * (distance / 2.0f)) : 0.0f;
+        float halo = toneHz > 0.0f ? expf(-0.5f * (distance / 6.0f) * (distance / 6.0f)) : 0.0f;
+        _waterfallMag[i] = 0.016f + 0.78f * core + 0.20f * halo;
+    }
+}
+
 - (void)updateWaterfallStream {
+    if (_isTransmitting || _isTuning) {
+        [self updateTransmitWaterfallSpectrum];
+        if (self.onSpectrumUpdated) self.onSpectrumUpdated(_waterfallMag, FT8_WATERFALL_BINS);
+        return;
+    }
     if (!self.isSimulationMode) {
         // Copy the latest high-resolution FFT window from the live audio ring.
         float fftIn[TX500_FT8_FFT_SIZE];
@@ -1662,17 +1762,7 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
         }
         rms = sqrtf(rms / (float)TX500_FT8_FFT_SIZE);
 
-        if (_isTransmitting || _isTuning) {
-            // Transmit blanking: suppress audio loopback noise and draw crisp TX marker
-            for (int i = 0; i < FT8_WATERFALL_BINS; i++) {
-                float binFreq = (float)i / (float)FT8_WATERFALL_BINS * 3000.0f;
-                float norm = 0.02f;
-                if (fabsf(binFreq - self.txAudioFrequencyHz) < 25.0f) {
-                    norm = 1.0f;
-                }
-                _waterfallMag[i] = _waterfallMag[i] * 0.35f + norm * 0.65f;
-            }
-        } else if (rms > 1e-6f) {
+        if (rms > 1e-6f) {
             float mags[TX500_FT8_FFT_SIZE / 2];
             TX500FT8ComputeFFT(fftIn, mags, TX500_FT8_FFT_SIZE);
 
@@ -1759,13 +1849,7 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
             float baseNoise = 0.015f + ((float)(rand() % 20)) / 2000.0f;
             float sig = 0.0f;
 
-            if (_isTransmitting || _isTuning) {
-                // Local transmitter active: intense tone line on TX frequency
-                float dist = fabsf(binFreq - self.txAudioFrequencyHz);
-                if (dist < 25.0f) {
-                    sig = 1.0f - (dist / 25.0f) * 0.20f;
-                }
-            } else if (inTxWindow) {
+            if (inTxWindow) {
                 // Stations transmitting in current parity slot
                 NSInteger curParity = self.currentSlotParity;
                 for (int s = 0; s < numSimStations; s++) {

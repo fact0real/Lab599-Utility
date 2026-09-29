@@ -187,13 +187,20 @@
         ![normalized hasPrefix:@"CQ "]) return;
     self.autoCQCurrentCount++;
     NSString *limit = self.autoCQTargetCount > 0 ? [NSString stringWithFormat:@"%ld", (long)self.autoCQTargetCount] : @"∞";
-    self.autoCQStatus = [NSString stringWithFormat:@"📡 Auto-CQ: Sent CQ %ld / %@ · listening for a caller", (long)self.autoCQCurrentCount, limit];
+    self.autoCQStatus = [NSString stringWithFormat:@"📡 Auto-CQ: Sending CQ %ld / %@", (long)self.autoCQCurrentCount, limit];
     [self notifyStatus];
 }
 
 - (void)noteTransmissionEnded {
     if ([self engageWaitingCallerIfSafe]) return;
     [self resumeCQIfSafe];
+    if (self.isAutoCQActive && self.qsoPhase == TX500FT8QSOPhaseCallingCQ) {
+        NSString *limit = self.autoCQTargetCount > 0 ?
+            [NSString stringWithFormat:@"%ld", (long)self.autoCQTargetCount] : @"∞";
+        self.autoCQStatus = [NSString stringWithFormat:@"📡 Auto-CQ: Listening · %ld / %@ CQs sent",
+                             (long)self.autoCQCurrentCount, limit];
+        [self notifyStatus];
+    }
 }
 
 - (void)stopAutoCQ {
@@ -216,15 +223,22 @@
 #pragma mark - Auto-Hunter Controls
 
 - (void)startAutoHunter {
+    if (self.audioEngine.isReceiveRecoveryPending) {
+        if (self.logHandler) self.logHandler(@"[Auto-Hunter blocked] Radio RX has not been confirmed over CAT.");
+        return;
+    }
+    if (!self.audioEngine.isMonitoring) {
+        NSError *error = nil;
+        if (![self.audioEngine startMonitoring:&error]) {
+            if (self.logHandler) self.logHandler([NSString stringWithFormat:@"[Auto-Hunter blocked] Monitoring could not start: %@", error.localizedDescription ?: @"audio unavailable"]);
+            return;
+        }
+    }
     self.isAutoHunterActive = YES;
     self.isAutoCQActive = NO;
     self.autoHunterStatus = @"🎯 Auto-Hunter: Scanning band for qualifying CQs...";
     if (self.logHandler) {
         self.logHandler(@"[Auto-Hunter] Activated. Monitoring CQs according to selection criteria.");
-    }
-    if (!self.audioEngine.isMonitoring) {
-        NSError *err = nil;
-        [self.audioEngine startMonitoring:&err];
     }
     [self notifyStatus];
     if (self.lastDecodedMessages.count > 0 && !self.isQSOActive) {

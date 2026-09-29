@@ -57,6 +57,8 @@ typedef NS_ENUM(NSInteger, TX500FT8SlotParity) {
 @property (nonatomic, assign) BOOL isTransmitArmed;
 @property (nonatomic, assign) BOOL repeatArmedTransmission;
 @property (nonatomic, assign, readonly) BOOL isReceiveRecoveryPending;
+@property (nonatomic, assign, readonly) BOOL isReceiveRecoveryStalled;
+- (BOOL)retryReceiveRecovery;
 @property (nonatomic, assign) TX500FT8SlotParity txSlotParity;
 @property (nonatomic, assign) BOOL isSimulationMode;
 
@@ -79,6 +81,7 @@ typedef NS_ENUM(NSInteger, TX500FT8SlotParity) {
 @property (nonatomic, copy, nullable) void (^onSlotTransition)(NSInteger parity, NSDate *utcStart);
 @property (nonatomic, copy, nullable) void (^onDecodedMessages)(NSArray<TX500FT8Message *> *messages, NSInteger parity);
 @property (nonatomic, copy, nullable) void (^onTransmitStateChanged)(BOOL transmitting, NSString *txText);
+@property (nonatomic, copy, nullable) void (^onReceiveRecoveryStalled)(NSUInteger attempts);
 @property (nonatomic, copy, nullable) void (^onSpectrumUpdated)(const float *magnitudes, NSInteger count);
 @property (nonatomic, copy, nullable) void (^onAudioDevicesChanged)(void);
 

@@ -12,6 +12,7 @@
 #import "TX500FT8Message.h"
 #import "TX500FT8AudioEngine.h"
 #import "TX500FT8AutoEngine.h"
+#import "TX500FT8Frequency.h"
 
 @interface TX500FT8AudioEngine (WaterfallTestAccess)
 - (void)appendIncomingAudioSamples:(const float *)samples count:(NSInteger)count timestamp:(const AudioTimeStamp *)timestamp;
@@ -20,6 +21,9 @@
 - (void)startSWRPolling;
 - (void)stopSWRPolling;
 - (void)pollSWRMeter;
+- (void)beginTransmission;
+- (void)endTransmission;
+- (void)renderOutgoingAudioSamples:(float *)samples count:(UInt32)count;
 @end
 
 static void AssertTrue(BOOL condition, NSString *message) {
@@ -47,6 +51,19 @@ int main(int argc, const char * argv[]) {
     @autoreleasepool {
         (void)argc; (void)argv;
         NSLog(@"Running Lab599 Discovery TX-500 FT8 Digital Suite Tests...");
+
+        uint64_t dialHz = 0;
+        AssertTrue(TX500ParseDigitalDialMHz(@"14.075001", &dialHz) && dialHz == 14075001,
+                   @"Custom digital dial preserves one-hertz precision");
+        AssertTrue(TX500ParseDigitalDialMHz(@" 0.5 ", &dialHz) && dialHz == 500000,
+                   @"Custom digital dial accepts the radio lower limit");
+        AssertTrue(TX500ParseDigitalDialMHz(@"56", &dialHz) && dialHz == 56000000,
+                   @"Custom digital dial accepts the radio upper limit");
+        for (NSString *invalid in @[@"0.499999", @"56.000001", @"14.0740001", @"14,074",
+                                     @"14.074 MHz", @"14e0", @"14;TX;", @"-14.074", @""]) {
+            AssertTrue(!TX500ParseDigitalDialMHz(invalid, &dialHz),
+                       [NSString stringWithFormat:@"Reject invalid custom dial input: %@", invalid]);
+        }
 
         // 1. Test FT8 Message Encoding & 8-FSK Tone Generation
         const char *testMsg = "CQ EP2AES KM35";
@@ -128,6 +145,77 @@ int main(int argc, const char * argv[]) {
         AssertTrue(foundMatch, @"Decoded text reproduces original test message 'CQ EP2AES KM35'");
         NSLog(@"PASS: Deep LDPC loopback decode verified (Decoded: %s, Freq: %.1f Hz, SNR: %.1f dB).",
               decoded[0].text, decoded[0].freq_hz, decoded[0].snr_db);
+
+        // The TX waterfall previews the tones actually sent to CoreAudio.
+        // Fake-It must display their effective RF offset on the nominal dial.
+        for (NSInteger proto = TX500_FT8_PROTOCOL_FT8; proto <= TX500_FT8_PROTOCOL_FT4; proto++) {
+            TX500FT8AudioEngine *previewEngine = [TX500FT8AudioEngine new];
+            previewEngine.isSimulationMode = YES;
+            previewEngine.protocol = (tx500_ft8_protocol_t)proto;
+            previewEngine.txAudioFrequencyHz = 2500.0f;
+            previewEngine.splitFakeItEnabled = YES;
+            previewEngine.queuedTxMessage = @"CQ EP2AES KM35";
+            unsigned char previewTones[FT8808_MAX_TONES];
+            int toneCount = tx500_ft8_encode_message("CQ EP2AES KM35", (tx500_ft8_protocol_t)proto,
+                                                      previewTones, FT8808_MAX_TONES);
+            AssertTrue(toneCount > 3, @"Preview fixture encodes FT8/FT4 tones");
+            __block float peakHz = 0.0f;
+            previewEngine.onSpectrumUpdated = ^(const float *magnitudes, NSInteger count) {
+                NSInteger peakBin = 0;
+                for (NSInteger i = 1; i < count; i++) if (magnitudes[i] > magnitudes[peakBin]) peakBin = i;
+                peakHz = (float)peakBin * 3000.0f / (float)count;
+            };
+            [previewEngine beginTransmission];
+            AssertTrue(previewEngine.isTransmitting, @"Simulated TX starts without RF hardware");
+            [previewEngine updateWaterfallStream];
+            float spacing = proto == TX500_FT8_PROTOCOL_FT4 ? 20.833333f : 6.25f;
+            AssertTrue(fabsf(peakHz - (2500.0f + previewTones[0] * spacing)) < 2.0f,
+                       @"First TX preview tone matches encoded audio plus Fake-It VFO shift");
+            int symbolSamples = proto == TX500_FT8_PROTOCOL_FT4 ? 576 : 1920;
+            UInt32 advance = (UInt32)(3 * symbolSamples + symbolSamples / 2);
+            float *played = calloc(advance, sizeof(float));
+            AssertTrue(played != NULL, @"TX preview audio fixture allocates");
+            [previewEngine renderOutgoingAudioSamples:played count:advance];
+            free(played);
+            [previewEngine updateWaterfallStream];
+            AssertTrue(fabsf(peakHz - (2500.0f + previewTones[3] * spacing)) < 2.0f,
+                       @"TX waterfall follows later FT8/FT4 symbols instead of a fixed carrier");
+            [previewEngine disarmTransmit];
+            AssertTrue(WaitUntil(^BOOL{ return !previewEngine.isTransmitting; }, 1.0),
+                       @"Preview returns to RX after simulated transmission");
+        }
+
+        // A missing CAT PT0 must pause digital operation while keeping TX
+        // ownership unresolved. It may clear only after a later confirmation.
+        TX500FT8AudioEngine *recoveryEngine = [TX500FT8AudioEngine new];
+        recoveryEngine.isSimulationMode = NO;
+        __block NSUInteger recoveryReleaseAttempts = 0;
+        recoveryEngine.pttControlHandler = ^BOOL(BOOL active) {
+            return active ? YES : ++recoveryReleaseAttempts > 3;
+        };
+        __block NSUInteger stalledNotifications = 0;
+        recoveryEngine.onReceiveRecoveryStalled = ^(NSUInteger attempts) {
+            stalledNotifications++;
+            AssertTrue(attempts == 3, @"Recovery alert follows three failed RX confirmations");
+        };
+        [recoveryEngine startTuneCarrier];
+        AssertTrue(recoveryEngine.isTuning, @"Recovery fixture begins confirmed live PTT");
+        [recoveryEngine stopTuneCarrier];
+        AssertTrue(WaitUntil(^BOOL{ return stalledNotifications == 1; }, 2.0),
+                   @"Repeated missing PT0 enters a visible stalled state");
+        AssertTrue(recoveryEngine.isReceiveRecoveryPending && recoveryEngine.isReceiveRecoveryStalled,
+                   @"Unconfirmed RX continues to block TX after alert");
+        recoveryEngine.isSimulationMode = YES;
+        AssertTrue(!recoveryEngine.isSimulationMode,
+                   @"Simulation toggle cannot erase an unresolved live PTT state");
+        NSError *recoveryStartError = nil;
+        AssertTrue(![recoveryEngine startMonitoring:&recoveryStartError] && recoveryStartError != nil,
+                   @"Digital monitoring cannot restart before PT0 confirmation");
+        AssertTrue([recoveryEngine retryReceiveRecovery], @"Operator can request a single fresh RX confirmation");
+        AssertTrue(WaitUntil(^BOOL{ return !recoveryEngine.isReceiveRecoveryPending; }, 2.0),
+                   @"A later PT0 confirmation clears the recovery latch");
+        AssertTrue(!recoveryEngine.isReceiveRecoveryStalled && recoveryReleaseAttempts == 4,
+                   @"Recovery succeeds without extra TX or repeated alerts");
 
         // 4. Test Maidenhead Grid Parser & Distance Math
         double lat1 = 0, lon1 = 0, lat2 = 0, lon2 = 0;
@@ -278,6 +366,12 @@ int main(int argc, const char * argv[]) {
         AssertTrue(autoEng.qsoPhase == TX500FT8QSOPhaseCallingCQ, @"QSO phase calling CQ");
         [autoEng noteTransmittedText:audioEng.queuedTxMessage];
         AssertTrue(autoEng.autoCQCurrentCount == 1, @"Only an actual keyed CQ advances the count");
+        AssertTrue([autoEng.autoCQStatus containsString:@"Sending CQ"] &&
+                   ![autoEng.autoCQStatus containsString:@"listening"],
+                   @"Auto-CQ announces TX while the CQ is being sent");
+        [autoEng noteTransmissionEnded];
+        AssertTrue([autoEng.autoCQStatus containsString:@"Listening"],
+                   @"Auto-CQ announces listening only after TX ends");
 
         // Simulate a response from DX caller
         TX500FT8Message *callerMsg = [TX500FT8Message messageWithRawText:@"EP2AES JA1ABC PM95"

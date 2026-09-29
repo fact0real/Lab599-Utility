@@ -5,6 +5,7 @@
 //  Callsign Intelligence & Station Photo Service
 //
 
+#import "TX500SecretStore.h"
 #import "TX500CallsignLookupService.h"
 
 @implementation TX500LookupResult
@@ -137,9 +138,9 @@
     // Load credentials
     NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
     NSString *qrzUser = [ud stringForKey:@"TX500_QRZ_Username"] ?: @"";
-    NSString *qrzPass = [ud stringForKey:@"TX500_QRZ_Password"] ?: @"";
+    NSString *qrzPass = TX500SecretValue(@"TX500_QRZ_Password") ?: @"";
     NSString *hamUser = [ud stringForKey:@"TX500_HamQTH_Username"] ?: @"";
-    NSString *hamPass = [ud stringForKey:@"TX500_HamQTH_Password"] ?: @"";
+    NSString *hamPass = TX500SecretValue(@"TX500_HamQTH_Password") ?: @"";
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         TX500LookupResult *result = nil;

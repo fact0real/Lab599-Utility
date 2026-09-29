@@ -92,4 +92,4 @@ Reports distinguish observed binary behaviour, deliberate improvements, and unre
 
 Independent software, not an official Lab599 product. GitHub repository: [fact0real/Lab599-Utility](https://github.com/fact0real/Lab599-Utility). Author: EP2AES; contact: `EP2AES@asis.sh`.
 
-See [LICENSE](LICENSE) (GNU GPL version 3). Manufacturer executables and firmware files are not included in the release package.
+See [LICENSE](LICENSE) (GNU GPL version 3) and [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for the bundled third-party components. Manufacturer executables and firmware files are not included in the release package.

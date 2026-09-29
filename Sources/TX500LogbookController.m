@@ -5,6 +5,7 @@
 //  Complete Voice QSO Logger, Callsign Intelligence HUD & Cloud Logbook Controller
 //
 
+#import "TX500SecretStore.h"
 #import "TX500LogbookController.h"
 #import "TX500CloudSettingsController.h"
 #import "TX500WebAuthenticatorController.h"
@@ -1596,7 +1597,7 @@
     NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
 
     // QRZ
-    NSString *qrzKey = [ud stringForKey:@"TX500_QRZ_APIKey"];
+    NSString *qrzKey = TX500SecretValue(@"TX500_QRZ_APIKey");
     BOOL qrz2FA = [TX500WebAuthenticatorController hasSavedSessionForService:TX500AuthServiceQRZ];
     if (qrz2FA) {
         self.qrzPillLabel.stringValue = @"QRZ: 2FA Active";
@@ -1643,8 +1644,8 @@
 
     // Club Log
     BOOL clubLog2FA = [TX500WebAuthenticatorController hasSavedSessionForService:TX500AuthServiceClubLog];
-    NSString *clubLogKey = [ud stringForKey:@"TX500_ClubLog_APIKey"];
-    NSString *clubLogPass = [ud stringForKey:@"TX500_ClubLog_Password"];
+    NSString *clubLogKey = TX500SecretValue(@"TX500_ClubLog_APIKey");
+    NSString *clubLogPass = TX500SecretValue(@"TX500_ClubLog_Password");
     if (clubLog2FA) {
         self.clublogPillLabel.stringValue = @"ClubLog: 2FA Active";
         self.clublogPillLabel.textColor = [NSColor systemGreenColor];
@@ -2034,7 +2035,7 @@
     (void)sender;
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
     NSString *username = [defaults stringForKey:@"TX500_LoTW_Username"] ?: @"";
-    NSString *password = [defaults stringForKey:@"TX500_LoTW_Password"] ?: @"";
+    NSString *password = TX500SecretValue(@"TX500_LoTW_Password") ?: @"";
     if (username.length == 0 || password.length == 0) {
         [self appendConsoleMessage:@"LoTW account username/password are required to download confirmations."];
         if (self.openSettingsHandler) self.openSettingsHandler(@"LoTW");

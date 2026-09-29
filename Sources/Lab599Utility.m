@@ -219,6 +219,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 @property(nonatomic, strong) NSURL *digitalSessionLogURL;
 @property(nonatomic, strong) NSDate *digitalSessionStartedAt;
 @property(nonatomic, strong) NSURL *firmwareURL;
+@property(nonatomic, copy) NSString *firmwareExpectedSHA256;
 @property(nonatomic, strong) id activity;
 @property(nonatomic) BOOL busy;
 @property(nonatomic) BOOL hasPorts;
@@ -2421,7 +2422,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     self.radioSpecsLabel.textColor = NSColor.secondaryLabelColor;
     self.radioSpecsLabel.font = [NSFont systemFontOfSize:11];
 
-    self.radioCompatibilityBadge = [NSTextField labelWithString:@"● Model Verification: Select or download a .fw file above to verify radio compatibility."];
+    self.radioCompatibilityBadge = [NSTextField labelWithString:@"Select a .fw file to inspect its target; connected radio model is not verified here."];
     self.radioCompatibilityBadge.font = [NSFont systemFontOfSize:12 weight:NSFontWeightMedium];
     self.radioCompatibilityBadge.textColor = NSColor.secondaryLabelColor;
 
@@ -2588,7 +2589,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         self.radioImageView.image = [self loadRadioImageNamed:@"tx500_radio"];
         self.radioModelLabel.stringValue = @"Target Radio: Lab599 Discovery TX-500";
         self.radioSpecsLabel.stringValue = @"Target Specs: 256×128 Monochrome LCD • 32-bit Floating-Point DSP • All-Aluminum CNC Waterproof Chassis";
-        self.radioCompatibilityBadge.stringValue = @"● Model Verification: Select or download a .fw file above to verify radio compatibility.";
+        self.radioCompatibilityBadge.stringValue = @"Select a .fw file to inspect its intended target. Connected radio model is not verified here.";
         self.radioCompatibilityBadge.textColor = NSColor.secondaryLabelColor;
         return;
     }
@@ -2606,25 +2607,25 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         self.radioImageView.image = [self loadRadioImageNamed:@"tx500_radio"];
         self.radioModelLabel.stringValue = @"Target Radio: Lab599 Discovery TX-500";
         self.radioSpecsLabel.stringValue = @"256×128 Monochrome LCD • 32-bit Floating-Point DSP • All-Aluminum CNC Waterproof Chassis";
-        self.radioCompatibilityBadge.stringValue = @"✓ Hardware Match Confirmed: Lab599 TX-500 Discovery (BL20 Model ID: 0xc61ab4aa)";
-        self.radioCompatibilityBadge.textColor = [NSColor colorWithSRGBRed:0.1 green:0.65 blue:0.25 alpha:1.0];
+        self.radioCompatibilityBadge.stringValue = @"Firmware target: TX-500 Discovery (BL20 ID 0xc61ab4aa). Connected radio model not verified.";
+        self.radioCompatibilityBadge.textColor = NSColor.systemOrangeColor;
     } else if (isAltai) {
         self.radioImageView.image = [self loadRadioImageNamed:@"tx500_pro_altai"] ?: [self loadRadioImage];
         self.radioModelLabel.stringValue = @"Target Radio: Lab599 TX-500PRO ALTAI";
         self.radioSpecsLabel.stringValue = @"Keypad Arrow Navigation • Channelized ALTAI OS • Commercial / Tactical Waterproof Transceiver";
-        self.radioCompatibilityBadge.stringValue = @"✓ Hardware Match Confirmed: Lab599 TX-500PRO ALTAI (Firmware: ALTAI Commercial OS)";
-        self.radioCompatibilityBadge.textColor = [NSColor colorWithSRGBRed:0.1 green:0.65 blue:0.25 alpha:1.0];
+        self.radioCompatibilityBadge.stringValue = @"Firmware target from filename: TX-500PRO ALTAI. Connected radio model not verified.";
+        self.radioCompatibilityBadge.textColor = NSColor.systemOrangeColor;
     } else if (isPro) {
         self.radioImageView.image = [self loadRadioImageNamed:@"tx500_pro"] ?: [self loadRadioImage];
         self.radioModelLabel.stringValue = @"Target Radio: Lab599 TX-500PRO (Tactical)";
         self.radioSpecsLabel.stringValue = @"Rotary Volume & Squelch Knobs • TUNE/MULTI Dial • Tactical Audio DSP & Extended Filters";
-        self.radioCompatibilityBadge.stringValue = @"✓ Hardware Match Confirmed: Lab599 TX-500PRO (Firmware: TX-500PRO Tactical)";
-        self.radioCompatibilityBadge.textColor = [NSColor colorWithSRGBRed:0.1 green:0.65 blue:0.25 alpha:1.0];
+        self.radioCompatibilityBadge.stringValue = @"Firmware target from filename: TX-500PRO. Connected radio model not verified.";
+        self.radioCompatibilityBadge.textColor = NSColor.systemOrangeColor;
     } else if (isMP) {
         self.radioImageView.image = [self loadRadioImageNamed:@"tx500_mp"] ?: [self loadRadioImage];
         self.radioModelLabel.stringValue = @"Target Radio: Lab599 TX-500MP (Manpack)";
         self.radioSpecsLabel.stringValue = @"192×96 Monochrome LCD • Integrated Battery System • Rugged Manpack Transceiver";
-        self.radioCompatibilityBadge.stringValue = @"⚠️ Notice: Firmware is targeted for TX-500MP hardware (BL20 Model ID: 0x963bcdf4). Do not flash to Discovery.";
+        self.radioCompatibilityBadge.stringValue = @"Firmware target: TX-500MP (BL20 ID 0x963bcdf4). Connected radio model not verified.";
         self.radioCompatibilityBadge.textColor = [NSColor colorWithSRGBRed:0.85 green:0.45 blue:0.0 alpha:1.0];
     } else {
         self.radioImageView.image = [self loadRadioImageNamed:@"tx500_radio"];
@@ -2659,6 +2660,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 }
 
 - (void)setLoadedFirmwareURL:(NSURL *)url firmwareData:(NSData *)data isOnlineDownload:(BOOL)isOnline {
+    self.firmwareExpectedSHA256 = nil;
     self.firmwareURL = url;
     self.firmwareName.stringValue = url.lastPathComponent;
     self.firmwareName.toolTip = url.path;
@@ -2668,7 +2670,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         url.lastPathComponent, (unsigned long)data.length, source, hash]];
 
     if ([hash isEqualToString:@"2162fed7d27987507c8b412f3d38478c0a670a906a0c747578d7c975ad5a04ea"]) {
-        [self appendLog:@"Matches verified official TX-500 Discovery v2.00.00 release."];
+        [self appendLog:@"Matches the official TX-500 Discovery v1.30.00 release (mtrx1.30.00.fw)."];
     }
     self.statusLabel.stringValue = [NSString stringWithFormat:@"Firmware ready: %@. Check that transceiver displays \"The loader is waiting...\".", url.lastPathComponent];
     self.updateButton.enabled = self.hasPorts;
@@ -2784,7 +2786,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 }
 
 - (void)fetchCatalogList {
-    self.downloadStatusLabel.stringValue = @"Checking https://lab599.com/downloads for latest firmwares...";
+    self.downloadStatusLabel.stringValue = @"Checking the two official Lab599 firmware catalogs...";
     self.refreshCatalogBtn.enabled = NO;
     self.downloadActionBtn.enabled = NO;
     self.downloadProgress.indeterminate = YES;
@@ -2798,7 +2800,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         if (error) {
             self.downloadStatusLabel.stringValue = [NSString stringWithFormat:@"Notice: using fallback catalog (%@)", error.localizedDescription];
         } else {
-            self.downloadStatusLabel.stringValue = [NSString stringWithFormat:@"Found %lu firmware releases on lab599.com.", (unsigned long)items.count];
+            self.downloadStatusLabel.stringValue = [NSString stringWithFormat:@"Found %lu reviewed firmware releases.", (unsigned long)items.count];
         }
         [self updateCatalogPopupForFilter];
     }];
@@ -2874,11 +2876,21 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
             }
 
             self.downloadProgress.doubleValue = 1.0;
-            self.downloadStatusLabel.stringValue = @"Download complete and verified!";
-            [self appendLog:[NSString stringWithFormat:@"Successfully downloaded official %@ (SHA-256: %@) from %@", selectedItem.title, sha256 ?: @"", selectedItem.downloadURL]];
+            self.downloadStatusLabel.stringValue = @"Download complete. SHA-256 matched the reviewed release.";
+            [self appendLog:[NSString stringWithFormat:@"Downloaded %@; SHA-256 matched reviewed value %@ from %@", selectedItem.title, sha256 ?: @"", selectedItem.downloadURL]];
 
-            NSData *data = [NSData dataWithContentsOfURL:localFileURL];
+            NSError *readError = nil;
+            NSData *data = [NSData dataWithContentsOfURL:localFileURL options:0 error:&readError];
+            if (!data || TXFirmwareValidationError(data) ||
+                ![TXFirmwareSHA256(data) isEqualToString:selectedItem.expectedSHA256]) {
+                self.downloadStatusLabel.stringValue = @"Downloaded firmware could not be verified after saving.";
+                [self showAlert:@"Firmware verification failed"
+                       message:readError.localizedDescription ?: @"The saved firmware differs from the reviewed release. Download it again."
+                       warning:YES];
+                return;
+            }
             [self setLoadedFirmwareURL:localFileURL firmwareData:data isOnlineDownload:YES];
+            self.firmwareExpectedSHA256 = selectedItem.expectedSHA256;
             [self.window endSheet:self.catalogSheet];
         }];
 }
@@ -3719,7 +3731,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     NSAlert *alert = [NSAlert new];
     alert.alertStyle = warning ? NSAlertStyleWarning : NSAlertStyleInformational;
     alert.messageText = title;
-    alert.informativeText = message;
+    alert.informativeText = message ?: @"";
     [alert addButtonWithTitle:@"OK"];
     [alert beginSheetModalForWindow:self.window completionHandler:nil];
 }
@@ -3738,6 +3750,20 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     if (problem) {
         [self showAlert:@"Firmware could not be loaded" message:problem warning:YES];
         return;
+    }
+    NSString *currentHash = TXFirmwareSHA256(firmware);
+    if (self.firmwareExpectedSHA256.length && ![currentHash isEqualToString:self.firmwareExpectedSHA256]) {
+        [self showAlert:@"Firmware changed" message:@"The downloaded firmware no longer matches its reviewed SHA-256. Download it again before updating." warning:YES];
+        return;
+    }
+    if (!self.firmwareExpectedSHA256.length) {
+        NSAlert *unverified = [NSAlert new];
+        unverified.alertStyle = NSAlertStyleCritical;
+        unverified.messageText = @"Local firmware authenticity is not verified";
+        unverified.informativeText = @"Only the BL20 format was checked. Confirm this file came from Lab599 and is intended for your exact radio model before continuing.";
+        [unverified addButtonWithTitle:@"Continue with local file"];
+        [unverified addButtonWithTitle:@"Cancel"];
+        if ([unverified runModal] != NSAlertFirstButtonReturn) return;
     }
 
     if (self.lastDetectedVoltage > 7.0 && self.lastDetectedVoltage <= 12.8) {
@@ -3776,8 +3802,8 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     }
 
     confirmation.informativeText = [NSString stringWithFormat:
-        @"Firmware: %@\nPort: %@\n%@\n\nThe transceiver must display \"The loader is waiting...\". Keep power and USB cable firmly connected throughout the update.",
-        self.firmwareURL.lastPathComponent, port, powerInfo];
+        @"Firmware: %@\n%@\nPort: %@\n%@\n\nThe connected radio model has not been verified. Confirm the firmware target matches the model printed on your radio. The transceiver must display \"The loader is waiting...\". Keep power and USB cable firmly connected throughout the update.",
+        self.firmwareURL.lastPathComponent, self.radioModelLabel.stringValue, port, powerInfo];
     [confirmation addButtonWithTitle:@"Start Update"];
     [confirmation addButtonWithTitle:@"Cancel"];
     if ([confirmation runModal] != NSAlertFirstButtonReturn) return;

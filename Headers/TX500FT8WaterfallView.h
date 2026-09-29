@@ -26,6 +26,10 @@ typedef NS_ENUM(NSInteger, TX500FT8Palette) {
 @property (nonatomic, assign) float rxFrequencyHz;
 @property (nonatomic, assign) float txFrequencyHz;
 @property (nonatomic, assign) BOOL isTransmitting;
+@property (nonatomic, assign) BOOL isTuning;
+@property (nonatomic, assign) BOOL isSimulationMode;
+@property (nonatomic, assign) BOOL isWaitingForReceive;
+@property (nonatomic, assign) BOOL isReceiveRecoveryStalled;
 @property (nonatomic, assign) TX500FT8Palette palette;
 @property (nonatomic, assign) float gain;           // 0.2 to 3.0, default 1.0
 @property (nonatomic, assign) float contrastFloor;  // -0.3 to +0.3, default 0.0

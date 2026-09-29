@@ -13,6 +13,7 @@
 NS_ASSUME_NONNULL_BEGIN
 
 extern NSString * const TX500CloudSyncStatusDidChangeNotification;
+FOUNDATION_EXPORT BOOL TX500ClubLogResponseIsSuccess(NSHTTPURLResponse * _Nullable response, NSData * _Nullable data);
 
 @interface TX500CloudUploadItem : NSObject
 

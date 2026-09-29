@@ -74,7 +74,7 @@ NSError *TXVoiceError(NSString *message) {
         @[@"VX;", @1, @"vox"], @[@"PT;", @1, @"tx"]];
     for (NSArray *q in queries) {
         NSNumber *n = [self number:q[0] digits:[q[1] unsignedIntegerValue] error:error];
-        if (!n) return nil;
+        if (n == nil) return nil;
         state[q[2]] = n;
     }
     return state;

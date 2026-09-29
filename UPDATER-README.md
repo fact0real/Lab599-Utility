@@ -1,62 +1,60 @@
-# Lab599 Utility 2.0 — build and package guide
+# Lab599 Utility — build and release guide
 
-The app combines Firmware Update, Time Sync, CAT Studio, Settings and Memory. See [README](README.md) and [the Persian guide](QUICKSTART-FA.md) for operation.
+Lab599 Utility supports macOS 12 or later on Apple Silicon and Intel Macs. The
+Xcode project is `Lab599-Utility.xcodeproj`; its scheme is `Lab599 Utility`.
+Apple Command Line Tools or Xcode are required to build from source.
 
-## Standalone build
-
-Requires macOS and Apple Command Line Tools (or Xcode). No third-party application libraries are needed.
+## Build
 
 ```sh
-sh build-updater.sh
+sh build-utility.sh --build-only
 ```
 
-Output: `Lab599 Utility.app`, macOS 12+, universal Intel and Apple Silicon, ad-hoc signed. `assets/AppIcon.icns` is included; `build-icon.sh` can regenerate it. The historical script/project filenames are retained deliberately.
+This builds a universal `arm64`/`x86_64` `Lab599 Utility.app` in the project
+directory and increments the version and build number in `Resources/Info.plist`
+and the Xcode project. `--build-only` does not replace the app in `/Applications`.
+The build is ad-hoc signed and is not Apple notarized.
 
-## Xcode
+For a release tag whose version is already committed, use
+`sh build-utility.sh --build-current`. This rebuilds that exact version without
+incrementing it or replacing the installed app.
 
-Open `Lab599-Updater.xcodeproj`, select **Lab599 Utility**, and build. Command-line equivalent:
+To build in Xcode without changing the source version:
 
 ```sh
-DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-xcodebuild -project Lab599-Updater.xcodeproj -scheme 'Lab599 Utility' \
+xcodebuild -project Lab599-Utility.xcodeproj -scheme 'Lab599 Utility' \
   -configuration Release -derivedDataPath build/xcode-utility \
   ARCHS='arm64 x86_64' ONLY_ACTIVE_ARCH=NO CODE_SIGN_IDENTITY=- build
 ```
 
-Version 2.0, build 6. Product/executable: `Lab599 Utility`. Existing bundle ID: `local.lab599.firmware-updater`.
-
 ## Test
 
 ```sh
-sh build-updater.sh --test
+sh build-utility.sh --test-only
 ```
 
-This runs firmware, clock and new-module suites before building. Place the supplied `mtrx1.30.00.fw` in this folder or its parent for the complete firmware test. The suite transmits it only to an emulated radio through a pseudo-terminal.
+The tests use simulated radios and local test data. The firmware transfer
+suite expects a manufacturer `mtrx1.30.00.fw` file in this directory or its
+parent. That firmware is not included in the GitHub release. The tests do not
+verify physical-radio or on-air behavior.
 
-To test the new modules independently:
+The optional real-audio FT8 regression suite uses its separately downloaded,
+pinned recordings:
 
 ```sh
-mkdir -p build
-clang -O2 -Wall -Wextra -Wno-unused-parameter -Werror -fobjc-arc \
-  -mmacosx-version-min=12.0 -framework Foundation \
-  tests/UtilityTests.m Lab599SerialPort.m TX500CATTest.m TX500Configuration.m \
-  -o build/UtilityTests
-./build/UtilityTests
+sh tests/run-ft8-real-audio-tests.sh
 ```
 
-PTYs exercise wire commands, complete banks, fragmented replies, invalid replies/files, timeouts, disconnection, cancellation and read-back mismatches. This host's PTY driver accepts `TIOCEXCL` without blocking a second open; the tests disclose this limitation. Physical-driver exclusivity and Memory DTR/RTS behavior require hardware testing.
+## GitHub release package
 
-## Source organization
+Attach a ZIP containing the signed app, `README.md`, `QUICKSTART-FA.md`,
+`LICENSE` and `THIRD_PARTY_LICENSES.md`, with a neighboring SHA-256 checksum
+file. GitHub generates source archives from the release tag. Do not include
+manufacturer firmware, developer-specific Xcode state, local build products or
+personal settings in the downloadable package. The checksum detects accidental
+changes; it is not a digital signature or Apple notarization.
 
-- `Lab599Utility.m`: main window, shared operation lock, firmware/time flows and menus.
-- `Lab599ToolsController.m`: CAT/Settings/Memory views and file operations.
-- `Lab599SerialPort.m`: bounded serial I/O and cancellation for new modules.
-- `TX500CATTest.m`: original identification test and error classes.
-- `TX500Configuration.m`: Settings/Memory encoding, transfer and verification.
-- `TX500Transfer.m`, `TX500TimeSync.m`, `Lab599FirmwareCatalog.m`: existing functions.
-
-New features can add a controller panel and a separate protocol module while keeping the single-operation lock. No arbitrary CAT-command console is included in 2.0.
-
-## Distribution
-
-The release ZIP contains the app, build sources, Xcode project, assets, tests, guides, reverse-engineering evidence and validation logs. Original vendor executables/firmware, build intermediates and developer-specific Xcode state are excluded. The adjacent `.sha256` file checks the ZIP's integrity; it is not an Apple signature or notarization.
+The release tag must point to the same committed source version used for the
+app bundle. Check the bundle version, both binary architectures, code-signing
+verification and the extracted ZIP before publishing. Keep the release marked
+as a pre-release until physical-radio validation is complete.

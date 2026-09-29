@@ -132,8 +132,8 @@ static NSBox *DXCard(NSView *v) { NSBox *b=[NSBox new]; b.boxType=NSBoxCustom; b
     (void)sender;
     if(self.engine.running) { [self.engine disconnect]; return; }
     NSString *host=[_host.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet]; NSString *port=_port.stringValue;
-    NSDictionary *profile=TX500StationStore.sharedStore.activeProfile; NSString *call=[profile[@"operatorCall"] length] ? profile[@"operatorCall"] : profile[@"call"];
-    if([port rangeOfString:@"^[0-9]{1,5}$" options:NSRegularExpressionSearch].location==NSNotFound || ![TX500DXCluster validHost:host port:port.integerValue callsign:call ?: @""]) { _message.stringValue=@"Set a valid callsign in Station Profiles, a hostname and a port from 1 to 65535."; return; }
+    NSDictionary *profile=TX500StationStore.sharedStore.activeProfile; NSString *call=([profile[@"operatorCall"] length] ? profile[@"operatorCall"] : profile[@"call"]) ?: @"";
+    if([port rangeOfString:@"^[0-9]{1,5}$" options:NSRegularExpressionSearch].location==NSNotFound || ![TX500DXCluster validHost:host port:port.integerValue callsign:call]) { _message.stringValue=@"Set a valid callsign in Station Profiles, a hostname and a port from 1 to 65535."; return; }
     _demo=NO; _sessionCall=call.uppercaseString; [self.engine clear]; _host.stringValue=host; [self persist]; [self.engine connectHost:host port:port.integerValue callsign:call];
 }
 - (void)stationChanged:(NSNotification *)note {

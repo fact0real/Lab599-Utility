@@ -1488,7 +1488,7 @@ static NSString *StudioTimestamp(NSDate *date) {
 - (void)portsAvailable:(BOOL)available {
     self.hasPorts = available;
     NSString *port = available && self.selectedPort ? self.selectedPort() : nil;
-    if (self.verifiedCATPort.length && ![self.verifiedCATPort isEqualToString:port]) {
+    if (self.verifiedCATPort.length && ![self.verifiedCATPort isEqualToString:port ?: @""]) {
         [self updateRadioStateUI:[TXRadioState new]];
         self.verifiedCATPort = nil;
         if (available) [self showCATNotice:@"CAT port available — use Read All to confirm radio communication." error:NO];
@@ -1511,7 +1511,7 @@ static NSString *StudioTimestamp(NSDate *date) {
     // CAT Controls
     BOOL canCAT = !self.busy && self.hasPorts;
     BOOL canControl = canCAT && self.verifiedCATPort.length &&
-        [self.verifiedCATPort isEqualToString:(self.selectedPort ? self.selectedPort() : nil)];
+        [self.verifiedCATPort isEqualToString:(self.selectedPort ? self.selectedPort() : nil) ?: @""];
     self.catOnce.enabled = self.catStart.enabled = canCAT;
     self.catReadAllButton.enabled = canCAT;
     self.catFreqInputField.enabled = canControl;
@@ -1625,7 +1625,7 @@ static NSString *StudioTimestamp(NSDate *date) {
 
 - (BOOL)CATControlReady {
     return !self.busy && self.hasPorts && self.verifiedCATPort.length &&
-        [self.verifiedCATPort isEqualToString:(self.selectedPort ? self.selectedPort() : nil)];
+        [self.verifiedCATPort isEqualToString:(self.selectedPort ? self.selectedPort() : nil) ?: @""];
 }
 
 - (void)CATCommandFailed:(NSError *)error {

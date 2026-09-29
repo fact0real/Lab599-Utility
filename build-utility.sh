@@ -102,34 +102,35 @@ fi
 
 [ "${1:-}" != "--test-only" ] || exit 0
 
-# Auto-increment version and build number in Resources/Info.plist
+# Increment for a new version, or rebuild the committed version for a release.
 CURRENT_BUILD=$(/usr/libexec/PlistBuddy -c "Print :CFBundleVersion" Resources/Info.plist 2>/dev/null || echo "13")
-NEW_BUILD=$((CURRENT_BUILD + 1))
-
 CURRENT_VER=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" Resources/Info.plist 2>/dev/null || echo "2.7")
-
-MAJOR=$(echo "$CURRENT_VER" | cut -d. -f1)
-MINOR=$(echo "$CURRENT_VER" | cut -d. -f2)
-PATCH=$(echo "$CURRENT_VER" | cut -d. -f3)
-
-if [ -n "$PATCH" ]; then
-    NEW_PATCH=$((PATCH + 1))
-    NEW_VER="${MAJOR}.${MINOR}.${NEW_PATCH}"
-elif [ -n "$MINOR" ]; then
-    NEW_MINOR=$((MINOR + 1))
-    NEW_VER="${MAJOR}.${NEW_MINOR}"
+if [ "${1:-}" = "--build-current" ]; then
+    NEW_BUILD=$CURRENT_BUILD
+    NEW_VER=$CURRENT_VER
+    echo "==> Rebuilding committed version: $NEW_VER (Build $NEW_BUILD)"
 else
-    NEW_MAJOR=$((MAJOR + 1))
-    NEW_VER="${NEW_MAJOR}.0"
+    NEW_BUILD=$((CURRENT_BUILD + 1))
+    MAJOR=$(echo "$CURRENT_VER" | cut -d. -f1)
+    MINOR=$(echo "$CURRENT_VER" | cut -d. -f2)
+    PATCH=$(echo "$CURRENT_VER" | cut -d. -f3)
+    if [ -n "$PATCH" ]; then
+        NEW_PATCH=$((PATCH + 1))
+        NEW_VER="${MAJOR}.${MINOR}.${NEW_PATCH}"
+    elif [ -n "$MINOR" ]; then
+        NEW_MINOR=$((MINOR + 1))
+        NEW_VER="${MAJOR}.${NEW_MINOR}"
+    else
+        NEW_MAJOR=$((MAJOR + 1))
+        NEW_VER="${NEW_MAJOR}.0"
+    fi
+    echo "==> Auto-incrementing version: $CURRENT_VER (Build $CURRENT_BUILD) -> $NEW_VER (Build $NEW_BUILD)"
+    /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $NEW_VER" Resources/Info.plist
+    /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $NEW_BUILD" Resources/Info.plist
+    # Keep Xcode project settings in sync.
+    sed -i '' "s/MARKETING_VERSION = [^;]*;/MARKETING_VERSION = $NEW_VER;/g" Lab599-Utility.xcodeproj/project.pbxproj 2>/dev/null || true
+    sed -i '' "s/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = $NEW_BUILD;/g" Lab599-Utility.xcodeproj/project.pbxproj 2>/dev/null || true
 fi
-
-echo "==> Auto-incrementing version: $CURRENT_VER (Build $CURRENT_BUILD) -> $NEW_VER (Build $NEW_BUILD)"
-/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $NEW_VER" Resources/Info.plist
-/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $NEW_BUILD" Resources/Info.plist
-
-# Keep Xcode project settings in sync
-sed -i '' "s/MARKETING_VERSION = [^;]*;/MARKETING_VERSION = $NEW_VER;/g" Lab599-Utility.xcodeproj/project.pbxproj 2>/dev/null || true
-sed -i '' "s/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = $NEW_BUILD;/g" Lab599-Utility.xcodeproj/project.pbxproj 2>/dev/null || true
 
 echo "Compiling universal binary for $BIN_NAME $NEW_VER ($NEW_BUILD) (arm64 & x86_64)..."
 clang -O2 -Wall -Wextra -Wno-unused-parameter -Werror -fobjc-arc \
@@ -168,7 +169,7 @@ echo "Built $APP_NAME successfully with architectures:"
 lipo -archs "$APP_NAME/Contents/MacOS/$BIN_NAME"
 
 # Build/sign a reviewable bundle without modifying the installed application.
-if [ "${1:-}" = "--build-only" ]; then
+if [ "${1:-}" = "--build-only" ] || [ "${1:-}" = "--build-current" ]; then
     exit 0
 fi
 

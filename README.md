@@ -1,6 +1,6 @@
 # Lab599 Utility for macOS
 
-A native macOS application for the Lab599 TX-500 family of transceivers. Combines firmware updates, live telemetry, radio screen capture, clock synchronisation, CAT diagnostics, settings backups, 100-channel memory management, driver installation, built-in documentation, and an integrated feedback reporter. Developed by **EP2AES (factoreal)**.
+A native macOS application for the Lab599 TX-500 family of transceivers. It includes a Station workspace, DX Cluster, FT8/FT4 and CW operation, Voice Keyer, contact logbook, firmware updates, live telemetry, radio screen capture, time sync, CAT diagnostics, settings and memory management. Developed by **EP2AES (factoreal)**.
 
 **macOS 12+ · Apple Silicon and Intel · English interface · Persian guide included**
 
@@ -21,6 +21,12 @@ Firmware header validation reads the BL20 model ID before transfer begins and di
 
 | View | What it does | Radio mode |
 | --- | --- | --- |
+| Station | Local operator profiles, audio routes, saved frequencies, verified CAT tuning and opt-in PSK Reporter uploads | Normal operation, CAT 9600 |
+| DX Cluster | Displays live spots and local contact history; tuning and QSO drafts require explicit actions | Normal operation, CAT 9600 for tuning |
+| FT8 / FT4 Digital | Live decode and waterfall, manual or automatic QSO sequencing, ADIF logging and simulation | Normal operation, CAT 9600 and audio interface |
+| CW Station | Morse keying, live audio decoding, QSO assistant and logging | Normal operation, CAT 9600 and audio interface |
+| Voice Keyer | Local voice messages, headphone preview, CQ repeat and microphone reply | Normal operation, CAT 9600 and audio interface |
+| Logbook & Cloud | Local QSO records, ADIF import/export, callbook enrichment and configured cloud services | Offline for local records |
 | Firmware Update | Select a local `.fw` file or download from the built-in Lab599 catalog; validates the BL20 header and model ID; transfers with a two-ACK handshake and TIOCOUTQ-paced streaming; prevents system sleep during flash | Bootloader — "The loader is waiting..." |
 | Time Sync | Disciplines a continuous internal UTC clock from multi-source NTP, TLS/HTTPS fallback, calibrated holdover and robust FT8 timing consensus; sets the radio to local time or UTC and verifies read-back | Normal operation, CAT 9600 |
 | Telemetry | Live arc-gauge dashboard: RF power, SWR (RM1 dots), supply/battery voltage, S-meter, frequency, mode, TX/RX state; rolling averages at 5 m / 15 m / 30 m / 60 m; over-voltage, low-voltage and high-SWR alert guards; selectable poll rate (250 ms / 500 ms / 1 s); Demo Mode | Normal operation, CAT 9600 |
@@ -60,19 +66,19 @@ If UDP NTP is blocked, three TLS-authenticated HTTP Date sources provide a lower
 
 ## Build and tests
 
-With Apple Command Line Tools or Xcode installed:
+With Apple Command Line Tools or Xcode installed, build without replacing the installed app:
 
 ```sh
-sh build-utility.sh
+sh build-utility.sh --build-only
 ```
 
 The output is `Lab599 Utility.app`, a universal `arm64`/`x86_64` bundle. The local build is ad-hoc signed and is not Apple-notarized.
 
 ```sh
-sh build-utility.sh --test
+sh build-utility.sh --test-only
 ```
 
-Tests use pseudo-terminals only. The firmware suite looks for `mtrx1.30.00.fw` in this directory or its parent; that manufacturer file is not redistributed in the release ZIP. See [the build guide](UPDATER-README.md) for per-module test options.
+Tests use pseudo-terminals only. The firmware suite looks for `mtrx1.30.00.fw` in this directory or its parent; that manufacturer file is not redistributed in the release ZIP. See [the build guide](UPDATER-README.md) for release packaging and the optional real-audio test.
 
 The Xcode project is `Lab599-Utility.xcodeproj`; its target and scheme are **Lab599 Utility**.
 

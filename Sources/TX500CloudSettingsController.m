@@ -72,7 +72,6 @@ NSString * const TX500CloudSettingsDidChangeNotification = @"TX500CloudSettingsD
     self = [super initWithWindow:nil];
     if (self) {
         [self setupSettingsView];
-        [self loadSavedSettings];
     }
     return self;
 }

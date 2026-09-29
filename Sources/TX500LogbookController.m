@@ -200,10 +200,12 @@
     pillsStack.spacing = 8.0;
 
     NSTextField *qrzLbl = nil, *lotwLbl = nil, *clLbl = nil, *eqslLbl = nil;
-    self.qrzPill = [self createStatusPillWithText:@"QRZ: Ready" color:[NSColor systemBlueColor] outLabel:&qrzLbl];
-    self.lotwPill = [self createStatusPillWithText:@"LoTW: Ready" color:[NSColor systemGreenColor] outLabel:&lotwLbl];
-    self.clublogPill = [self createStatusPillWithText:@"ClubLog: Ready" color:[NSColor systemOrangeColor] outLabel:&clLbl];
-    self.eqslPill = [self createStatusPillWithText:@"eQSL: Ready" color:[NSColor systemPurpleColor] outLabel:&eqslLbl];
+    // Status is resolved when Logbook is opened; doing so while building the
+    // hidden view would request several independent Keychain items at launch.
+    self.qrzPill = [self createStatusPillWithText:@"QRZ: Checking…" color:[NSColor systemGrayColor] outLabel:&qrzLbl];
+    self.lotwPill = [self createStatusPillWithText:@"LoTW: Checking…" color:[NSColor systemGrayColor] outLabel:&lotwLbl];
+    self.clublogPill = [self createStatusPillWithText:@"ClubLog: Checking…" color:[NSColor systemGrayColor] outLabel:&clLbl];
+    self.eqslPill = [self createStatusPillWithText:@"eQSL: Checking…" color:[NSColor systemGrayColor] outLabel:&eqslLbl];
 
     self.qrzPillLabel = qrzLbl;
     self.lotwPillLabel = lotwLbl;
@@ -335,7 +337,6 @@
     viewMinH.priority = NSLayoutPriorityDefaultHigh;
     viewMinH.active = YES;
 
-    [self updateCloudStatusPills];
     [self refreshAwardStatistics];
 }
 

@@ -19,6 +19,7 @@
 #import "TX500WebAuthenticatorController.h"
 #import "TX500CloudSettingsController.h"
 #import "TX500LogbookController.h"
+#import "TX500SecretStore.h"
 
 @interface TX500CollisionTableView : NSTableView
 @property (nonatomic, strong) NSView *forcedReusableView;
@@ -102,6 +103,23 @@ int main(int argc, const char * argv[]) {
         // collides with a Logbook text or badge cell. The Station -> Logbook
         // crash report showed setStringValue: being sent to that NSBox.
         [NSApplication sharedApplication];
+        NSUserDefaults *sessionDefaults = [NSUserDefaults standardUserDefaults];
+        NSString *sessionKey = @"TX500_QRZ_2FASessionCookies";
+        NSString *activeKey = @"TX500_QRZ_2FA_Active";
+        AssertTrue(TX500StoreSecret(sessionKey, @"session=example"), @"Stored isolated test session");
+        [sessionDefaults setBool:NO forKey:activeKey];
+        AssertTrue(![TX500WebAuthenticatorController hasSavedSessionForService:TX500AuthServiceQRZ],
+                   @"Inactive 2FA session is not advertised");
+        AssertTrue([TX500WebAuthenticatorController cookieHeaderForService:TX500AuthServiceQRZ] == nil,
+                   @"Inactive 2FA session is never sent");
+        [sessionDefaults setBool:YES forKey:activeKey];
+        AssertTrue([TX500WebAuthenticatorController hasSavedSessionForService:TX500AuthServiceQRZ],
+                   @"Active saved 2FA session is recognized");
+        AssertTrue([[TX500WebAuthenticatorController cookieHeaderForService:TX500AuthServiceQRZ]
+                    isEqualToString:@"session=example"], @"Active saved 2FA session is available");
+        AssertTrue(TX500RemoveSecret(sessionKey), @"Removed isolated test session");
+        [sessionDefaults removeObjectForKey:activeKey];
+
         TX500LogbookManager *shared = [TX500LogbookManager sharedManager];
         [shared clearAllContactsForTesting];
         AssertTrue([shared saveContact:[rec1 copy] error:nil], @"Seeded shared logbook for table-cell regression");

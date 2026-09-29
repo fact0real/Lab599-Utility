@@ -292,6 +292,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 @property(nonatomic, strong) NSSegmentedControl *prefTabSegment;
 @property(nonatomic, strong) NSView *prefStationContainer;
 @property(nonatomic, strong) NSView *prefCloudContainer;
+@property(nonatomic) BOOL cloudSettingsLoadedForPresentation;
 
 // Station Preferences Controls
 @property(nonatomic, strong) NSTextField *prefCallsignField;
@@ -3644,6 +3645,8 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     self.prefMaxReplyAttemptsField.stringValue = [NSString stringWithFormat:@"%ld", (long)maxAttempts];
 
 
+    self.cloudSettingsLoadedForPresentation = NO;
+    [self prefTabChanged:self.prefTabSegment];
     [self.preferencesWindow center];
     [self.preferencesWindow makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
@@ -3659,8 +3662,9 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     NSInteger tab = sender.selectedSegment;
     self.prefStationContainer.hidden = (tab != 0);
     self.prefCloudContainer.hidden = (tab != 1);
-    if (tab == 1) {
+    if (tab == 1 && !self.cloudSettingsLoadedForPresentation) {
         [[TX500CloudSettingsController sharedController] loadSavedSettings];
+        self.cloudSettingsLoadedForPresentation = YES;
     }
 }
 
@@ -3712,8 +3716,10 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         self.ft8StationController.audioEngine.maxSWRThreshold = swrThreshold;
     }
 
-    // Also persist cloud credentials if configured
-    [[TX500CloudSettingsController sharedController] saveAndApplyClicked];
+    // Station-only edits must not overwrite credentials that were never loaded.
+    if (self.cloudSettingsLoadedForPresentation) {
+        [[TX500CloudSettingsController sharedController] saveAndApplyClicked];
+    }
 
     // Apply theme immediately
     NSAppearance *appearance = nil;

@@ -2,21 +2,29 @@
 
 A native macOS application for the Lab599 TX-500 family of transceivers. It includes a Station workspace, DX Cluster, FT8/FT4 and CW operation, Voice Keyer, contact logbook, firmware updates, live telemetry, radio screen capture, time sync, CAT diagnostics, settings and memory management. Developed by **EP2AES (factoreal)**.
 
-**Latest published release: v2.265 (Build 271) · macOS 12+ · Apple Silicon and Intel · English interface · Persian guide included**
+**Latest published release: v2.266 (Build 272) · macOS 12+ · Apple Silicon and Intel · English interface · Persian guide included**
 
-[Download v2.265](https://github.com/fact0real/Lab599-Utility/releases/tag/2.265) · [راهنمای فارسی](QUICKSTART-FA.md) · [Build instructions](UPDATER-README.md) · [Report an issue](https://github.com/fact0real/Lab599-Utility/issues/new)
+[Download v2.266](https://github.com/fact0real/Lab599-Utility/releases/tag/2.266) · [راهنمای فارسی](QUICKSTART-FA.md) · [Build instructions](UPDATER-README.md) · [Report an issue](https://github.com/fact0real/Lab599-Utility/issues/new)
 
 ## Download and install
 
-Download `Lab599-Utility-v2.265-macOS-universal.zip` from the [v2.265 release](https://github.com/fact0real/Lab599-Utility/releases/tag/2.265). Extract the ZIP and move `Lab599 Utility.app` to `/Applications`. The ZIP contains the app, English and Persian guides, and license notices; manufacturer firmware is not included.
+Download `Lab599-Utility-v2.266-macOS-universal.zip` from the [v2.266 release](https://github.com/fact0real/Lab599-Utility/releases/tag/2.266). Extract the ZIP and move `Lab599 Utility.app` to `/Applications`. The ZIP contains the app, English and Persian guides, and license notices; manufacturer firmware is not included.
 
 Verify the download before opening the app:
 
 ```sh
-shasum -a 256 Lab599-Utility-v2.265-macOS-universal.zip
+shasum -a 256 Lab599-Utility-v2.266-macOS-universal.zip
 ```
 
 Compare the result with the `SHA256SUMS.txt` asset on the release page. The app is ad-hoc signed, **not Apple notarized**. If macOS blocks the first launch, select this app in **System Settings → Privacy & Security → Open Anyway** after verifying the checksum.
+
+## What's new in v2.266
+
+- Opening the main window or Station preferences no longer reads cloud credentials from Keychain. Logbook and cloud-account views load them when opened.
+- Switching preference tabs no longer reloads credentials repeatedly. Saving Station preferences without opening the cloud tab leaves cloud credentials untouched.
+- A saved 2FA cookie is read once when used, and an inactive session is not sent.
+
+The Keychain still protects each saved item separately. macOS may ask for access when you open Logbook or Cloud & Logbook Accounts, especially after installing a newly signed build. Prompt counts on an existing user's Keychain cannot be verified by the automated tests.
 
 ## What's new in v2.265
 
@@ -81,6 +89,8 @@ The **Voice Keyer** sidebar panel records/imports local voice messages, previews
 
 PSK Reporter submissions are opt-in. DX Cluster connects only when you select **Connect**; it uses unencrypted public Telnet/TCP nodes and sends a callsign for login, so do not use a password-protected node. Cloud integrations require their own configuration, and credentials are stored in macOS Keychain. Simulation and Demo modes let you explore supported views without transmitting RF.
 
+The app does not read cloud credentials just to open its main window or the Station preferences. It reads cloud Keychain items when you open Logbook, open Cloud & Logbook Accounts, or use a cloud service. The locally signed release may still prompt for access to individual saved items, especially after replacing the app with a new build; macOS controls those prompts. No Keychain access checks are disabled to suppress them.
+
 ## Use
 
 Open **Lab599 Utility.app**, connect the CAT-USB cable and choose the serial port from the port menu. Tap **Refresh** if the port does not appear. Close other applications using the same port.
@@ -105,7 +115,7 @@ With Apple Command Line Tools or Xcode installed, build without replacing the in
 sh build-utility.sh --build-only
 ```
 
-The output is `Lab599 Utility.app`, a universal `arm64`/`x86_64` bundle. `--build-only` increments the source version and build number. To rebuild the committed v2.264 source version without changing either number, use `sh build-utility.sh --build-current`.
+The output is `Lab599 Utility.app`, a universal `arm64`/`x86_64` bundle. `--build-only` increments the source version and build number. To rebuild the current source version without changing either number, use `sh build-utility.sh --build-current`.
 
 ```sh
 sh build-utility.sh --test-only

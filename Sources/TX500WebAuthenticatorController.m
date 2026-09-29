@@ -319,15 +319,13 @@ static NSString * const kClubLogActiveKey = @"TX500_ClubLog_2FA_Active";
 #pragma mark - Class Helpers
 
 + (BOOL)hasSavedSessionForService:(TX500AuthService)service {
+    NSString *activeKey = (service == TX500AuthServiceQRZ) ? kQRZActiveKey : kClubLogActiveKey;
+    id active = [[NSUserDefaults standardUserDefaults] objectForKey:activeKey];
+    if (active && ![active boolValue]) return NO;
+
     NSString *cookieKey = (service == TX500AuthServiceQRZ) ? kQRZCookieKey : kClubLogCookieKey;
     NSString *cookies = TX500SecretValue(cookieKey);
-    if (cookies.length == 0) return NO;
-
-    NSString *activeKey = (service == TX500AuthServiceQRZ) ? kQRZActiveKey : kClubLogActiveKey;
-    if ([[NSUserDefaults standardUserDefaults] objectForKey:activeKey]) {
-        return [[NSUserDefaults standardUserDefaults] boolForKey:activeKey];
-    }
-    return YES;
+    return cookies.length > 0;
 }
 
 + (void)clearSessionForService:(TX500AuthService)service {
@@ -357,9 +355,12 @@ static NSString * const kClubLogActiveKey = @"TX500_ClubLog_2FA_Active";
 }
 
 + (nullable NSString *)cookieHeaderForService:(TX500AuthService)service {
-    if (![self hasSavedSessionForService:service]) return nil;
+    NSString *activeKey = (service == TX500AuthServiceQRZ) ? kQRZActiveKey : kClubLogActiveKey;
+    id active = [[NSUserDefaults standardUserDefaults] objectForKey:activeKey];
+    if (active && ![active boolValue]) return nil;
     NSString *cookieKey = (service == TX500AuthServiceQRZ) ? kQRZCookieKey : kClubLogCookieKey;
-    return TX500SecretValue(cookieKey);
+    NSString *cookies = TX500SecretValue(cookieKey);
+    return cookies.length > 0 ? cookies : nil;
 }
 
 @end

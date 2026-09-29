@@ -38,6 +38,7 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
                              cancellation:nil error:nil];
         if (!chunk.length) continue;
         [response appendData:chunk];
+        if (response.length > 64) break;
         NSRange endRange = [response rangeOfData:terminator options:0
                                            range:NSMakeRange(0, response.length)];
         if (endRange.location != NSNotFound) {
@@ -220,6 +221,12 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 @property(nonatomic, strong) NSDate *digitalSessionStartedAt;
 @property(nonatomic, strong) NSURL *firmwareURL;
 @property(nonatomic, copy) NSString *firmwareExpectedSHA256;
+@property(nonatomic, copy) NSString *firmwareLoadedSHA256;
+@property(nonatomic, copy) NSString *verifiedCATReply;
+@property(nonatomic, copy) NSString *verifiedCATPort;
+@property(nonatomic, copy) NSString *verifiedCATFirmwareSHA256;
+@property(nonatomic) double verifiedCATAt;
+@property(nonatomic, strong) NSButton *verifyRadioButton;
 @property(nonatomic, strong) id activity;
 @property(nonatomic) BOOL busy;
 @property(nonatomic) BOOL hasPorts;
@@ -362,6 +369,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 - (void)stationPortChanged:(id)sender {
     (void)sender;
     if(![self stationCanEdit]) { if(self.stationPort.length) [self.portMenu selectItemWithTitle:self.stationPort]; [self appendLog:@"Stop station activity before changing the CAT port."]; return; }
+    [self clearFirmwareCATVerification];
     self.stationPort=[self currentStationPort];
     [self.tools portsAvailable:self.hasPorts];
     if(self.stationCore.owner.length) [self.stationCore selectOwner:self.stationCore.owner port:self.stationPort error:nil];
@@ -1010,7 +1018,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     self.sectionTitleLabel.font = [NSFont systemFontOfSize:17 weight:NSFontWeightBold];
 
     NSTextField *instructions = [self wrappingLabel:
-        @"Connect the CAT-USB cable and stable external power. Close other radio applications. On your transceiver (TX-500 Discovery / TX-500MP), hold the third top function key while pressing POWER. Start only when the screen displays \"The loader is waiting...\". Keep power and cable connected until completion."];
+        @"Select a reviewed firmware file. With the radio on normally and CAT set to LAB599 at 9600 baud, click Verify Radio (CAT). Then power off, enter the loader using your model's manual, and click Update Firmware. Keep stable power and the cable connected."];
     instructions.textColor = NSColor.secondaryLabelColor;
     instructions.font = [NSFont systemFontOfSize:11.5];
     instructions.preferredMaxLayoutWidth = 720.0;
@@ -1083,11 +1091,12 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     self.updateButton = [NSButton buttonWithTitle:@"Update Firmware" target:self action:@selector(startUpdate:)];
     self.updateButton.bezelStyle = NSBezelStyleRounded;
     self.updateButton.keyEquivalent = @"\r";
+    self.verifyRadioButton = [NSButton buttonWithTitle:@"1. Verify Radio (CAT)" target:self action:@selector(verifyRadioForFirmware:)];
     self.syncButton = [NSButton buttonWithTitle:@"Synchronize Clock" target:self action:@selector(startTimeSync:)];
     self.syncButton.bezelStyle = NSBezelStyleRounded;
     self.syncButton.hidden = YES;
 
-    self.actionRow = [NSStackView stackViewWithViews:@[self.updateButton, self.syncButton]];
+    self.actionRow = [NSStackView stackViewWithViews:@[self.verifyRadioButton, self.updateButton, self.syncButton]];
     self.actionRow.detachesHiddenViews = YES;
     self.actionRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     self.actionRow.spacing = 12;
@@ -1724,6 +1733,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 
 - (void)refreshPorts:(id)sender {
     if (self.busy || (sender && ![self stationCanEdit])) return;
+    if (sender) [self clearFirmwareCATVerification];
     NSString *previous = self.portMenu.selectedItem.title;
     NSArray<NSString *> *names = [[NSFileManager defaultManager] contentsOfDirectoryAtPath:@"/dev" error:NULL] ?: @[];
     NSPredicate *match = [NSPredicate predicateWithBlock:^BOOL(NSString *name, NSDictionary *bindings) {
@@ -1746,7 +1756,9 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         [self.portMenu selectItemWithTitle:previous];
     }
     self.portMenu.enabled = self.hasPorts;
-    self.updateButton.enabled = self.hasPorts && self.firmwareURL != nil;
+    if (![previous isEqualToString:self.portMenu.selectedItem.title]) [self clearFirmwareCATVerification];
+    self.verifyRadioButton.enabled = self.hasPorts && self.firmwareURL != nil;
+    self.updateButton.enabled = self.hasPorts && self.firmwareURL != nil && [self firmwareCATVerificationIsCurrentForPort:self.portMenu.selectedItem.title hash:self.firmwareLoadedSHA256];
     self.syncButton.enabled = self.hasPorts;
     [self.tools portsAvailable:self.hasPorts];
     if (sender) {
@@ -2047,6 +2059,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     } else if(!passive || !self.stationCore.owner.length || (![self.ft8StationController.audioEngine isMonitoring] && !self.stationCore.ownsTX)) {
         if(![self.stationCore selectOwner:desired port:[self currentStationPort] error:nil]) return;
     }
+    if (!isFW) [self clearFirmwareCATVerification];
     self.voiceOwnsRadio=isVoice;
     self.voiceKeyerController.view.hidden=!isVoice;
     self.stationController.view.hidden=!isStation;
@@ -2217,6 +2230,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     self.timeRow.hidden = !isSync;
 
     self.updateButton.hidden = !isFW;
+    self.verifyRadioButton.hidden = !isFW;
     self.syncButton.hidden = !isSync;
     self.actionRow.hidden = (!isFW && !isSync);
     self.updateButton.keyEquivalent = isFW ? @"\r" : @"";
@@ -2229,7 +2243,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     self.instructions.preferredMaxLayoutWidth = (availW > 300.0) ? (availW - 4.0) : 720.0;
 
     if (isFW) {
-        self.instructions.stringValue = @"Connect the CAT-USB cable and stable external power. Close other radio applications. On your transceiver (TX-500 Discovery / TX-500MP), hold the third top function key while pressing POWER. Start only when the screen displays \"The loader is waiting...\". Keep power and cable connected until completion.";
+    self.instructions.stringValue = @"Select a reviewed firmware file. With the radio on normally and CAT set to LAB599 at 9600 baud, click Verify Radio (CAT). Then power off, enter the loader using your model's manual, and click Update Firmware. Keep stable power and the cable connected.";
         self.statusLabel.stringValue = @"Select the transceiver's serial port and choose or download the firmware file.";
     } else if (isSync) {
         self.instructions.stringValue = @"Turn the radio on normally with POWER. Lab599 Utility disciplines an internal continuous UTC clock using multi-source network time, calibrated holdover, and robust FT8 timing consensus when offline. Choose local time or UTC for the radio display; the host system clock is never stepped.";
@@ -2294,7 +2308,8 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     self.operationPicker.enabled = self.timeZoneMenu.enabled = self.refreshButton.enabled = !busy;
     self.chooseButton.enabled = self.onlineButton.enabled = !busy;
     self.portMenu.enabled = !busy && self.hasPorts;
-    self.updateButton.enabled = !busy && self.hasPorts && self.firmwareURL != nil;
+    self.verifyRadioButton.enabled = !busy && self.hasPorts && self.firmwareURL != nil;
+    self.updateButton.enabled = !busy && self.hasPorts && self.firmwareURL != nil && [self firmwareCATVerificationIsCurrentForPort:self.portMenu.selectedItem.title hash:self.firmwareLoadedSHA256];
     self.syncButton.enabled = !busy && self.hasPorts;
     self.outdoorModeButton.enabled = !busy;
     for (TX500SidebarButton *btn in self.sidebarItems) {
@@ -2325,6 +2340,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     self.timeZoneMenu.enabled = NO;
     self.syncButton.enabled = NO;
     self.updateButton.enabled = NO;
+    self.verifyRadioButton.enabled = NO;
     self.portMenu.enabled = NO;
     self.refreshButton.enabled = NO;
     self.chooseButton.enabled = NO;
@@ -2661,15 +2677,19 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 }
 
 - (void)clearLoadedFirmwareSelection {
+    [self clearFirmwareCATVerification];
     self.firmwareURL = nil;
     self.firmwareExpectedSHA256 = nil;
+    self.firmwareLoadedSHA256 = nil;
     self.firmwareName.stringValue = @"No firmware selected";
     self.statusLabel.stringValue = @"Select a reviewed firmware file before updating.";
     self.updateButton.enabled = NO;
+    self.verifyRadioButton.enabled = NO;
     [self updateRadioPreviewForFirmwareData:nil url:nil];
 }
 
 - (void)setLoadedFirmwareURL:(NSURL *)url firmwareData:(NSData *)data isOnlineDownload:(BOOL)isOnline {
+    [self clearFirmwareCATVerification];
     NSString *model = [Lab599FirmwareCatalog reviewedModelForFirmwareData:data];
     if (!model) {
         [self clearLoadedFirmwareSelection];
@@ -2681,6 +2701,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     self.firmwareName.stringValue = url.lastPathComponent;
     self.firmwareName.toolTip = url.path;
     NSString *hash = TXFirmwareSHA256(data);
+    self.firmwareLoadedSHA256 = hash;
     NSString *source = isOnline ? @"Online Download" : @"Local File";
     [self appendLog:[NSString stringWithFormat:@"Loaded %@ (%lu bytes, %@). SHA-256: %@",
         url.lastPathComponent, (unsigned long)data.length, source, hash]];
@@ -2688,8 +2709,9 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     if ([hash isEqualToString:@"2162fed7d27987507c8b412f3d38478c0a670a906a0c747578d7c975ad5a04ea"]) {
         [self appendLog:@"Matches the official TX-500 Discovery v1.30.00 release (mtrx1.30.00.fw)."];
     }
-    self.statusLabel.stringValue = [NSString stringWithFormat:@"Firmware ready: %@. Check that transceiver displays \"The loader is waiting...\".", url.lastPathComponent];
-    self.updateButton.enabled = self.hasPorts;
+    self.statusLabel.stringValue = [NSString stringWithFormat:@"Firmware ready: %@. Turn the radio on normally, then click Verify Radio (CAT).", url.lastPathComponent];
+    self.verifyRadioButton.enabled = self.hasPorts;
+    self.updateButton.enabled = NO;
     [self updateRadioPreviewForFirmwareData:data url:url];
 }
 
@@ -3755,6 +3777,61 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 
 #pragma mark - Firmware Update Process
 
+- (void)clearFirmwareCATVerification {
+    self.verifiedCATReply = nil;
+    self.verifiedCATPort = nil;
+    self.verifiedCATFirmwareSHA256 = nil;
+    self.verifiedCATAt = 0;
+    self.updateButton.enabled = NO;
+}
+
+- (BOOL)firmwareCATVerificationIsCurrentForPort:(NSString *)port hash:(NSString *)hash {
+    return self.verifiedCATAt > 0 && Lab599MonotonicTime() - self.verifiedCATAt < 600 &&
+        [self.verifiedCATPort isEqualToString:port] &&
+        [self.verifiedCATFirmwareSHA256 isEqualToString:hash] &&
+        self.verifiedCATReply.length > 0;
+}
+
+- (void)verifyRadioForFirmware:(id)sender {
+    (void)sender;
+    if (self.busy || self.operationPicker.selectedSegment != 0 || ![self stationCanEdit]) return;
+    NSString *portPath = self.portMenu.selectedItem.title;
+    if (!self.hasPorts || ![portPath hasPrefix:@"/dev/cu."] || !self.firmwareURL) return;
+    [self clearFirmwareCATVerification];
+    NSData *firmware = [NSData dataWithContentsOfURL:self.firmwareURL];
+    NSString *model = [Lab599FirmwareCatalog reviewedModelForFirmwareData:firmware];
+    NSString *hash = firmware ? TXFirmwareSHA256(firmware) : nil;
+    if (!model || ![hash isEqualToString:self.firmwareLoadedSHA256] ||
+        (self.firmwareExpectedSHA256.length && ![hash isEqualToString:self.firmwareExpectedSHA256])) {
+        [self showAlert:@"Firmware changed" message:@"The selected firmware is missing or changed. Select a reviewed file again before checking the radio." warning:YES];
+        return;
+    }
+    [self setToolsBusy:YES];
+    self.statusLabel.stringValue = @"Reading the radio's CAT identity in normal mode...";
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSError *error = nil;
+        Lab599SerialPort *port = [Lab599SerialPort openPath:portPath speed:B9600 error:&error];
+        NSString *reply = port ? Lab599ReadCATFrame(port, @"ID;", 1.5, &error) : nil;
+        [port close];
+        NSString *problem = error.localizedDescription ?: [Lab599FirmwareCatalog CATIdentityErrorForFirmwareModel:model reply:reply];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (!problem) {
+                self.verifiedCATReply = reply;
+                self.verifiedCATPort = portPath;
+                self.verifiedCATFirmwareSHA256 = hash;
+                self.verifiedCATAt = Lab599MonotonicTime();
+                [self appendLog:[NSString stringWithFormat:@"Normal-mode CAT identity %@ verified on %@ for %@ firmware.", reply, portPath, model]];
+                self.statusLabel.stringValue = [NSString stringWithFormat:@"CAT %@ verified. Power off, enter loader mode, then click Update Firmware within 10 minutes.", reply];
+            } else {
+                [self appendLog:[NSString stringWithFormat:@"Firmware CAT precheck failed: %@", problem]];
+                self.statusLabel.stringValue = @"CAT identity check failed. No firmware was sent.";
+                [self showAlert:@"Radio identity not verified" message:[NSString stringWithFormat:@"%@\n\nTurn the radio on normally, set CAT protocol to LAB599 at 9600 baud, and retry. No firmware was sent.", problem] warning:YES];
+            }
+            [self setToolsBusy:NO];
+        });
+    });
+}
+
 - (void)startUpdate:(id)sender {
     (void)sender;
     if (self.busy || self.operationPicker.selectedSegment != 0) return;
@@ -3778,6 +3855,17 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         [self showAlert:@"Firmware blocked"
                message:@"This file does not match a reviewed official Lab599 release, or its BL20 model ID is inconsistent. No data was sent to the radio."
                warning:YES];
+        return;
+    }
+    if (![self firmwareCATVerificationIsCurrentForPort:port hash:currentHash]) {
+        [self clearFirmwareCATVerification];
+        [self showAlert:@"Radio check required" message:@"Turn the radio on normally and click Verify Radio (CAT) before entering loader mode. Verification expires after 10 minutes or when the port or firmware changes. No firmware was sent." warning:YES];
+        return;
+    }
+    NSString *catProblem = [Lab599FirmwareCatalog CATIdentityErrorForFirmwareModel:firmwareModel reply:self.verifiedCATReply];
+    if (catProblem) {
+        [self clearFirmwareCATVerification];
+        [self showAlert:@"Radio identity mismatch" message:catProblem warning:YES];
         return;
     }
 
@@ -3809,16 +3897,16 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     confirmation.messageText = @"Start the firmware update?";
     NSString *powerInfo = nil;
     if (self.lastDetectedVoltage > 13.0) {
-        powerInfo = [NSString stringWithFormat:@"Power Source: External DC Power Supply (%.1f V) verified stable.", self.lastDetectedVoltage];
+        powerInfo = [NSString stringWithFormat:@"Earlier CAT voltage reading: %.1f V. Confirm stable external power before flashing.", self.lastDetectedVoltage];
     } else if (self.lastDetectedVoltage > 7.0) {
-        powerInfo = [NSString stringWithFormat:@"Power Source: BP-500/550 Battery Pack (%.1f V) — Ensure PWR button is held!", self.lastDetectedVoltage];
+        powerInfo = [NSString stringWithFormat:@"Earlier CAT voltage reading: %.1f V. If using BP-500/550, hold its PWR button throughout the update.", self.lastDetectedVoltage];
     } else {
         powerInfo = @"Power Source: 9–15V DC external power required (Hold Battery Pack PWR if on BP-500/550).";
     }
 
     confirmation.informativeText = [NSString stringWithFormat:
-        @"Firmware: %@\nReviewed target: %@\nPort: %@\n%@\n\nThe connected radio model cannot be verified in bootloader mode. Select the model printed on the radio below. The transceiver must display \"The loader is waiting...\". Keep power and USB cable firmly connected throughout the update.",
-        self.firmwareURL.lastPathComponent, firmwareModel, port, powerInfo];
+        @"Firmware: %@\nReviewed target: %@\nNormal-mode CAT reply: %@ on %@\n%@\n\nThe CAT check distinguishes TX-500 family from TX-500MP; it does not independently distinguish Discovery, PRO, or ALTAI. Select the exact model printed on the radio below. Confirm it now displays \"The loader is waiting...\" and keep power and cable connected.",
+        self.firmwareURL.lastPathComponent, firmwareModel, self.verifiedCATReply, port, powerInfo];
     NSView *modelAccessory = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 400, 54)];
     NSTextField *modelPrompt = [NSTextField labelWithString:@"Model printed on the connected radio:"];
     modelPrompt.frame = NSMakeRect(0, 32, 400, 20);
@@ -3838,12 +3926,17 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         [self showAlert:@"Firmware update blocked" message:preflightError warning:YES];
         return;
     }
+    if (![self firmwareCATVerificationIsCurrentForPort:port hash:currentHash]) {
+        [self showAlert:@"Radio check expired" message:@"Verify the radio again in normal CAT mode before updating. No firmware was sent." warning:YES];
+        return;
+    }
 
     self.busy = YES;
     self.operationPicker.enabled = NO;
     self.syncButton.enabled = NO;
     self.timeZoneMenu.enabled = NO;
     self.updateButton.enabled = NO;
+    self.verifyRadioButton.enabled = NO;
     self.portMenu.enabled = NO;
     self.chooseButton.enabled = NO;
     self.onlineButton.enabled = NO;
@@ -3871,6 +3964,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
             });
 
         dispatch_async(dispatch_get_main_queue(), ^{
+            [self clearFirmwareCATVerification];
             self.busy = NO;
             self.operationPicker.enabled = YES;
             self.timeZoneMenu.enabled = YES;

@@ -41,6 +41,11 @@ NS_ASSUME_NONNULL_BEGIN
 + (nullable NSString *)preflightErrorForFirmwareData:(NSData *)data
                                    declaredRadioModel:(nullable NSString *)declaredRadioModel;
 
+// ID; is read while the radio is running normally. ID500 identifies the
+// TX-500 family and ID505 the MP; it cannot distinguish PRO/ALTAI/Discovery.
++ (nullable NSString *)CATIdentityErrorForFirmwareModel:(NSString *)firmwareModel
+                                                   reply:(nullable NSString *)reply;
+
 @end
 
 NS_ASSUME_NONNULL_END

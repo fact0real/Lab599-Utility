@@ -57,6 +57,20 @@ int main(int argc, const char *argv[]) {
               @"Cross-model firmware is hard blocked");
         Check([Lab599FirmwareCatalog preflightErrorForFirmwareData:discovery declaredRadioModel:nil] != nil,
               @"No radio model selection is hard blocked");
+        Check([Lab599FirmwareCatalog CATIdentityErrorForFirmwareModel:@"TX-500 Discovery" reply:@"ID500;"] == nil,
+              @"Normal-mode TX-500 CAT identity permits Discovery family firmware");
+        Check([Lab599FirmwareCatalog CATIdentityErrorForFirmwareModel:@"TX-500 Discovery" reply:@"ID505;"] != nil,
+              @"MP radio blocks Discovery firmware before loader entry");
+        Check([Lab599FirmwareCatalog CATIdentityErrorForFirmwareModel:@"TX-500MP" reply:@"ID505;"] == nil,
+              @"Normal-mode MP CAT identity permits MP firmware");
+        Check([Lab599FirmwareCatalog CATIdentityErrorForFirmwareModel:@"TX-500MP" reply:@"ID500;"] != nil,
+              @"TX-500 radio blocks MP firmware before loader entry");
+        Check([Lab599FirmwareCatalog CATIdentityErrorForFirmwareModel:@"TX-500PRO" reply:@"ID500;"] == nil &&
+              [Lab599FirmwareCatalog CATIdentityErrorForFirmwareModel:@"TX-500PRO ALTAI" reply:@"ID500;"] == nil,
+              @"PRO and ALTAI use only the documented TX-500 family check");
+        for (NSString *reply in @[@"ID019;", @"ID501;", @"ID502;", @"ID500;extra", @"id500;", @"", @"ID;", @"ID505;\n"])
+            Check([Lab599FirmwareCatalog CATIdentityErrorForFirmwareModel:@"TX-500 Discovery" reply:reply] != nil,
+                  @"Generic, undocumented, or malformed CAT reply fails closed");
         NSMutableData *tampered = [discovery mutableCopy];
         ((uint8_t *)tampered.mutableBytes)[32] ^= 1;
         Check([Lab599FirmwareCatalog reviewedModelForFirmwareData:tampered] == nil,

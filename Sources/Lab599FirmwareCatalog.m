@@ -103,6 +103,17 @@ static BOOL OfficialFirmwareURL(NSURL *url) {
     return nil;
 }
 
++ (NSString *)CATIdentityErrorForFirmwareModel:(NSString *)firmwareModel
+                                           reply:(NSString *)reply {
+    NSString *expected = [firmwareModel isEqualToString:@"TX-500MP"] ? @"ID505;" :
+        ([@[@"TX-500 Discovery", @"TX-500PRO", @"TX-500PRO ALTAI"] containsObject:firmwareModel] ? @"ID500;" : nil);
+    if (!expected) return @"The firmware target is not a supported radio model.";
+    if (![reply isEqualToString:expected])
+        return [NSString stringWithFormat:@"CAT identity check failed. %@ requires %@ in LAB599 CAT mode; the radio replied %@. No firmware was sent.",
+                firmwareModel, expected, reply.length ? reply : @"nothing"];
+    return nil;
+}
+
 + (instancetype)sharedCatalog {
     static Lab599FirmwareCatalog *shared = nil;
     static dispatch_once_t onceToken;

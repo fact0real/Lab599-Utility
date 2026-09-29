@@ -2,9 +2,11 @@
 
 A native macOS application for the Lab599 TX-500 family of transceivers. It includes a Station workspace, DX Cluster, FT8/FT4 and CW operation, Voice Keyer, contact logbook, firmware updates, live telemetry, radio screen capture, time sync, CAT diagnostics, settings and memory management. Developed by **EP2AES (factoreal)**.
 
-**v2.263 (Build 269) · macOS 12+ · Apple Silicon and Intel · English interface · Persian guide included**
+**Latest published release: v2.263 (Build 269) · macOS 12+ · Apple Silicon and Intel · English interface · Persian guide included**
 
 [Download v2.263](https://github.com/fact0real/Lab599-Utility/releases/tag/2.263) · [راهنمای فارسی](QUICKSTART-FA.md) · [Build instructions](UPDATER-README.md) · [Report an issue](https://github.com/fact0real/Lab599-Utility/issues/new)
+
+**Source status:** `main` is now v2.264 (Build 270), not yet packaged as a release. The firmware model and hash checks described below are in this source build; the published v2.263 ZIP does not include them.
 
 ## Download and install
 
@@ -36,7 +38,7 @@ Thanks to **EA3JIC** for the detailed review, bug reports, and contributions beh
 | TX-500PRO (Tactical) | v1.29.05 | — |
 | TX-500PRO ALTAI | v1.29.05 | — |
 
-Firmware header validation reads the BL20 model ID before transfer begins and displays a hardware-match badge or a cross-model warning.
+The updater accepts only firmware whose complete SHA-256 matches a reviewed official Lab599 release. It checks the BL20 model ID for Discovery and MP images, displays the reviewed firmware target, and requires the operator to select the model printed on the radio. PRO and ALTAI releases share Discovery's BL20 model ID, so their targets are distinguished by reviewed full-file hashes. A mismatch or missing selection blocks the transfer before the update serial port is opened. The connected radio cannot be identified independently in bootloader mode; this manual declaration does not prove the hardware model.
 
 ## Functions
 
@@ -48,7 +50,7 @@ Firmware header validation reads the BL20 model ID before transfer begins and di
 | CW Station | Morse keying, live audio decoding, QSO assistant and logging | Normal operation, CAT 9600 and audio interface |
 | Voice Keyer | Local voice messages, headphone preview, CQ repeat and microphone reply | Normal operation, CAT 9600 and audio interface |
 | Logbook & Cloud | Local QSO records, ADIF import/export, callbook enrichment and configured cloud services | Offline for local records |
-| Firmware Update | Select a local `.fw` file or download from the built-in Lab599 catalog; validates the BL20 header and model ID; transfers with a two-ACK handshake and TIOCOUTQ-paced streaming; prevents system sleep during flash | Bootloader — "The loader is waiting..." |
+| Firmware Update | Select a reviewed official `.fw` file or download from the built-in Lab599 catalog; verifies the complete file hash and known target, blocks a mismatch with the operator-declared radio model, transfers with a two-ACK handshake and TIOCOUTQ-paced streaming, and prevents system sleep during flash | Bootloader — "The loader is waiting..." |
 | Time Sync | Disciplines a continuous internal UTC clock from multi-source NTP, TLS/HTTPS fallback, calibrated holdover and robust FT8 timing consensus; sets the radio to local time or UTC and verifies read-back | Normal operation, CAT 9600 |
 | Telemetry | Live arc-gauge dashboard: RF power, SWR (RM1 dots), supply/battery voltage, S-meter, frequency, mode, TX/RX state; rolling averages at 5 m / 15 m / 30 m / 60 m; over-voltage, low-voltage and high-SWR alert guards; selectable poll rate (250 ms / 500 ms / 1 s); Demo Mode | Normal operation, CAT 9600 |
 | Radio Screen | Real-time 256×128 LCD mirror via CAT; four display themes (Amber, Cool White / Daylight, Green phosphor, OLED); panadapter spectrum and calibrated meter bars; save screenshot to PNG or copy to clipboard; Demo Mode | Normal operation, CAT 9600 |
@@ -77,7 +79,7 @@ PSK Reporter submissions are opt-in. DX Cluster connects only when you select **
 
 Open **Lab599 Utility.app**, connect the CAT-USB cable and choose the serial port from the port menu. Tap **Refresh** if the port does not appear. Close other applications using the same port.
 
-- **Firmware Update** — power off the radio; hold the third top function key while pressing POWER until the display shows *"The loader is waiting..."*; select firmware matching your model; click Start Update and keep power and cable connected until completion.
+- **Firmware Update** — power off the radio; hold the third top function key while pressing POWER until the display shows *"The loader is waiting..."*; select a reviewed firmware file matching your model; click Start Update, select the model printed on the radio in the confirmation dialog, and keep power and cable connected until completion. New or custom firmware must be reviewed and added to the app's hash list before it can be flashed.
 - **Station, DX Cluster tuning, digital/CW/voice operation, Time Sync, CAT Studio, Settings, Memory, Telemetry, Radio Screen** — turn the radio on normally; set CAT protocol to **LAB599** (Menu 35) at 9600 baud. Digital/CW/voice features also need a suitable audio route.
 - **Telemetry / Radio Screen Demo Mode** — enable Demo Mode in either panel to explore the UI without a connected radio.
 
@@ -97,7 +99,7 @@ With Apple Command Line Tools or Xcode installed, build without replacing the in
 sh build-utility.sh --build-only
 ```
 
-The output is `Lab599 Utility.app`, a universal `arm64`/`x86_64` bundle. `--build-only` increments the source version and build number. To rebuild the committed v2.263 version without changing either number, use `sh build-utility.sh --build-current`.
+The output is `Lab599 Utility.app`, a universal `arm64`/`x86_64` bundle. `--build-only` increments the source version and build number. To rebuild the committed v2.264 source version without changing either number, use `sh build-utility.sh --build-current`.
 
 ```sh
 sh build-utility.sh --test-only

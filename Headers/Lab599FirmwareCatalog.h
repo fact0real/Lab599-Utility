@@ -32,6 +32,15 @@ NS_ASSUME_NONNULL_BEGIN
 // Static list of verified known firmwares as reliable fallback
 + (NSArray<Lab599FirmwareItem *> *)fallbackFirmwareCatalog;
 
+// Returns a model only when the complete file matches a reviewed official
+// release. For Discovery and MP, the embedded BL20 model ID must agree too.
++ (nullable NSString *)reviewedModelForFirmwareData:(NSData *)data;
+
+// A declared model is required because the connected radio cannot be queried
+// in bootloader mode. Returns a blocking error for unknown or mismatched files.
++ (nullable NSString *)preflightErrorForFirmwareData:(NSData *)data
+                                   declaredRadioModel:(nullable NSString *)declaredRadioModel;
+
 @end
 
 NS_ASSUME_NONNULL_END

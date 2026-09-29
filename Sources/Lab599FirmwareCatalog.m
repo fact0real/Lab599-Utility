@@ -1,6 +1,7 @@
 #import "Lab599FirmwareCatalog.h"
 #import "TX500Transfer.h"
 #import <CommonCrypto/CommonDigest.h>
+#import <string.h>
 
 @implementation Lab599FirmwareItem
 
@@ -54,6 +55,14 @@ static NSDictionary<NSString *, NSString *> *KnownFirmwareHashes(void) {
     return hashes;
 }
 
+static NSString *ReviewedModelForPath(NSString *path) {
+    if ([path hasPrefix:@"/TX500/mtrx"]) return @"TX-500 Discovery";
+    if ([path hasPrefix:@"/TX500MP/mtrxMP"]) return @"TX-500MP";
+    if ([path hasPrefix:@"/TX500PRO/mtrx_alt"]) return @"TX-500PRO ALTAI";
+    if ([path hasPrefix:@"/TX500PRO/mtrx_pro"]) return @"TX-500PRO";
+    return nil;
+}
+
 static BOOL OfficialFirmwareURL(NSURL *url) {
     return [url.scheme.lowercaseString isEqualToString:@"https"] &&
         [url.host.lowercaseString isEqualToString:@"downloads.lab599.com"] &&
@@ -63,6 +72,36 @@ static BOOL OfficialFirmwareURL(NSURL *url) {
 }
 
 @implementation Lab599FirmwareCatalog
+
++ (NSString *)reviewedModelForFirmwareData:(NSData *)data {
+    if (!data || data.length > 1024 * 1024 || TXFirmwareValidationError(data)) return nil;
+    NSString *digest = TXFirmwareSHA256(data);
+    const uint8_t *bytes = data.bytes;
+    NSString *matchedModel = nil;
+    for (NSString *path in KnownFirmwareHashes()) {
+        if (![digest isEqualToString:KnownFirmwareHashes()[path]]) continue;
+        NSString *model = ReviewedModelForPath(path);
+        if (!model || (matchedModel && ![matchedModel isEqualToString:model])) return nil;
+        // PRO and ALTAI releases use the same BL20 ID as Discovery, so their
+        // target must come from the reviewed complete-file digest instead.
+        if ([model isEqualToString:@"TX-500 Discovery"] &&
+            memcmp(bytes + 12, "\xaa\xb4\x1a\xc6", 4) != 0) return nil;
+        if ([model isEqualToString:@"TX-500MP"] &&
+            memcmp(bytes + 12, "\x96\x3b\xcd\xf4", 4) != 0) return nil;
+        matchedModel = model;
+    }
+    return matchedModel;
+}
+
++ (NSString *)preflightErrorForFirmwareData:(NSData *)data
+                          declaredRadioModel:(NSString *)declaredRadioModel {
+    NSString *model = [self reviewedModelForFirmwareData:data];
+    if (!model) return @"Firmware is not a reviewed official release or its BL20 model ID is inconsistent. No data was sent to the radio.";
+    if (![model isEqualToString:declaredRadioModel])
+        return [NSString stringWithFormat:@"Model mismatch: this firmware targets %@, but the radio model was declared as %@. No data was sent to the radio.",
+                model, declaredRadioModel.length ? declaredRadioModel : @"not selected"];
+    return nil;
+}
 
 + (instancetype)sharedCatalog {
     static Lab599FirmwareCatalog *shared = nil;

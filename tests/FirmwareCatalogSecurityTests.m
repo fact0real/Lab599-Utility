@@ -1,5 +1,7 @@
 #import <Foundation/Foundation.h>
 #import "Lab599FirmwareCatalog.h"
+#include <stdint.h>
+#include <string.h>
 
 @interface Lab599FirmwareCatalog (SecurityTest)
 - (NSArray<Lab599FirmwareItem *> *)parseFirmwareItemsFromHTML:(NSString *)html;
@@ -9,7 +11,7 @@ static void Check(BOOL condition, NSString *message) {
     if (!condition) { fprintf(stderr, "FAIL: %s\n", message.UTF8String); exit(1); }
 }
 
-int main(void) {
+int main(int argc, const char *argv[]) {
     @autoreleasepool {
         Lab599FirmwareCatalog *catalog = [Lab599FirmwareCatalog sharedCatalog];
         NSString *html = @"<a href='https://downloads.lab599.com/TX500/mtrx1.29.06.fw'>TX-500PRO Firmware v9.99.99</a>"
@@ -43,6 +45,40 @@ int main(void) {
         while (!rejected && [deadline timeIntervalSinceNow] > 0)
             [NSRunLoop.currentRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
         Check(rejected, @"Unknown release reports a rejection");
+
+        Check(argc == 2 || argc == 5, @"Supply Discovery firmware and optionally MP, PRO and ALTAI fixtures");
+        NSData *discovery = [NSData dataWithContentsOfFile:@(argv[1])];
+        Check(discovery.length > 16, @"Reviewed Discovery fixture is available");
+        Check([[Lab599FirmwareCatalog reviewedModelForFirmwareData:discovery] isEqualToString:@"TX-500 Discovery"],
+              @"Complete reviewed firmware identifies its target independently of filename");
+        Check([Lab599FirmwareCatalog preflightErrorForFirmwareData:discovery declaredRadioModel:@"TX-500 Discovery"] == nil,
+              @"Matching declared radio model passes preflight");
+        Check([Lab599FirmwareCatalog preflightErrorForFirmwareData:discovery declaredRadioModel:@"TX-500MP"] != nil,
+              @"Cross-model firmware is hard blocked");
+        Check([Lab599FirmwareCatalog preflightErrorForFirmwareData:discovery declaredRadioModel:nil] != nil,
+              @"No radio model selection is hard blocked");
+        NSMutableData *tampered = [discovery mutableCopy];
+        ((uint8_t *)tampered.mutableBytes)[32] ^= 1;
+        Check([Lab599FirmwareCatalog reviewedModelForFirmwareData:tampered] == nil,
+              @"Changed payload is rejected even with a valid BL20 header");
+        NSMutableData *wrongHeader = [discovery mutableCopy];
+        memcpy((uint8_t *)wrongHeader.mutableBytes + 12, "\x96\x3b\xcd\xf4", 4);
+        Check([Lab599FirmwareCatalog reviewedModelForFirmwareData:wrongHeader] == nil,
+              @"Changed BL20 model ID is rejected even when the filename is trusted");
+        Check([Lab599FirmwareCatalog reviewedModelForFirmwareData:[discovery subdataWithRange:NSMakeRange(0, 16)]] == nil,
+              @"Header-only firmware is rejected");
+        if (argc == 5) {
+            NSArray<NSString *> *models = @[@"TX-500MP", @"TX-500PRO", @"TX-500PRO ALTAI"];
+            for (NSUInteger index = 0; index < models.count; index++) {
+                NSData *fixture = [NSData dataWithContentsOfFile:@(argv[index + 2])];
+                Check([[Lab599FirmwareCatalog reviewedModelForFirmwareData:fixture] isEqualToString:models[index]],
+                      [NSString stringWithFormat:@"Reviewed %@ firmware identifies its target", models[index]]);
+                Check([Lab599FirmwareCatalog preflightErrorForFirmwareData:fixture declaredRadioModel:models[index]] == nil,
+                      [NSString stringWithFormat:@"Reviewed %@ firmware passes a matching declaration", models[index]]);
+                Check([Lab599FirmwareCatalog preflightErrorForFirmwareData:fixture declaredRadioModel:@"TX-500 Discovery"] != nil,
+                      [NSString stringWithFormat:@"%@ firmware cannot be flashed with a Discovery declaration", models[index]]);
+            }
+        }
         puts("PASS: firmware catalog allows only reviewed releases and rejects forged metadata");
     }
     return 0;

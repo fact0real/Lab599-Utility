@@ -52,9 +52,15 @@ static void Scenario(NSString *scenario) {
     TX500StationCore *core=[TX500StationCore new]; [core selectOwner:@"Station" port:@(path) error:nil];
     NSError *error=nil; BOOL ok=[core tune:14285000 mode:2 owner:@"Station" error:&error];
     @synchronized(commands) { stop=YES; }
-    dispatch_group_wait(group,DISPATCH_TIME_FOREVER); [core suspend:nil]; close(master);
+    dispatch_group_wait(group,DISPATCH_TIME_FOREVER); NSDictionary *lastState=core.snapshot; [core suspend:nil]; close(master);
     BOOL success=[@[@"delayed-band",@"slow-fragmented",@"busy-once"] containsObject:scenario];
     Check(ok==success,[NSString stringWithFormat:@"%@: success=%d error=%@",scenario,ok,error.localizedDescription]);
+    NSUInteger frequencyWrites=0, modeWrites=0;
+    for(NSString *cmd in commands) {
+        if([cmd hasPrefix:@"FA"] && ![cmd isEqual:@"FA;"]) frequencyWrites++;
+        if([cmd hasPrefix:@"MD"] && ![cmd isEqual:@"MD;"]) modeWrites++;
+    }
+    Check(frequencyWrites<=1 && modeWrites<=1,@"A read-back mismatch never resends a setting command");
     for(NSString *cmd in commands) Check(![cmd hasPrefix:@"TX"] && ![cmd hasPrefix:@"RX"] && ![cmd hasPrefix:@"KY"],@"Tuning never keys or dekeys the radio");
     if(success) {
         Check(modeSet-frequencySet>=0.4,@"Mode waits for band change and consecutive frequency readbacks");
@@ -62,7 +68,10 @@ static void Scenario(NSString *scenario) {
         Check(error==nil,@"Transient busy/old status does not leak a success error");
     } else {
         Check(error.localizedDescription.length>0,@"Failure explains what was not verified");
-        if([scenario isEqual:@"mode-ignored"]) Check([error.localizedDescription containsString:@"MD1"] && [error.localizedDescription containsString:@"MD2"],@"Mode mismatch reports observed and requested mode");
+        if([scenario isEqual:@"mode-ignored"]) {
+            Check([error.localizedDescription containsString:@"MD1"] && [error.localizedDescription containsString:@"MD2"],@"Mode mismatch reports observed and requested mode");
+            Check([lastState[@"mode"] integerValue]==1,@"Failed tune retains the radio's last reported mode");
+        }
         else Check(modeSet==0,@"No mode write after failed frequency or initial status");
         if([scenario containsString:@"initial-mode"]) Check([error.localizedDescription containsString:@"MD;"],@"Preflight failure retains the failing CAT query");
     }

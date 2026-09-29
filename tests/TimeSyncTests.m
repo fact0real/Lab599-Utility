@@ -44,8 +44,10 @@ static void Scenario(NSString *name, NSString *reply, BOOL fragmented, BOOL disc
     Check(openpty(&master, &slave, path, NULL, NULL) == 0, @"Create pseudo-terminal");
     TXTimeSyncOptions options = TXDefaultTimeSyncOptions();
     options.settleDelay = 0.01;
-    options.responseTimeout = 0.35;
-    options.writeTimeout = 0.3;
+    // The fragmented success case deliberately starts after the old 100 ms
+    // window. Use the real 2 s response budget there; a 350 ms test-only
+    // budget races the emulator on busy CI hosts. Keep failures short.
+    options.responseTimeout = fragmented ? TXDefaultTimeSyncOptions().responseTimeout : 0.35;
     __block BOOL settingsOK = NO, closed = NO, exactCommand = NO, exactQuery = NO, noExtra = NO;
     __block double queryDelay = 0;
     __block NSUInteger clockSamples = 0;
@@ -67,7 +69,9 @@ static void Scenario(NSString *name, NSString *reply, BOOL fragmented, BOOL disc
             exactQuery = [query isEqual:ASCII(@"TM;")];
             if (disconnect) { close(master); closed = YES; }
             else {
-                if (fragmented) usleep(120000);
+                // Arrive after both the historical 100 ms window and the
+                // former 350 ms test timeout, then drip-feed the frame.
+                if (fragmented) usleep(450000);
                 if (!echoOnly) Reply(master, reply, fragmented);
                 noExtra = ReadExact(master, 1, 0.45).length == 0;
             }

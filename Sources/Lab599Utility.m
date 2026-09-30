@@ -9,6 +9,7 @@
 #import "Lab599ToolsController.h"
 #import "Lab599DriverController.h"
 #import "Lab599DocsController.h"
+#import "Lab599HelpController.h"
 #import "Lab599FeedbackController.h"
 #import "TX500ScreenCaptureController.h"
 #import "TX500CWStationController.h"
@@ -260,6 +261,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 @property(nonatomic, strong) Lab599ToolsController *tools;
 @property(nonatomic, strong) Lab599DriverController *driverController;
 @property(nonatomic, strong) Lab599DocsController *docsController;
+@property(nonatomic, strong) Lab599HelpController *helpController;
 @property(nonatomic, strong) Lab599FeedbackController *feedbackController;
 @property(nonatomic, strong) TX500ScreenCaptureController *screenController;
 @property(nonatomic, strong) TX500CWStationController *cwStationController;
@@ -623,6 +625,9 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     NSMenuItem *helpItem = [[NSMenuItem alloc] initWithTitle:@"Help" action:NULL keyEquivalent:@""];
     [menu addItem:helpItem];
     NSMenu *helpMenu = [[NSMenu alloc] initWithTitle:@"Help"];
+    NSMenuItem *openHelp = [helpMenu addItemWithTitle:@"Lab599 Utility Help" action:@selector(selectHelpTab:) keyEquivalent:@"?"];
+    openHelp.target = self;
+    [helpMenu addItem:[NSMenuItem separatorItem]];
     NSMenuItem *helpAbout = [helpMenu addItemWithTitle:@"About Lab599 Utility" action:@selector(showAboutWindow:) keyEquivalent:@""];
     helpAbout.target = self;
     [helpMenu addItem:[NSMenuItem separatorItem]];
@@ -638,7 +643,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 
     // Setup legacy operation picker for CLI arguments and underlying state
     self.operationPicker = [NSSegmentedControl segmentedControlWithLabels:@[
-        @"Firmware Update", @"Time Sync", @"Telemetry", @"Radio Screen", @"CAT Studio", @"Settings", @"Memory", @"CAT Connection", @"Documentation", @"Feedback & Suggestion", @"CW Station", @"Live Audio (AD-508)", @"FT8 / FT4 Digital", @"Logbook & Cloud", @"Voice Keyer", @"Station", @"DX Cluster"
+        @"Firmware Update", @"Time Sync", @"Telemetry", @"Radio Screen", @"CAT Studio", @"Settings", @"Memory", @"CAT Connection", @"Documentation", @"Feedback & Suggestion", @"CW Station", @"Live Audio (AD-508)", @"FT8 / FT4 Digital", @"Logbook & Cloud", @"Voice Keyer", @"Station", @"DX Cluster", @"Help"
     ] trackingMode:NSSegmentSwitchTrackingSelectOne target:self action:@selector(operationChanged:)];
     self.operationPicker.selectedSegment = 0;
     self.operationPicker.hidden = YES;
@@ -737,6 +742,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     TX500SidebarButton *btnMemory = [[TX500SidebarButton alloc] initWithTitle:@"Memory" iconName:@"memorychip" tag:6 target:self action:@selector(sidebarItemClicked:)];
     TX500SidebarButton *btnDriver = [[TX500SidebarButton alloc] initWithTitle:@"CAT Connection" iconName:@"cable.connector" tag:7 target:self action:@selector(sidebarItemClicked:)];
     TX500SidebarButton *btnDocs = [[TX500SidebarButton alloc] initWithTitle:@"Documentation" iconName:@"doc.text" tag:8 target:self action:@selector(sidebarItemClicked:)];
+    TX500SidebarButton *btnHelp = [[TX500SidebarButton alloc] initWithTitle:@"Help" iconName:@"questionmark.circle" tag:17 target:self action:@selector(sidebarItemClicked:)];
     TX500SidebarButton *btnFeedback = [[TX500SidebarButton alloc] initWithTitle:@"Feedback" iconName:@"bubble.left.and.bubble.right" tag:9 target:self action:@selector(sidebarItemClicked:)];
     TX500SidebarButton *btnCW = [[TX500SidebarButton alloc] initWithTitle:@"CW Station" iconName:@"waveform" tag:10 target:self action:@selector(sidebarItemClicked:)];
     TX500SidebarButton *btnAudio = [[TX500SidebarButton alloc] initWithTitle:@"Live Audio (AD-508)" iconName:@"headphones" tag:11 target:self action:@selector(sidebarItemClicked:)];
@@ -748,7 +754,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     TX500SidebarButton *btnVoice = [[TX500SidebarButton alloc] initWithTitle:@"Voice Keyer" iconName:@"mic.badge.plus" tag:14 target:self action:@selector(sidebarItemClicked:)];
 
     [self.sidebarItems addObjectsFromArray:@[
-        btnFw, btnTime, btnTelemetry, btnScreen, btnCat, btnSettings, btnMemory, btnDriver, btnDocs, btnFeedback, btnCW, btnAudio, btnFT8, btnLogbook, btnVoice, btnStation, btnCluster
+        btnFw, btnTime, btnTelemetry, btnScreen, btnCat, btnSettings, btnMemory, btnDriver, btnDocs, btnHelp, btnFeedback, btnCW, btnAudio, btnFT8, btnLogbook, btnVoice, btnStation, btnCluster
     ]];
 
     for (TX500SidebarButton *b in self.sidebarItems) {
@@ -779,7 +785,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         makeSectionHeader(@"FIRMWARE & CONNECTION"),
         btnFw, btnDriver,
         makeSectionHeader(@"COMMUNITY"),
-        btnDocs, btnFeedback,
+        btnHelp, btnDocs, btnFeedback,
         sidebarSpacer,
         hDivider,
         versionLabel
@@ -1204,6 +1210,10 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     self.docsController.activityChanged = ^(BOOL busy) { [weakSelf setToolsBusy:busy]; };
     self.docsController.view.hidden = YES;
 
+    // Offline, bundled user guide with screenshots.
+    self.helpController = [Lab599HelpController new];
+    self.helpController.view.hidden = YES;
+
     // Feedback & Suggestion Controller
     self.feedbackController = [Lab599FeedbackController new];
     self.feedbackController.window = self.window;
@@ -1341,7 +1351,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         fileRow, self.radioPreviewBox, self.powerSafetyBox, timeRow,
         self.audioMonitorController.view, self.cwStationController.view, self.ft8StationController.view, self.voiceKeyerController.view, self.stationController.view, self.clusterController.view, self.logbookController.view, self.telemetryController.view, self.screenController.view,
         self.tools.view,
-        self.driverController.view, self.docsController.view, self.feedbackController.view,
+        self.driverController.view, self.docsController.view, self.helpController.view, self.feedbackController.view,
         self.progressBar, self.statusLabel,
         self.actionRow,
         self.cardSpacer
@@ -1375,6 +1385,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         self.tools.view,
         self.driverController.view,
         self.docsController.view,
+        self.helpController.view,
         self.feedbackController.view,
         self.progressBar,
         self.statusLabel
@@ -1579,6 +1590,14 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         self.operationPicker.selectedSegment = 5;
         [self operationChanged:self.operationPicker];
     }
+    if ([[NSProcessInfo processInfo].arguments containsObject:@"--memory"]) {
+        self.operationPicker.selectedSegment = 6;
+        [self operationChanged:self.operationPicker];
+    }
+    if ([[NSProcessInfo processInfo].arguments containsObject:@"--time-sync"]) {
+        self.operationPicker.selectedSegment = 1;
+        [self operationChanged:self.operationPicker];
+    }
     if ([[NSProcessInfo processInfo].arguments containsObject:@"--cloud-settings"]) {
         [self showPreferencesWindow:nil];
         [self selectPreferencesTab:1];
@@ -1593,6 +1612,14 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     if ([[NSProcessInfo processInfo].arguments containsObject:@"--docs"]) {
         self.operationPicker.selectedSegment = 8;
         [self operationChanged:self.operationPicker];
+    }
+    if ([[NSProcessInfo processInfo].arguments containsObject:@"--help"]) {
+        self.operationPicker.selectedSegment = 17;
+        [self operationChanged:self.operationPicker];
+        NSUInteger topicIndex = [[NSProcessInfo processInfo].arguments indexOfObject:@"--help-topic"];
+        if (topicIndex != NSNotFound && topicIndex + 1 < [NSProcessInfo processInfo].arguments.count) {
+            [self.helpController showTopic:[NSProcessInfo processInfo].arguments[topicIndex + 1]];
+        }
     }
     if ([[NSProcessInfo processInfo].arguments containsObject:@"--cat-connection"]) {
         self.operationPicker.selectedSegment = 7;
@@ -1813,6 +1840,12 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 - (void)selectFeedbackTab:(id)sender {
     (void)sender;
     self.operationPicker.selectedSegment = 9;
+    [self operationChanged:self.operationPicker];
+}
+
+- (void)selectHelpTab:(id)sender {
+    (void)sender;
+    self.operationPicker.selectedSegment = 17;
     [self operationChanged:self.operationPicker];
 }
 
@@ -2061,12 +2094,13 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     BOOL isVoice = (operation == 14);
     BOOL isStation=(operation==15);
     BOOL isCluster=(operation==16);
+    BOOL isHelp=(operation==17);
     BOOL leavingVoice=!isVoice && self.voiceOwnsRadio;
     BOOL exclusive=isFW || isSync || isScreen || isTools;
     NSString *desired=isVoice?@"Voice":isCWStation?@"CW":isFT8?@"Digital":isAudio?@"Audio":@"Station";
     // Station / logbook / telemetry may inspect a running digital station, but
     // cannot retune it. Switching operating modes explicitly stops the old one.
-    BOOL passive=isCluster || isStation || isLogbook || isTelemetry || isDocs || isFeedback || isDriver;
+    BOOL passive=isCluster || isStation || isLogbook || isTelemetry || isDocs || isFeedback || isDriver || isHelp;
     if(leavingVoice && ![self.voiceKeyerController deactivate]) { self.operationPicker.selectedSegment=14; return; }
     if(exclusive || (!passive && ![self.stationCore.owner isEqual:desired])) {
         [self.ft8StationController stopStation]; [self.cwStationController stopStation];
@@ -2112,7 +2146,8 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
             @13: @"Logbook & Cloud",
             @14: @"Voice Keyer · Auto-CQ & Live Replies",
             @15: @"Station · Frequencies, Profiles & Controls",
-            @16: @"DX Cluster · Discovery & Contact History"
+            @16: @"DX Cluster · Discovery & Contact History",
+            @17: @"Help · Using Lab599 Utility"
         };
     });
     self.sectionTitleLabel.stringValue = titles[@(operation)] ?: @"Lab599 Utility";
@@ -2138,7 +2173,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     (void)ft8Active;
     [self updateConnectionStatusBar];
 
-    self.cardSpacer.hidden = isCluster || isStation || isVoice || isFT8 || isCWStation || isAudio || isLogbook || isTelemetry || isScreen;
+    self.cardSpacer.hidden = isCluster || isStation || isVoice || isFT8 || isCWStation || isAudio || isLogbook || isTelemetry || isScreen || isHelp;
 
     self.telemetryController.view.hidden = !isTelemetry;
     self.screenController.view.hidden = !isScreen;
@@ -2241,6 +2276,9 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     self.docsController.view.hidden = !isDocs;
     if (isDocs) [self.docsController refreshLocalAvailability];
 
+    self.helpController.view.hidden = !isHelp;
+    if (isHelp) [self.helpController loadHelpIfNeeded];
+
     self.feedbackController.view.hidden = !isFeedback;
     if (isFeedback) [self.feedbackController refreshDiagnostics];
 
@@ -2256,8 +2294,8 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     self.updateButton.keyEquivalent = isFW ? @"\r" : @"";
     self.syncButton.keyEquivalent = isSync ? @"\r" : @"";
     self.progressBar.doubleValue = 0;
-    self.progressBar.hidden = (isCluster || isStation || isVoice || isTelemetry || isScreen || isFeedback || isDriver || isCWStation || isAudio || isFT8 || isLogbook);
-    self.statusLabel.hidden = (isCluster || isStation || isVoice || isTelemetry || isScreen || isFeedback || isDriver || isCWStation || isAudio || isFT8 || isLogbook);
+    self.progressBar.hidden = (isCluster || isStation || isVoice || isTelemetry || isScreen || isFeedback || isDriver || isCWStation || isAudio || isFT8 || isLogbook || isHelp);
+    self.statusLabel.hidden = (isCluster || isStation || isVoice || isTelemetry || isScreen || isFeedback || isDriver || isCWStation || isAudio || isFT8 || isLogbook || isHelp);
 
     CGFloat availW = self.mainScrollView.contentView.bounds.size.width;
     self.instructions.preferredMaxLayoutWidth = (availW > 300.0) ? (availW - 4.0) : 720.0;
@@ -2289,6 +2327,8 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     } else if (isDocs) {
         self.instructions.stringValue = @"Official Lab599 product documentation, user manuals, firmware releases, utilities, and drivers. Download directly or open local copies.";
         self.statusLabel.stringValue = @"Browse and download official Lab599 resources.";
+    } else if (isHelp) {
+        self.instructions.stringValue = @"An offline guide to setup, CAT, digital operation, firmware updates, logging, and troubleshooting. Scroll inside the guide to read each section.";
     } else if (isFeedback) {
         self.instructions.stringValue = @"Share your feedback, feature requests, or report bugs directly to GitHub Issues. Callsign and contact info are saved locally for convenience.";
         self.statusLabel.stringValue = @"Ready to prepare and submit feedback to GitHub Issues.";

@@ -25,6 +25,8 @@
 		10000033 /* Lab599ToolsController.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000033 /* Lab599ToolsController.m */; };
 		10000034 /* Lab599DriverController.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000034 /* Lab599DriverController.m */; };
 		10000035 /* Lab599DocsController.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000035 /* Lab599DocsController.m */; };
+		10000310 /* Lab599HelpController.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000310 /* Lab599HelpController.m */; };
+		10000312 /* Help in Resources */ = {isa = PBXBuildFile; fileRef = 20000312 /* Help */; };
 		10000036 /* TX500ProfilesAndBackup.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000036 /* TX500ProfilesAndBackup.m */; };
 		10000037 /* TXGaugeView.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000037 /* TXGaugeView.m */; };
 		10000038 /* TX500TelemetryEngine.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000038 /* TX500TelemetryEngine.m */; };
@@ -110,6 +112,9 @@
 		20000033 /* Lab599ToolsController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = Lab599ToolsController.m; sourceTree = "<group>"; };
 		20000034 /* Lab599DriverController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = Lab599DriverController.m; sourceTree = "<group>"; };
 		20000035 /* Lab599DocsController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = Lab599DocsController.m; sourceTree = "<group>"; };
+		20000310 /* Lab599HelpController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = Lab599HelpController.m; sourceTree = "<group>"; };
+		20000311 /* Lab599HelpController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Lab599HelpController.h; sourceTree = "<group>"; };
+		20000312 /* Help */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Help; sourceTree = "<group>"; };
 		20000036 /* TX500ProfilesAndBackup.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TX500ProfilesAndBackup.m; sourceTree = "<group>"; };
 		20000037 /* TXGaugeView.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TXGaugeView.m; sourceTree = "<group>"; };
 		20000038 /* TX500TelemetryEngine.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TX500TelemetryEngine.m; sourceTree = "<group>"; };
@@ -271,6 +276,7 @@
 				20000033 /* Lab599ToolsController.m */,
 				20000034 /* Lab599DriverController.m */,
 				20000035 /* Lab599DocsController.m */,
+				20000310 /* Lab599HelpController.m */,
 				20000037 /* TXGaugeView.m */,
 				20000038 /* TX500TelemetryEngine.m */,
 				20000039 /* Lab599TelemetryController.m */,
@@ -336,6 +342,7 @@
 				20000043 /* Lab599ToolsController.h */,
 				20000044 /* Lab599DriverController.h */,
 				20000045 /* Lab599DocsController.h */,
+				20000311 /* Lab599HelpController.h */,
 				20000047 /* TXGaugeView.h */,
 				20000048 /* TX500TelemetryEngine.h */,
 				20000049 /* Lab599TelemetryController.h */,
@@ -378,6 +385,7 @@
 				2000000B /* tx500_pro.png */,
 				2000000C /* tx500_pro_altai.png */,
 				200000D0 /* Manual */,
+				20000312 /* Help */,
 				20000020 /* Info.plist */,
 			);
 			path = Resources;
@@ -470,6 +478,7 @@
 				1000000B /* tx500_pro.png in Resources */,
 				1000000C /* tx500_pro_altai.png in Resources */,
 				100000D0 /* Manual in Resources */,
+				10000312 /* Help in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -502,6 +511,7 @@
 				10000033 /* Lab599ToolsController.m in Sources */,
 				10000034 /* Lab599DriverController.m in Sources */,
 				10000035 /* Lab599DocsController.m in Sources */,
+				10000310 /* Lab599HelpController.m in Sources */,
 				10000037 /* TXGaugeView.m in Sources */,
 				10000038 /* TX500TelemetryEngine.m in Sources */,
 				10000039 /* Lab599TelemetryController.m in Sources */,
@@ -700,7 +710,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 275;
+				CURRENT_PROJECT_VERSION = 276;
 				DEAD_CODE_STRIPPING = YES;
 				INFOPLIST_FILE = Resources/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Lab599 Utility";
@@ -709,7 +719,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
-				MARKETING_VERSION = 2.269;
+				MARKETING_VERSION = 2.270;
 				PRODUCT_BUNDLE_IDENTIFIER = "ir.factoreal.lab599-utility";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 			};
@@ -722,7 +732,7 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 275;
+				CURRENT_PROJECT_VERSION = 276;
 				DEAD_CODE_STRIPPING = YES;
 				INFOPLIST_FILE = Resources/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Lab599 Utility";
@@ -731,7 +741,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
-				MARKETING_VERSION = 2.269;
+				MARKETING_VERSION = 2.270;
 				PRODUCT_BUNDLE_IDENTIFIER = "ir.factoreal.lab599-utility";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 			};

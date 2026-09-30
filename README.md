@@ -2,13 +2,13 @@
 
 A native macOS application for the Lab599 TX-500 family of transceivers. It includes a Station workspace, DX Cluster, FT8/FT4 and CW operation, Voice Keyer, contact logbook, firmware updates, live telemetry, radio screen capture, time sync, CAT diagnostics, settings and memory management. Developed by **EP2AES (factoreal)**.
 
-**Latest published release: v2.269 (Build 275) · macOS 12+ · Apple Silicon and Intel · English interface · Persian guide included**
+**Latest published release: v2.270 (Build 276) · macOS 12+ · Apple Silicon and Intel · English interface · Persian guide included**
 
-[Download v2.269](https://github.com/fact0real/Lab599-Utility/releases/tag/2.269) · [راهنمای فارسی](QUICKSTART-FA.md) · [Build instructions](UPDATER-README.md) · [Report an issue](https://github.com/fact0real/Lab599-Utility/issues/new)
+[Download v2.270](https://github.com/fact0real/Lab599-Utility/releases/tag/2.270) · [In-app Help guide](Resources/Help/index.html) · [راهنمای فارسی](QUICKSTART-FA.md) · [Build instructions](UPDATER-README.md) · [Report an issue](https://github.com/fact0real/Lab599-Utility/issues/new)
 
 ## Download and install
 
-Download `Lab599-Utility-v2.269-macOS-universal.zip` from the [v2.269 release](https://github.com/fact0real/Lab599-Utility/releases/tag/2.269). Extract the ZIP and move `Lab599 Utility.app` to `/Applications`. The ZIP contains the app, English and Persian guides, and license notices; manufacturer firmware is not included.
+Download `Lab599-Utility-v2.270-macOS-universal.zip` from the [v2.270 release](https://github.com/fact0real/Lab599-Utility/releases/tag/2.270). Extract the ZIP and move `Lab599 Utility.app` to `/Applications`. The ZIP contains the app, offline illustrated Help, English and Persian guides, and license notices; manufacturer firmware is not included.
 
 Verify the download before opening the app:
 
@@ -17,6 +17,12 @@ shasum -a 256 Lab599-Utility-v2.268-macOS-universal.zip
 ```
 
 Compare the result with the `SHA256SUMS.txt` asset on the release page. The app is ad-hoc signed, **not Apple notarized**. If macOS blocks the first launch, select this app in **System Settings → Privacy & Security → Open Anyway** after verifying the checksum.
+
+## What's new in v2.270
+
+- An offline **Help** page is available from the sidebar and Help menu. It includes a topic index, step-by-step instructions, troubleshooting, and 15 genuine screenshots from disconnected, Demo or Simulation app views.
+- The guide covers CAT setup, Station, FT8/FT4, CW, Voice Keyer, Live Audio, DX Cluster, Logbook & Cloud, Radio Screen, Telemetry, Settings, Memory, Time Sync, firmware updates, Documentation and Feedback. Screenshots are labeled when data are simulated.
+- The bundled guide uses no scripts or remote assets. It opens in a local WebKit view; external links open in the browser only when clicked.
 
 ## What's new in v2.269
 
@@ -98,6 +104,7 @@ The updater accepts only firmware whose complete SHA-256 matches a reviewed offi
 | Settings | Read, save, open and restore the full 1024-byte `.set` backup; read-back comparison after every write | Normal operation, CAT 9600 |
 | Memory | Read, edit, save, open and write 100 channels using the original 600-byte `.mem` format; built-in operating profiles (SOTA/POTA, FT8/JS8Call, Contest); CSV import/export; read-back comparison after every write; file editing without a connected radio | Normal operation, CAT 9600 |
 | CAT Connection | Lists possible macOS serial ports and gives CAT setup and VCP troubleshooting guidance; radio identity is checked in CAT Studio | CAT adapter for live checks |
+| Help | Offline illustrated guide to setup, operation, safety checks and troubleshooting | None |
 | Documentation | Embedded Lab599 manuals, schematics and firmware download library | — |
 | Feedback & Suggestion | Structured bug report and feature request form; auto-collects macOS version and hardware model (`sysctl hw.model`); generates a pre-filled GitHub issue URL or copies Markdown to clipboard | — |
 

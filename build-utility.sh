@@ -9,6 +9,7 @@ mkdir -p build "$APP_NAME/Contents/MacOS" "$APP_NAME/Contents/Resources"
 test -s Resources/AppIcon.icns || test -s assets/AppIcon.icns || { echo "Missing app icon. Run sh build-icon.sh first." >&2; exit 1; }
 
 if [ "${1:-}" = "--test" ] || [ "${1:-}" = "--test-only" ]; then
+    sh tests/verify-help-guide.sh
     sh tests/run-dxcluster-tests.sh
     sh tests/run-station-tests.sh
     sh tests/run-station-tuning-tests.sh
@@ -137,7 +138,7 @@ clang -O2 -Wall -Wextra -Wno-unused-parameter -Werror -fobjc-arc \
     -arch arm64 -arch x86_64 -mmacosx-version-min=12.0 \
     -framework Cocoa -framework Network -framework UniformTypeIdentifiers -framework AVFoundation -framework CoreAudio -framework AudioToolbox -framework WebKit -framework Security -lsqlite3 \
     -IHeaders -ISources -IHeaders/cft8 -ISources/cft8 \
-    Sources/Lab599Utility.m Sources/Lab599FirmwareCatalog.m Sources/TX500Transfer.m Sources/TX500TimeSync.m Sources/TX500TimeDiscipline.m Sources/Lab599SerialPort.m Sources/TX500CATTest.m Sources/TX500Configuration.m Sources/TX500ProfilesAndBackup.m Sources/TX500SettingsModel.m Sources/TX500ScreenModel.m Sources/TX500ScreenRenderer.m Sources/TX500ScreenCaptureController.m Sources/Lab599ToolsController.m Sources/Lab599DriverController.m Sources/Lab599DocsController.m Sources/TXGaugeView.m Sources/TX500TelemetryEngine.m Sources/Lab599TelemetryController.m Sources/Lab599FeedbackController.m Sources/TX500CWAudioDecoder.m Sources/TX500CWKeyer.m Sources/TX500CWQSOAssistant.m Sources/TX500CWSpectrumView.m Sources/TX500CWStationController.m Sources/TX500AudioEngine.m Sources/TX500AudioVisualizerView.m Sources/TX500AudioMonitorController.m \
+    Sources/Lab599Utility.m Sources/Lab599FirmwareCatalog.m Sources/TX500Transfer.m Sources/TX500TimeSync.m Sources/TX500TimeDiscipline.m Sources/Lab599SerialPort.m Sources/TX500CATTest.m Sources/TX500Configuration.m Sources/TX500ProfilesAndBackup.m Sources/TX500SettingsModel.m Sources/TX500ScreenModel.m Sources/TX500ScreenRenderer.m Sources/TX500ScreenCaptureController.m Sources/Lab599ToolsController.m Sources/Lab599DriverController.m Sources/Lab599DocsController.m Sources/Lab599HelpController.m Sources/TXGaugeView.m Sources/TX500TelemetryEngine.m Sources/Lab599TelemetryController.m Sources/Lab599FeedbackController.m Sources/TX500CWAudioDecoder.m Sources/TX500CWKeyer.m Sources/TX500CWQSOAssistant.m Sources/TX500CWSpectrumView.m Sources/TX500CWStationController.m Sources/TX500AudioEngine.m Sources/TX500AudioVisualizerView.m Sources/TX500AudioMonitorController.m \
     Sources/TX500FT8Message.m Sources/TX500FT8AudioEngine.m Sources/TX500FT8AutoEngine.m Sources/TX500FT8WaterfallView.m Sources/TX500FT8StationController.m \
     Sources/TX500LogbookManager.m Sources/TX500CallsignLookupService.m Sources/TX500CloudSyncEngine.m Sources/TX500WebAuthenticatorController.m Sources/TX500CloudSettingsController.m Sources/TX500LogbookController.m \
     Sources/TX500DXCluster.m Sources/TX500DXClusterController.m \
@@ -154,6 +155,8 @@ clang -O2 -Wall -Wextra -Wno-unused-parameter -Werror -fobjc-arc \
 /bin/cp Resources/tx500_pro.png "$APP_NAME/Contents/Resources/tx500_pro.png"
 /bin/cp Resources/tx500_pro_altai.png "$APP_NAME/Contents/Resources/tx500_pro_altai.png"
 /bin/cp Resources/lab599_logo.png "$APP_NAME/Contents/Resources/lab599_logo.png"
+/bin/rm -rf "$APP_NAME/Contents/Resources/Help"
+/usr/bin/ditto --norsrc Resources/Help "$APP_NAME/Contents/Resources/Help"
 # Remove the old bundled D2XX package when rebuilding an existing app bundle.
 /bin/rm -rf "$APP_NAME/Contents/Resources/ftdi"
 # The retired personal FT8 PDF incorrectly required D2XX for serial-port apps.

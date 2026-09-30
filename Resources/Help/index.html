@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src file:; style-src 'unsafe-inline'; connect-src 'none'; script-src 'none'">
+  <title>Lab599 Utility Help</title>
+  <style>
+    :root { color-scheme: light dark; --ink:#202833; --muted:#576578; --line:#d7e0ea; --card:#fff; --bg:#f4f7fa; --accent:#1859a7; --soft:#eaf3ff; --warn:#fff6dc; }
+    @media (prefers-color-scheme: dark) { :root { --ink:#e8edf5; --muted:#adbacb; --line:#3d4a5c; --card:#222b38; --bg:#151b24; --accent:#8bbdff; --soft:#263b56; --warn:#413722; } }
+    html { scroll-behavior:smooth; }
+    body { margin:0; padding:0 24px 56px; background:var(--bg); color:var(--ink); font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    main { max-width:960px; margin:auto; }
+    h1 { font-size:32px; line-height:1.18; margin:10px 0 10px; letter-spacing:-.02em; }
+    h2 { font-size:23px; line-height:1.25; margin:0 0 10px; }
+    h3 { font-size:17px; margin:20px 0 5px; }
+    p, ol, ul { margin:7px 0 13px; }
+    li { margin:5px 0; }
+    a { color:var(--accent); text-decoration-thickness:1px; text-underline-offset:3px; }
+    a:focus-visible { outline:2px solid var(--accent); outline-offset:3px; border-radius:3px; }
+    .eyebrow { margin-top:26px; color:var(--accent); font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.12em; }
+    .lead { font-size:17px; color:var(--muted); max-width:780px; }
+    .card, section { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:22px 26px; margin-top:20px; }
+    .toc { display:grid; grid-template-columns:repeat(auto-fit,minmax(185px,1fr)); gap:4px 20px; padding-left:20px; }
+    .toc li { margin:3px 0; }
+    .note { background:var(--soft); border-left:4px solid var(--accent); padding:12px 15px; border-radius:5px; margin:15px 0; }
+    .caution { background:var(--warn); border-left:4px solid #d29015; padding:12px 15px; border-radius:5px; margin:15px 0; }
+    figure { margin:20px 0 8px; }
+    figure img { display:block; width:100%; height:auto; border:1px solid var(--line); border-radius:9px; background:#fff; }
+    figcaption { color:var(--muted); font-size:13px; margin-top:6px; }
+    code { font: .92em ui-monospace,SFMono-Regular,Menlo,monospace; background:var(--soft); padding:1px 4px; border-radius:4px; }
+    table { border-collapse:collapse; width:100%; margin:15px 0; }
+    th, td { text-align:left; vertical-align:top; border-bottom:1px solid var(--line); padding:9px 12px 9px 0; }
+    th { font-size:13px; color:var(--muted); }
+    .back { display:inline-block; margin-top:10px; font-size:13px; }
+    @media (max-width:650px) { body { padding:0 12px 35px; } .card, section { padding:18px; } h1 { font-size:27px; } }
+  </style>
+</head>
+<body>
+<main id="top">
+  <p class="eyebrow">Offline user guide</p>
+  <h1>Lab599 Utility Help</h1>
+  <p class="lead">A practical tour of the macOS app, from connecting a TX-500 to operating digital modes and updating firmware. The screenshots show the app with no physical radio connected; demo and simulation displays are labeled.</p>
+
+  <nav class="card" aria-label="Guide contents">
+    <h2>Jump to a topic</h2>
+    <ol class="toc">
+      <li><a href="#first-steps">First steps</a></li>
+      <li><a href="#cat">CAT connection</a></li>
+      <li><a href="#station">Station workspace</a></li>
+      <li><a href="#digital">FT8 / FT4</a></li>
+      <li><a href="#cw">CW Station</a></li>
+      <li><a href="#voice">Voice Keyer</a></li>
+      <li><a href="#audio">Live Audio</a></li>
+      <li><a href="#logbook">Logbook & Cloud</a></li>
+      <li><a href="#cluster">DX Cluster</a></li>
+      <li><a href="#radio-view">Screen & Telemetry</a></li>
+      <li><a href="#config">Settings & Memory</a></li>
+      <li><a href="#time">Time Sync</a></li>
+      <li><a href="#firmware">Firmware Update</a></li>
+      <li><a href="#resources">Docs & Feedback</a></li>
+      <li><a href="#troubleshooting">Troubleshooting</a></li>
+    </ol>
+  </nav>
+
+  <section id="first-steps">
+    <h2>1. First steps</h2>
+    <ol>
+      <li>Connect the Lab599 CAT-USB adapter to the radio and Mac. Turn the radio on normally for CAT tasks.</li>
+      <li>Choose the adapter's <code>/dev/cu.*</code> port in the top bar. Use the refresh icon after connecting a cable.</li>
+      <li>Set the radio's CAT protocol to <strong>LAB599</strong> at <strong>9600 baud, 8N1</strong>. Menu numbers vary by model and firmware.</li>
+      <li>Open <strong>CAT Studio</strong> and use <strong>Read All</strong> to verify that the selected port actually talks to your radio.</li>
+      <li>For FT8/FT4, CW decoding, Voice Keyer or Live Audio, connect and select a separate audio interface such as AD-508. The CAT cable does not carry audio.</li>
+    </ol>
+    <p>The sidebar opens each workspace. The top bar shows connection state and port selection. <strong>Console</strong> opens diagnostic messages; <strong>Field Mode</strong> changes the display for outdoor use. A listed port or a demo screen is not proof of a live radio connection.</p>
+    <div class="note"><strong>Before transmitting:</strong> confirm the radio display, frequency, mode, audio routing, power level and antenna. Simulation and Demo Mode do not transmit RF.</div>
+    <a class="back" href="#top">Back to contents ↑</a>
+  </section>
+
+  <section id="cat">
+    <h2>2. CAT connection and diagnostics</h2>
+    <p>Open <strong>CAT Connection</strong> if the serial port is missing. It shows candidate ports and links to FTDI VCP guidance. Lab599 has shipped FT232 and PL2303 CAT adapters; the right driver depends on the adapter and macOS. This app uses a macOS serial port, not FTDI's D2XX direct-access API.</p>
+    <p>Once a port appears, choose it in the top bar and open <strong>CAT Studio</strong>. <strong>Read All</strong> checks the radio's identity and state before you try controls. A port name alone does not identify a TX-500. Other radio programs may need to be closed because the CAT port is used exclusively.</p>
+    <figure><img src="images/cat-connection.png" alt="CAT Connection page showing the serial port selector, setup steps and VCP guidance"><figcaption>CAT Connection with no adapter connected. Select a real port, then verify it in CAT Studio.</figcaption></figure>
+    <figure><img src="images/cat-studio.png" alt="CAT Studio controls for reading radio state and testing the CAT connection"><figcaption>CAT Studio. Read before changing radio settings or running macros.</figcaption></figure>
+    <a class="back" href="#top">Back to contents ↑</a>
+  </section>
+
+  <section id="station">
+    <h2>3. Station workspace</h2>
+    <p><strong>Station</strong> keeps your operator profile, local frequency presets, band reference and guarded CAT tuning in one place. Enter your callsign and locator in its preferences before logging or using online services. Applying a preset requests a radio change and checks the read-back; it never starts transmission on its own.</p>
+    <p>Use the controls for the currently connected radio only. If the read-back disagrees with a requested change, stop and inspect the radio rather than assuming it was restored to an earlier state.</p>
+    <figure><img src="images/station.png" alt="Station workspace with operator profile and frequency controls"><figcaption>Station overview. Presets and band references are aids; check the radio itself before TX.</figcaption></figure>
+    <a class="back" href="#top">Back to contents ↑</a>
+  </section>
+
+  <section id="digital">
+    <h2>4. FT8 / FT4 Digital</h2>
+    <ol>
+      <li>Connect CAT and an audio interface, then select the correct audio input and output in the digital workspace.</li>
+      <li>Confirm time synchronization and choose FT8 or FT4 and the intended band or a custom frequency.</li>
+      <li>Start monitoring. Check the receive level and decoded messages before arming transmission.</li>
+      <li>Review the intended message, frequency and radio mode. Enable TX only when you are ready to operate. Watch the radio during the first transmission.</li>
+      <li>Use <strong>Stop</strong> to halt the digital station. If the radio does not confirm a return to RX, follow the on-screen recovery prompt before any new transmission.</li>
+    </ol>
+    <p>Auto QSO/CQ features can sequence messages after you enable them. Simulation lets you explore the interface without CAT or RF output; it is not a hardware test. The waterfall's transmit trace is a preview of generated audio, not an RF power measurement.</p>
+    <figure><img src="images/ft8-simulation.png" alt="FT8 and FT4 digital station shown in simulation mode"><figcaption>Digital workspace in simulation mode. No radio or RF transmission is involved.</figcaption></figure>
+    <a class="back" href="#top">Back to contents ↑</a>
+  </section>
+
+  <section id="cw">
+    <h2>5. CW Station</h2>
+    <p>Select the CAT port for keying and an audio input for decoding. Use the receive display and decoder to check incoming CW; use the keying and QSO controls only after confirming the radio and operating frequency. <strong>Practice Mode</strong> is for learning the interface without a radio.</p>
+    <figure><img src="images/cw.png" alt="CW Station controls and decoder area"><figcaption>CW Station before connecting a radio.</figcaption></figure>
+    <a class="back" href="#top">Back to contents ↑</a>
+  </section>
+
+  <section id="voice">
+    <h2>6. Voice Keyer</h2>
+    <p>Choose an input and output route, record or import a voice clip, then preview it locally. Connect and verify the radio before sending audio. CQ repeat and live microphone reply take control of CAT/PTT while active. <strong>Esc</strong> stops the current keyer operation; check the radio's TX/RX indication afterward.</p>
+    <figure><img src="images/voice.png" alt="Voice Keyer audio routes, clip controls and radio status"><figcaption>Voice Keyer before configuring audio routes and CAT.</figcaption></figure>
+    <a class="back" href="#top">Back to contents ↑</a>
+  </section>
+
+  <section id="audio">
+    <h2>7. Live Audio (AD-508)</h2>
+    <p>Connect the AD-508 audio cable to the radio's REM/DATA port and choose the Mac's input and listening output. Start <strong>Listen Live</strong> to monitor received audio. The spectrum, oscilloscope and level meters help you set an appropriate receive level. Filters and WAV recording operate on the Mac's audio stream.</p>
+    <p>If the desired device is missing, check macOS audio input permissions and the selected device. CAT and audio are separate connections.</p>
+    <figure><img src="images/live-audio.png" alt="Live Audio monitor with device selectors and audio visualizers"><figcaption>Live Audio controls. The illustrated view has no live radio audio.</figcaption></figure>
+    <a class="back" href="#top">Back to contents ↑</a>
+  </section>
+
+  <section id="logbook">
+    <h2>8. Logbook & Cloud</h2>
+    <p>Enter a callsign and QSO details, then save the contact locally. ADIF import/export lets you move log data. Callsign lookup and cloud services such as LoTW and Club Log need network access and their own account settings; they are optional. Saved credentials are protected in macOS Keychain, which may ask for access when you open cloud features.</p>
+    <p>Check every lookup result and QSO field before uploading. A local log entry is not automatically proof that a cloud upload succeeded.</p>
+    <p>Open the <strong>Logbook &amp; Cloud</strong> sidebar page for the contact form and saved-QSO table. The cloud status badges reflect the Mac's configured accounts, so they may differ from one installation to another.</p>
+    <a class="back" href="#top">Back to contents ↑</a>
+  </section>
+
+  <section id="cluster">
+    <h2>9. DX Cluster</h2>
+    <p>Choose a public cluster node and connect to see spots. Filters narrow what you see; selecting a spot can prepare a frequency change or QSO draft. It does not transmit automatically. Public Telnet nodes may carry your callsign in clear text, so do not use a password-protected account on an unencrypted node.</p>
+    <figure><img src="images/dx-cluster-demo.png" alt="DX Cluster view with demonstration spots"><figcaption>DX Cluster demo data. Demo spots are examples, not live reports.</figcaption></figure>
+    <a class="back" href="#top">Back to contents ↑</a>
+  </section>
+
+  <section id="radio-view">
+    <h2>10. Radio Screen and Telemetry</h2>
+    <p><strong>Radio Screen</strong> reads the radio's display over CAT, can refresh it continuously, and saves or copies a screenshot. <strong>Telemetry</strong> shows live CAT measurements and warnings such as high SWR or voltage. Use Demo Mode to learn the panels without hardware. Do not treat demo values as readings from a connected radio.</p>
+    <figure><img src="images/radio-screen-preview.png" alt="Radio Screen page with Live CAT and Demo Sim controls visible"><figcaption>Radio Screen preview while disconnected. Click Demo Sim for simulated motion; Live CAT requires a verified radio connection.</figcaption></figure>
+    <figure><img src="images/telemetry-demo.png" alt="Telemetry gauges shown in Demo Mode"><figcaption>Telemetry in Demo Mode; readings are simulated.</figcaption></figure>
+    <a class="back" href="#top">Back to contents ↑</a>
+  </section>
+
+  <section id="config">
+    <h2>11. Settings and Memory</h2>
+    <p><strong>Settings</strong> can read and save the radio's 1024-byte configuration block. <strong>Memory</strong> manages a 100-channel bank, including local file edits and CSV import/export. Save a backup before writing either one. After a write, the app reads back and compares data; an interrupted or failed write may still have changed part of the radio's state.</p>
+    <p>Memory's built-in profiles are starting points. Check the frequencies, modes and all 100 slots before replacing a bank. Local file editing works without a radio; writing to hardware requires a verified CAT connection.</p>
+    <figure><img src="images/settings.png" alt="Settings backup and restore controls"><figcaption>Settings view. Save a backup before restoring or writing.</figcaption></figure>
+    <figure><img src="images/memory.png" alt="Memory bank editor and channel controls"><figcaption>Memory view before loading a bank. Local file edits do not require a radio.</figcaption></figure>
+    <a class="back" href="#top">Back to contents ↑</a>
+  </section>
+
+  <section id="time">
+    <h2>12. Time Sync</h2>
+    <p>With the radio powered on normally, select the correct CAT port and choose whether the radio should show Mac local time or UTC. Review the clock preview, then use <strong>Synchronize Clock</strong>. The app reads back the radio's clock before reporting success. It maintains its own disciplined UTC clock for digital timing; it does not change the Mac's system clock.</p>
+    <p>If verification fails, inspect the radio's display before trying again: the radio's time may have changed even though the read-back did not match.</p>
+    <figure><img src="images/time-sync.png" alt="Time Sync page with local and UTC choices and clock preview"><figcaption>Time Sync before a radio is connected. Check the selected time format before synchronizing.</figcaption></figure>
+    <a class="back" href="#top">Back to contents ↑</a>
+  </section>
+
+  <section id="firmware">
+    <h2>13. Firmware Update</h2>
+    <div class="caution"><strong>Use stable power and the exact firmware for your radio.</strong> Do not disconnect power or CAT during a transfer. A successful file check does not prove the selected physical radio's exact model after you enter bootloader mode.</div>
+    <ol>
+      <li>Choose a reviewed official <code>.fw</code> file or use <strong>Download from Lab599</strong>. The app checks the entire file against known official hashes.</li>
+      <li>With the radio on normally, CAT set to LAB599 and the correct port selected, click <strong>Verify Radio (CAT)</strong>. A missing or incompatible identity stops the update.</li>
+      <li>Power off and enter the bootloader exactly as your model's manual describes. Wait for “The loader is waiting...” on the radio.</li>
+      <li>Click <strong>Update Firmware</strong> and confirm the model printed on your radio. Keep power and cable connected until transfer and final acknowledgement complete.</li>
+      <li>Restart the radio and check the displayed firmware version.</li>
+    </ol>
+    <p>The CAT check is performed before bootloader mode. Discovery, PRO and ALTAI cannot all be distinguished by CAT ID alone; the operator's model confirmation still matters. No app can guarantee recovery from every interrupted flash.</p>
+    <figure><img src="images/firmware.png" alt="Firmware Update page with file selection and CAT verification controls"><figcaption>Firmware Update before selecting a file. The screenshot does not show a flash in progress.</figcaption></figure>
+    <a class="back" href="#top">Back to contents ↑</a>
+  </section>
+
+  <section id="resources">
+    <h2>14. Documentation and Feedback</h2>
+    <p><strong>Documentation</strong> lists official Lab599 manuals, firmware and other resources. It is a download library; this Help page is the guide to using Lab599 Utility. <strong>Feedback</strong> prepares a GitHub issue with diagnostic details you choose to include. Review the text before submitting so it contains no private data you do not want to share.</p>
+    <figure><img src="images/documentation.png" alt="Documentation library with official Lab599 downloads"><figcaption>Documentation library. Downloaded material is separate from this offline Help guide.</figcaption></figure>
+    <a class="back" href="#top">Back to contents ↑</a>
+  </section>
+
+  <section id="troubleshooting">
+    <h2>15. Troubleshooting</h2>
+    <table>
+      <thead><tr><th>What you see</th><th>What to check</th></tr></thead>
+      <tbody>
+        <tr><td>No CAT port</td><td>Reconnect the adapter, refresh the port list, identify FT232 versus PL2303 in macOS System Information, then follow the compatible macOS VCP/serial driver guidance. D2XX alone is not this app's serial-port driver.</td></tr>
+        <tr><td>Port listed, no CAT reply</td><td>Close other radio apps, check the selected port, cable, radio power, LAB599 CAT protocol and 9600-baud setting. Use CAT Studio Read All.</td></tr>
+        <tr><td>No FT8/CW audio</td><td>Confirm AD-508 or another audio interface, input/output selection, macOS microphone permission, radio DIG/audio settings and levels. CAT and audio are separate.</td></tr>
+        <tr><td>Unexpected TX state</td><td>Use the app's Stop control, then verify the radio's physical TX/RX state. Do not rely only on a software label after a connection failure.</td></tr>
+        <tr><td>Firmware update blocked</td><td>Confirm the official file, selected model and normal-mode CAT identity before entering the loader. Keep the same radio, port and stable power.</td></tr>
+        <tr><td>Keychain prompt</td><td>macOS protects saved cloud credentials separately. A new locally signed build can prompt again when you open Logbook or cloud settings.</td></tr>
+      </tbody>
+    </table>
+    <p>For a reproducible failure, use <strong>Feedback</strong> and include app version, macOS version, radio model and firmware, cable chipset, the exact steps, and the relevant diagnostic log. Never include passwords or private keys.</p>
+    <p>Further reading: <a href="https://lab599.com/downloads/">Lab599 downloads</a> · <a href="https://github.com/fact0real/Lab599-Utility">project source and releases</a>.</p>
+    <a class="back" href="#top">Back to contents ↑</a>
+  </section>
+</main>
+</body>
+</html>

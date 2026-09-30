@@ -2,13 +2,13 @@
 
 A native macOS application for the Lab599 TX-500 family of transceivers. It includes a Station workspace, DX Cluster, FT8/FT4 and CW operation, Voice Keyer, contact logbook, firmware updates, live telemetry, radio screen capture, time sync, CAT diagnostics, settings and memory management. Developed by **EP2AES (factoreal)**.
 
-**Latest published release: v2.268 (Build 274) · macOS 12+ · Apple Silicon and Intel · English interface · Persian guide included**
+**Latest published release: v2.269 (Build 275) · macOS 12+ · Apple Silicon and Intel · English interface · Persian guide included**
 
-[Download v2.268](https://github.com/fact0real/Lab599-Utility/releases/tag/2.268) · [راهنمای فارسی](QUICKSTART-FA.md) · [Build instructions](UPDATER-README.md) · [Report an issue](https://github.com/fact0real/Lab599-Utility/issues/new)
+[Download v2.269](https://github.com/fact0real/Lab599-Utility/releases/tag/2.269) · [راهنمای فارسی](QUICKSTART-FA.md) · [Build instructions](UPDATER-README.md) · [Report an issue](https://github.com/fact0real/Lab599-Utility/issues/new)
 
 ## Download and install
 
-Download `Lab599-Utility-v2.268-macOS-universal.zip` from the [v2.268 release](https://github.com/fact0real/Lab599-Utility/releases/tag/2.268). Extract the ZIP and move `Lab599 Utility.app` to `/Applications`. The ZIP contains the app, English and Persian guides, and license notices; manufacturer firmware is not included.
+Download `Lab599-Utility-v2.269-macOS-universal.zip` from the [v2.269 release](https://github.com/fact0real/Lab599-Utility/releases/tag/2.269). Extract the ZIP and move `Lab599 Utility.app` to `/Applications`. The ZIP contains the app, English and Persian guides, and license notices; manufacturer firmware is not included.
 
 Verify the download before opening the app:
 
@@ -18,11 +18,22 @@ shasum -a 256 Lab599-Utility-v2.268-macOS-universal.zip
 
 Compare the result with the `SHA256SUMS.txt` asset on the release page. The app is ad-hoc signed, **not Apple notarized**. If macOS blocks the first launch, select this app in **System Settings → Privacy & Security → Open Anyway** after verifying the checksum.
 
+## What's new in v2.269
+
+- Clarifies that CAT needs a working macOS USB-to-serial port. macOS may provide one automatically, but some FT232 or PL2303 adapters need a compatible driver; there is no claim that every Mac works without a driver installation.
+- Distinguishes FTDI VCP, which creates a serial port, from D2XX, which this app does not use. The older personal FT8 PDF incorrectly said D2XX was mandatory and is no longer bundled. Use the current in-app CAT Connection guidance and the chip maker's macOS instructions instead.
+
 ## What's new in v2.268
 
 - **CAT Connection** replaces the misleading driver-installation screen. It lists possible macOS serial ports, explains how to check the radio in CAT Studio, and links to official [FTDI VCP guidance](https://ftdichip.com/drivers/vcp-drivers/) when an FTDI adapter appears in USB diagnostics but no serial port is available.
 - Lab599 Utility uses a macOS serial port; the FTDI D2XX direct-access library is not required. The app no longer bundles that library or offers administrator-level install, Gatekeeper override, or broad uninstall actions. Existing macOS drivers are not modified.
 - Model-dependent CAT menu numbering and the distinction between a visible port and a verified radio are now explicit. Related feedback diagnostics no longer claim a D2XX installation is “authorized” merely because a file exists.
+
+### CAT adapter drivers on macOS
+
+For CAT control, the adapter must appear as a working `/dev/cu.*` serial port. macOS may create that port without an extra installation, but this depends on the adapter chipset and macOS setup; some computers require a compatible USB-to-serial driver. Lab599 has shipped both FT232 (blue) and PL2303 (black) CAT adapters. For FT232, check the [FTDI VCP driver guidance](https://ftdichip.com/drivers/vcp-drivers/) if the adapter appears under USB but no serial port appears. For PL2303, use guidance for that adapter from its manufacturer. Identify the chip first; a driver for one chipset does not fix the other.
+
+FTDI [distinguishes VCP from D2XX](https://ftdichip.com/drivers/): VCP exposes a serial port, while D2XX is a direct-access API. This app uses the serial-port path and does not call D2XX. Installing a D2XX library alone does not create the serial port this app needs. The [Lab599 manual](https://downloads.lab599.com/TX500/Lab599-TX500-User-Manual-EN-v1.12.08-04.2022.pdf) says to install a driver manually *if the OS does not install one automatically*; the [current Lab599 downloads page](https://lab599.com/downloads/) labels its FTDI and PL2303 driver packages for Windows. A visible port is only a first check: verify CAT communication in CAT Studio. Digital operation also needs an audio interface, appropriate radio settings, and working audio routing. We have not validated every macOS release and cable combination.
 
 ## What's new in v2.267
 

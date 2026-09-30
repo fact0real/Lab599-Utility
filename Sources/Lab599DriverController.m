@@ -85,7 +85,7 @@ static NSBox *ConnectionCard(NSArray<NSView *> *content) {
 
     NSBox *helpCard = ConnectionCard(@[
         ConnectionLabel(@"If no port appears", YES),
-        ConnectionLabel(@"Check the cable, USB adapter, and System Information → USB. If macOS sees an FTDI-based adapter but creates no serial port, consult FTDI's VCP driver guidance. Lab599 Utility uses macOS serial ports; it does not need the FTDI D2XX direct-access library. Installing D2XX does not establish a CAT connection.", NO)
+        ConnectionLabel(@"CAT needs a working USB-to-serial driver that creates a /dev/cu.* port. macOS may already provide one; some FT232 (blue) or PL2303 (black) adapters need a compatible driver installed separately. Check the adapter in System Information → USB, then follow the adapter maker's macOS guidance if no port appears. FTDI VCP creates a serial port; D2XX is a different, direct-access API and is not used by this app. A port still needs to pass the CAT Studio check.", NO)
     ]);
 
     NSButton *refreshButton = [NSButton buttonWithTitle:@"Refresh Ports" target:self action:@selector(refreshPortStatus)];
@@ -138,7 +138,7 @@ static NSBox *ConnectionCard(NSArray<NSView *> *content) {
     } else {
         self.portStatusLabel.stringValue = @"No candidate serial ports found";
         self.portStatusLabel.textColor = NSColor.secondaryLabelColor;
-        self.portsDetailLabel.stringValue = @"Connect the CAT-USB adapter, then click Refresh Ports. If no port appears, use the VCP guidance below.";
+        self.portsDetailLabel.stringValue = @"Connect the CAT-USB adapter, then click Refresh Ports. If no port appears, identify the adapter chip and check its macOS serial driver.";
     }
 }
 

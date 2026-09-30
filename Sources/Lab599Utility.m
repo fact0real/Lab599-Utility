@@ -2285,7 +2285,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         self.statusLabel.stringValue = @"Ready. Memory channel editing, CSV import/export, and bank saving work without a connected radio.";
     } else if (isDriver) {
         self.instructions.stringValue = @"Check possible CAT serial ports and follow the radio setup steps. This page only lists device names; use CAT Studio to verify communication.";
-        self.statusLabel.stringValue = @"Connect the CAT-USB adapter and refresh the port list. FTDI D2XX is not required by this app.";
+        self.statusLabel.stringValue = @"Connect the CAT-USB adapter and refresh the port list. A working macOS serial driver is required for CAT.";
     } else if (isDocs) {
         self.instructions.stringValue = @"Official Lab599 product documentation, user manuals, firmware releases, utilities, and drivers. Download directly or open local copies.";
         self.statusLabel.stringValue = @"Browse and download official Lab599 resources.";

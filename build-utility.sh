@@ -156,10 +156,9 @@ clang -O2 -Wall -Wextra -Wno-unused-parameter -Werror -fobjc-arc \
 /bin/cp Resources/lab599_logo.png "$APP_NAME/Contents/Resources/lab599_logo.png"
 # Remove the old bundled D2XX package when rebuilding an existing app bundle.
 /bin/rm -rf "$APP_NAME/Contents/Resources/ftdi"
-if [ -f Resources/Manual/tx500_ft8_macos_v6.pdf ]; then
-    /bin/mkdir -p "$APP_NAME/Contents/Resources/Manual"
-    /bin/cp Resources/Manual/tx500_ft8_macos_v6.pdf "$APP_NAME/Contents/Resources/Manual/"
-fi
+# The retired personal FT8 PDF incorrectly required D2XX for serial-port apps.
+# Do not carry it forward when rebuilding an existing app bundle.
+/bin/rm -f "$APP_NAME/Contents/Resources/Manual/tx500_ft8_macos_v6.pdf"
 xattr -cr "$APP_NAME" 2>/dev/null || true
 
 codesign --force --sign - "$APP_NAME"

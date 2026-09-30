@@ -449,7 +449,7 @@ static void TXApplyRollingAverages(TXRollingAverages *avg, const double sums[4],
             if (self.consecutiveEmptyCycles >= 3 && self.reportedConnected && self.statusBlock) {
                 self.reportedConnected = NO;
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    self.statusBlock(@"CAT replies lost — check cable, baud rate, and Menu 35 protocol", NO);
+                    self.statusBlock(@"CAT replies lost — check the cable, 9600 baud, and the radio's CAT Protocol setting", NO);
                 });
             }
         }

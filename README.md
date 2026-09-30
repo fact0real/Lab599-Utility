@@ -2,21 +2,27 @@
 
 A native macOS application for the Lab599 TX-500 family of transceivers. It includes a Station workspace, DX Cluster, FT8/FT4 and CW operation, Voice Keyer, contact logbook, firmware updates, live telemetry, radio screen capture, time sync, CAT diagnostics, settings and memory management. Developed by **EP2AES (factoreal)**.
 
-**Latest published release: v2.267 (Build 273) · macOS 12+ · Apple Silicon and Intel · English interface · Persian guide included**
+**Latest published release: v2.268 (Build 274) · macOS 12+ · Apple Silicon and Intel · English interface · Persian guide included**
 
-[Download v2.267](https://github.com/fact0real/Lab599-Utility/releases/tag/2.267) · [راهنمای فارسی](QUICKSTART-FA.md) · [Build instructions](UPDATER-README.md) · [Report an issue](https://github.com/fact0real/Lab599-Utility/issues/new)
+[Download v2.268](https://github.com/fact0real/Lab599-Utility/releases/tag/2.268) · [راهنمای فارسی](QUICKSTART-FA.md) · [Build instructions](UPDATER-README.md) · [Report an issue](https://github.com/fact0real/Lab599-Utility/issues/new)
 
 ## Download and install
 
-Download `Lab599-Utility-v2.267-macOS-universal.zip` from the [v2.267 release](https://github.com/fact0real/Lab599-Utility/releases/tag/2.267). Extract the ZIP and move `Lab599 Utility.app` to `/Applications`. The ZIP contains the app, English and Persian guides, and license notices; manufacturer firmware is not included.
+Download `Lab599-Utility-v2.268-macOS-universal.zip` from the [v2.268 release](https://github.com/fact0real/Lab599-Utility/releases/tag/2.268). Extract the ZIP and move `Lab599 Utility.app` to `/Applications`. The ZIP contains the app, English and Persian guides, and license notices; manufacturer firmware is not included.
 
 Verify the download before opening the app:
 
 ```sh
-shasum -a 256 Lab599-Utility-v2.267-macOS-universal.zip
+shasum -a 256 Lab599-Utility-v2.268-macOS-universal.zip
 ```
 
 Compare the result with the `SHA256SUMS.txt` asset on the release page. The app is ad-hoc signed, **not Apple notarized**. If macOS blocks the first launch, select this app in **System Settings → Privacy & Security → Open Anyway** after verifying the checksum.
+
+## What's new in v2.268
+
+- **CAT Connection** replaces the misleading driver-installation screen. It lists possible macOS serial ports, explains how to check the radio in CAT Studio, and links to official [FTDI VCP guidance](https://ftdichip.com/drivers/vcp-drivers/) when an FTDI adapter appears in USB diagnostics but no serial port is available.
+- Lab599 Utility uses a macOS serial port; the FTDI D2XX direct-access library is not required. The app no longer bundles that library or offers administrator-level install, Gatekeeper override, or broad uninstall actions. Existing macOS drivers are not modified.
+- Model-dependent CAT menu numbering and the distinction between a visible port and a verified radio are now explicit. Related feedback diagnostics no longer claim a D2XX installation is “authorized” merely because a file exists.
 
 ## What's new in v2.267
 
@@ -80,7 +86,7 @@ The updater accepts only firmware whose complete SHA-256 matches a reviewed offi
 | CAT Studio | Verified live controls and band presets; named quick-launch CAT macros with safe command validation and read-back; full 1024-byte settings snapshots with model check and pre-restore backup; app-owned CAT protocol monitor with TX/RX/error filters and response timeline; the separate system console starts collapsed | Normal operation, CAT 9600 |
 | Settings | Read, save, open and restore the full 1024-byte `.set` backup; read-back comparison after every write | Normal operation, CAT 9600 |
 | Memory | Read, edit, save, open and write 100 channels using the original 600-byte `.mem` format; built-in operating profiles (SOTA/POTA, FT8/JS8Call, Contest); CSV import/export; read-back comparison after every write; file editing without a connected radio | Normal operation, CAT 9600 |
-| Driver Install | FTDI D2XX driver download and installation guide; system serial-device diagnostics | — |
+| CAT Connection | Lists possible macOS serial ports and gives CAT setup and VCP troubleshooting guidance; radio identity is checked in CAT Studio | CAT adapter for live checks |
 | Documentation | Embedded Lab599 manuals, schematics and firmware download library | — |
 | Feedback & Suggestion | Structured bug report and feature request form; auto-collects macOS version and hardware model (`sysctl hw.model`); generates a pre-filled GitHub issue URL or copies Markdown to clipboard | — |
 
@@ -105,7 +111,7 @@ The app does not read cloud credentials just to open its main window or the Stat
 Open **Lab599 Utility.app**, connect the CAT-USB cable and choose the serial port from the port menu. Tap **Refresh** if the port does not appear. Close other applications using the same port.
 
 - **Firmware Update** — select a reviewed firmware file matching your model. Turn the radio on normally with CAT protocol **LAB599** at 9600 baud, select its port and click **Verify Radio (CAT)**. After a valid ID is shown, power off and enter loader mode according to your model's manual until the display shows *"The loader is waiting..."*. Within ten minutes, click **Update Firmware**, select the model printed on the radio in the confirmation dialog, and keep power and cable connected until completion. New or custom firmware must be reviewed and added to the app's hash list before it can be flashed.
-- **Station, DX Cluster tuning, digital/CW/voice operation, Time Sync, CAT Studio, Settings, Memory, Telemetry, Radio Screen** — turn the radio on normally; set CAT protocol to **LAB599** (Menu 35) at 9600 baud. Digital/CW/voice features also need a suitable audio route.
+- **Station, DX Cluster tuning, digital/CW/voice operation, Time Sync, CAT Studio, Settings, Memory, Telemetry, Radio Screen** — turn the radio on normally; set its CAT Protocol menu to **LAB599** at 9600 baud. Menu numbering varies by model and firmware. Digital/CW/voice features also need a suitable audio route.
 - **Telemetry / Radio Screen Demo Mode** — enable Demo Mode in either panel to explore the UI without a connected radio.
 
 Read and save the current settings/memory before restoring another bank. File-size checks cannot identify which radio model or firmware version created an untagged backup. A failed or interrupted write can leave the radio in a partially changed state; success is reported only after the implemented read-back checks complete.

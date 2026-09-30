@@ -1,15 +1,14 @@
 #import <Cocoa/Cocoa.h>
 
+FOUNDATION_EXPORT NSArray<NSString *> *Lab599CandidateCATPortPaths(NSArray<NSString *> *deviceNames);
+
 @interface Lab599DriverController : NSObject
 
 @property(nonatomic, strong, readonly) NSView *view;
-@property(nonatomic, weak) NSWindow *window;
-@property(nonatomic, copy) void (^log)(NSString *message);
-@property(nonatomic, copy) void (^statusChanged)(NSString *text, double progress);
-@property(nonatomic, copy) void (^activityChanged)(BOOL busy);
+@property(nonatomic, copy) void (^openCATStudio)(void);
 
-- (void)checkDriverStatus;
+- (void)refreshPortStatus;
 - (void)refreshDevices;
-- (NSImage *)loadRadioImage;
+- (void)openCATStudio:(id)sender;
 
 @end

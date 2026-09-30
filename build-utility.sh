@@ -154,13 +154,13 @@ clang -O2 -Wall -Wextra -Wno-unused-parameter -Werror -fobjc-arc \
 /bin/cp Resources/tx500_pro.png "$APP_NAME/Contents/Resources/tx500_pro.png"
 /bin/cp Resources/tx500_pro_altai.png "$APP_NAME/Contents/Resources/tx500_pro_altai.png"
 /bin/cp Resources/lab599_logo.png "$APP_NAME/Contents/Resources/lab599_logo.png"
-/bin/mkdir -p "$APP_NAME/Contents/Resources/ftdi"
-/bin/cp -R Resources/ftdi/ "$APP_NAME/Contents/Resources/ftdi/"
+# Remove the old bundled D2XX package when rebuilding an existing app bundle.
+/bin/rm -rf "$APP_NAME/Contents/Resources/ftdi"
 if [ -f Resources/Manual/tx500_ft8_macos_v6.pdf ]; then
     /bin/mkdir -p "$APP_NAME/Contents/Resources/Manual"
     /bin/cp Resources/Manual/tx500_ft8_macos_v6.pdf "$APP_NAME/Contents/Resources/Manual/"
 fi
-xattr -cr "$APP_NAME" Resources/ftdi 2>/dev/null || true
+xattr -cr "$APP_NAME" 2>/dev/null || true
 
 codesign --force --sign - "$APP_NAME"
 codesign --verify --deep --strict "$APP_NAME"

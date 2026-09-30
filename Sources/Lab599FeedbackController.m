@@ -373,22 +373,12 @@ static NSBox *CreateCardBox(void) {
 #endif
 }
 
-- (NSString *)ftdiDriverStatusString {
-    NSFileManager *fm = [NSFileManager defaultManager];
-    if ([fm fileExistsAtPath:@"/usr/local/lib/libftd2xx.1.4.35.dylib"] ||
-        [fm fileExistsAtPath:@"/usr/local/lib/libftd2xx.dylib"]) {
-        return @"Installed & Authorized (v1.4.35)";
-    }
-    return @"Not Installed";
-}
-
 - (void)refreshDiagnostics {
     NSString *appVersion = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"2.7";
     NSString *appBuild = [[NSBundle mainBundle] objectForInfoDictionaryKey:@"CFBundleVersion"] ?: @"13";
     NSString *osVersion = [[NSProcessInfo processInfo] operatingSystemVersionString];
     NSString *hwModel = [self hardwareModelIdentifier];
     NSString *arch = [self cpuArchitectureName];
-    NSString *driverStatus = [self ftdiDriverStatusString];
 
     NSString *selectedPort = self.selectedPortProvider ? self.selectedPortProvider() : nil;
     if (!selectedPort.length) selectedPort = @"No active port selected";
@@ -396,9 +386,8 @@ static NSBox *CreateCardBox(void) {
     NSString *diagText = [NSString stringWithFormat:
         @"• Lab599 Utility: Version %@ (Build %@, Universal) | Host: %@ (%@)\n"
         @"• macOS: %@\n"
-        @"• FTDI D2XX Driver: %@\n"
-        @"• Active Port: %@ | Hardware Target: Lab599 TX-500 Discovery / MP / PRO",
-        appVersion, appBuild, hwModel, arch, osVersion, driverStatus, selectedPort];
+        @"• Selected CAT Port: %@",
+        appVersion, appBuild, hwModel, arch, osVersion, selectedPort];
 
     self.diagnosticsView.string = diagText;
 }
@@ -511,7 +500,6 @@ static NSBox *CreateCardBox(void) {
         NSString *osVersion = [[NSProcessInfo processInfo] operatingSystemVersionString];
         NSString *hwModel = [self hardwareModelIdentifier];
         NSString *arch = [self cpuArchitectureName];
-        NSString *driverStatus = [self ftdiDriverStatusString];
         NSString *selectedPort = self.selectedPortProvider ? self.selectedPortProvider() : nil;
         if (!selectedPort.length) selectedPort = @"None selected";
 
@@ -525,9 +513,7 @@ static NSBox *CreateCardBox(void) {
         [md appendFormat:@"- **Lab599 Utility Version**: %@ (Build %@, Universal)\n", appVersion, appBuild];
         [md appendFormat:@"- **Operating System**: macOS %@\n", osVersion];
         [md appendFormat:@"- **Hardware Architecture**: %@ (%@)\n", hwModel, arch];
-        [md appendFormat:@"- **FTDI D2XX Driver**: %@\n", driverStatus];
         [md appendFormat:@"- **Active Serial Port**: %@\n", selectedPort];
-        [md appendFormat:@"- **Target Radio Models**: Lab599 TX-500 Discovery / TX-500MP / TX-500PRO\n"];
         [md appendFormat:@"- **Report Timestamp**: %@\n", utcTimestamp];
     }
 

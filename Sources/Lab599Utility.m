@@ -638,7 +638,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 
     // Setup legacy operation picker for CLI arguments and underlying state
     self.operationPicker = [NSSegmentedControl segmentedControlWithLabels:@[
-        @"Firmware Update", @"Time Sync", @"Telemetry", @"Radio Screen", @"CAT Studio", @"Settings", @"Memory", @"Driver Install", @"Documentation", @"Feedback & Suggestion", @"CW Station", @"Live Audio (AD-508)", @"FT8 / FT4 Digital", @"Logbook & Cloud", @"Voice Keyer", @"Station", @"DX Cluster"
+        @"Firmware Update", @"Time Sync", @"Telemetry", @"Radio Screen", @"CAT Studio", @"Settings", @"Memory", @"CAT Connection", @"Documentation", @"Feedback & Suggestion", @"CW Station", @"Live Audio (AD-508)", @"FT8 / FT4 Digital", @"Logbook & Cloud", @"Voice Keyer", @"Station", @"DX Cluster"
     ] trackingMode:NSSegmentSwitchTrackingSelectOne target:self action:@selector(operationChanged:)];
     self.operationPicker.selectedSegment = 0;
     self.operationPicker.hidden = YES;
@@ -735,7 +735,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     TX500SidebarButton *btnCat = [[TX500SidebarButton alloc] initWithTitle:@"CAT Studio" iconName:@"antenna.radiowaves.left.and.right" tag:4 target:self action:@selector(sidebarItemClicked:)];
     TX500SidebarButton *btnSettings = [[TX500SidebarButton alloc] initWithTitle:@"Settings" iconName:@"slider.horizontal.3" tag:5 target:self action:@selector(sidebarItemClicked:)];
     TX500SidebarButton *btnMemory = [[TX500SidebarButton alloc] initWithTitle:@"Memory" iconName:@"memorychip" tag:6 target:self action:@selector(sidebarItemClicked:)];
-    TX500SidebarButton *btnDriver = [[TX500SidebarButton alloc] initWithTitle:@"Driver Install" iconName:@"wrench.and.screwdriver" tag:7 target:self action:@selector(sidebarItemClicked:)];
+    TX500SidebarButton *btnDriver = [[TX500SidebarButton alloc] initWithTitle:@"CAT Connection" iconName:@"cable.connector" tag:7 target:self action:@selector(sidebarItemClicked:)];
     TX500SidebarButton *btnDocs = [[TX500SidebarButton alloc] initWithTitle:@"Documentation" iconName:@"doc.text" tag:8 target:self action:@selector(sidebarItemClicked:)];
     TX500SidebarButton *btnFeedback = [[TX500SidebarButton alloc] initWithTitle:@"Feedback" iconName:@"bubble.left.and.bubble.right" tag:9 target:self action:@selector(sidebarItemClicked:)];
     TX500SidebarButton *btnCW = [[TX500SidebarButton alloc] initWithTitle:@"CW Station" iconName:@"waveform" tag:10 target:self action:@selector(sidebarItemClicked:)];
@@ -776,7 +776,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         btnStation, btnCluster, btnFT8, btnCW, btnVoice, btnAudio, btnLogbook, btnScreen, btnTelemetry, btnCat,
         makeSectionHeader(@"CONFIGURATION"),
         btnTime, btnSettings, btnMemory,
-        makeSectionHeader(@"FIRMWARE & DRIVER"),
+        makeSectionHeader(@"FIRMWARE & CONNECTION"),
         btnFw, btnDriver,
         makeSectionHeader(@"COMMUNITY"),
         btnDocs, btnFeedback,
@@ -1188,12 +1188,10 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 
     // Driver Controller
     self.driverController = [Lab599DriverController new];
-    self.driverController.window = self.window;
-    self.driverController.log = ^(NSString *message) { [weakSelf appendLog:message]; };
-    self.driverController.statusChanged = ^(NSString *message, double progress) {
-        weakSelf.statusLabel.stringValue = message; weakSelf.progressBar.doubleValue = progress;
+    self.driverController.openCATStudio = ^{
+        weakSelf.operationPicker.selectedSegment = 4;
+        [weakSelf operationChanged:nil];
     };
-    self.driverController.activityChanged = ^(BOOL busy) { [weakSelf setToolsBusy:busy]; };
     self.driverController.view.hidden = YES;
 
     // Documentation Controller
@@ -1594,6 +1592,10 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     }
     if ([[NSProcessInfo processInfo].arguments containsObject:@"--docs"]) {
         self.operationPicker.selectedSegment = 8;
+        [self operationChanged:self.operationPicker];
+    }
+    if ([[NSProcessInfo processInfo].arguments containsObject:@"--cat-connection"]) {
+        self.operationPicker.selectedSegment = 7;
         [self operationChanged:self.operationPicker];
     }
     if ([[NSProcessInfo processInfo].arguments containsObject:@"--feedback"]) {
@@ -2101,7 +2103,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
             @4: @"Lab599 CAT Studio & Diagnostics",
             @5: @"Transceiver Configuration & Backup",
             @6: @"Memory Channel Manager (100 Channels)",
-            @7: @"FTDI D2XX Driver Installation",
+            @7: @"CAT Connection & Serial Ports",
             @8: @"Documentation & Official Manuals",
             @9: @"Feedback & Bug Reports",
             @10: @"CW Station & Semi-Automated QSO Studio (AD-508 & CAT)",
@@ -2234,7 +2236,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     }
 
     self.driverController.view.hidden = !isDriver;
-    if (isDriver) [self.driverController checkDriverStatus];
+    if (isDriver) [self.driverController refreshPortStatus];
 
     self.docsController.view.hidden = !isDocs;
     if (isDocs) [self.docsController refreshLocalAvailability];
@@ -2254,8 +2256,8 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     self.updateButton.keyEquivalent = isFW ? @"\r" : @"";
     self.syncButton.keyEquivalent = isSync ? @"\r" : @"";
     self.progressBar.doubleValue = 0;
-    self.progressBar.hidden = (isCluster || isStation || isVoice || isTelemetry || isScreen || isFeedback || isCWStation || isAudio || isFT8 || isLogbook);
-    self.statusLabel.hidden = (isCluster || isStation || isVoice || isTelemetry || isScreen || isFeedback || isCWStation || isAudio || isFT8 || isLogbook);
+    self.progressBar.hidden = (isCluster || isStation || isVoice || isTelemetry || isScreen || isFeedback || isDriver || isCWStation || isAudio || isFT8 || isLogbook);
+    self.statusLabel.hidden = (isCluster || isStation || isVoice || isTelemetry || isScreen || isFeedback || isDriver || isCWStation || isAudio || isFT8 || isLogbook);
 
     CGFloat availW = self.mainScrollView.contentView.bounds.size.width;
     self.instructions.preferredMaxLayoutWidth = (availW > 300.0) ? (availW - 4.0) : 720.0;
@@ -2282,8 +2284,8 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         self.instructions.stringValue = @"Read and write memory banks, edit individual channels, apply operating profiles, or import/export channel lists as CSV.";
         self.statusLabel.stringValue = @"Ready. Memory channel editing, CSV import/export, and bank saving work without a connected radio.";
     } else if (isDriver) {
-        self.instructions.stringValue = @"Mandatory FTDI D2XX runtime installation for macOS (Apple Silicon & Intel). Fixes serial callout instantiation and ensures non-blocking communication in WSJT-X.";
-        self.statusLabel.stringValue = @"Ready to manage and verify FTDI D2XX serial driver.";
+        self.instructions.stringValue = @"Check possible CAT serial ports and follow the radio setup steps. This page only lists device names; use CAT Studio to verify communication.";
+        self.statusLabel.stringValue = @"Connect the CAT-USB adapter and refresh the port list. FTDI D2XX is not required by this app.";
     } else if (isDocs) {
         self.instructions.stringValue = @"Official Lab599 product documentation, user manuals, firmware releases, utilities, and drivers. Download directly or open local copies.";
         self.statusLabel.stringValue = @"Browse and download official Lab599 resources.";
@@ -2558,7 +2560,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         self.powerSafetyBox.fillColor = [NSColor controlBackgroundColor];
         self.powerSafetyTitleLabel.stringValue = @"⚡ Radio Voltage Not Verified";
         self.powerSafetyTitleLabel.textColor = [NSColor labelColor];
-        self.powerSafetyDescLabel.stringValue = @"Turn the radio on in normal mode, select CAT protocol LAB599 (Menu 35), and click Check Radio Voltage. For firmware updates, use stable 9–15V DC power; when using BP-500/550, hold its PWR button throughout the update.";
+        self.powerSafetyDescLabel.stringValue = @"Turn the radio on in normal mode, set its CAT Protocol menu to LAB599 at 9600 baud, and click Check Radio Voltage. For firmware updates, use stable 9–15V DC power; when using BP-500/550, hold its PWR button throughout the update.";
         self.powerSafetyDescLabel.textColor = [NSColor secondaryLabelColor];
     }
 }
@@ -2611,7 +2613,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
                 [self updatePowerSafetyUI];
                 NSString *detail = err.localizedDescription ?: @"No valid VL response was received.";
                 [self appendLog:[NSString stringWithFormat:
-                    @"CAT voltage check failed: %@%@ Turn the radio on normally and set Menu 35 (CAT PROTOCOL) to LAB599 at 9600 baud.",
+                    @"CAT voltage check failed: %@%@ Turn the radio on normally and set its CAT Protocol menu to LAB599 at 9600 baud.",
                     detail, rawReply.length ? [NSString stringWithFormat:@" Reply: %@.", rawReply] : @""]];
             }
         });
@@ -3027,7 +3029,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
             @"• Real-time CAT command terminal and transceiver diagnostics\n"
             @"• EEPROM Settings backup, restore & side-by-side visual diff comparison\n"
             @"• 100-channel memory manager, operating profiles (SOTA/POTA, FT8, Contest) & CSV import/export\n"
-            @"• FTDI D2XX USB serial driver installation & system diagnostics\n"
+            @"• CAT serial-port diagnostics and connection guidance\n"
             @"• Official Lab599 documentation, schematics & firmware downloads library\n"
             @"• Direct GitHub Issue reporter for feature suggestions, feedback & bug reports"];
         featuresList.textColor = NSColor.labelColor;

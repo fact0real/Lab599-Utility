@@ -14,16 +14,35 @@ int main(void) {
     @autoreleasepool {
         printf("Running Driver and Documentation tests...\n");
 
-        // 1. Driver Controller Tests
+        // 1. CAT connection guidance is read-only and does not claim that a
+        // device-node name proves a working radio or a driver installation.
         Lab599DriverController *driverCtrl = [Lab599DriverController new];
-        Check(driverCtrl != nil, @"Driver controller instantiates");
-        Check(driverCtrl.view != nil, @"Driver controller view exists");
-        [driverCtrl checkDriverStatus];
+        Check(driverCtrl != nil && driverCtrl.view != nil, @"CAT connection view instantiates");
+        NSArray<NSString *> *ports = Lab599CandidateCATPortPaths(@[@"cu.usbserial-A", @"tty.usbserial-A", @"cu.Bluetooth-Incoming-Port", @"cu.debug-console", @"cu.usbmodem01", @"cu.FT123", @"cu.bad/port"]);
+        Check([ports isEqualToArray:@[@"/dev/cu.FT123", @"/dev/cu.usbmodem01", @"/dev/cu.usbserial-A"]], @"Candidate port list excludes tty, Bluetooth, debug console, and invalid paths");
+        [driverCtrl refreshPortStatus];
         [driverCtrl refreshDevices];
-        NSImage *radioImg = [driverCtrl loadRadioImage];
-        Check(radioImg != nil, @"TX-500 radio image loads successfully");
-        Check(radioImg.size.width > 0 && radioImg.size.height > 0, @"TX-500 radio image has valid dimensions");
 
+        __block BOOL openedCATStudio = NO;
+        driverCtrl.openCATStudio = ^{ openedCATStudio = YES; };
+        [driverCtrl openCATStudio:nil];
+        Check(openedCATStudio, @"CAT Studio action uses the navigation callback");
+
+        NSMutableArray<NSString *> *labels = [NSMutableArray array];
+        NSMutableArray<NSView *> *views = [NSMutableArray arrayWithObject:driverCtrl.view];
+        while (views.count) {
+            NSView *view = views.lastObject;
+            [views removeLastObject];
+            [views addObjectsFromArray:view.subviews];
+            if ([view isKindOfClass:[NSTextField class]]) [labels addObject:((NSTextField *)view).stringValue];
+            if ([view isKindOfClass:[NSButton class]]) [labels addObject:((NSButton *)view).title];
+        }
+        NSString *pageText = [labels componentsJoinedByString:@"\n"];
+        Check([pageText containsString:@"CAT Studio"] && [pageText containsString:@"LAB599"] && [pageText containsString:@"D2XX"], @"Page explains CAT verification, protocol, and D2XX distinction");
+        Check(![pageText containsString:@"Installed & Authorized"] && ![pageText containsString:@"Uninstall Driver"] && ![pageText containsString:@"Mandatory"], @"Page does not claim driver authorization or offer system removal");
+
+        NSImage *radioImg = [[NSImage alloc] initWithContentsOfFile:@"Resources/tx500_radio.png"];
+        Check(radioImg != nil && radioImg.size.width > 0, @"Discovery radio image resource loads");
         NSImage *mpImg = [[NSImage alloc] initWithContentsOfFile:@"Resources/tx500_mp.png"];
         Check(mpImg != nil, @"TX-500MP radio image loads successfully");
         Check(mpImg.size.width > 0 && mpImg.size.height > 0, @"TX-500MP radio image has valid dimensions");
@@ -35,7 +54,7 @@ int main(void) {
         NSImage *altaiImg = [[NSImage alloc] initWithContentsOfFile:@"Resources/tx500_pro_altai.png"];
         Check(altaiImg != nil, @"TX-500PRO ALTAI radio image loads successfully");
         Check(altaiImg.size.width > 0 && altaiImg.size.height > 0, @"TX-500PRO ALTAI radio image has valid dimensions");
-        printf("PASS: All 4 radio hardware models verified (Discovery: %.0fx%.0f, MP: %.0fx%.0f, PRO: %.0fx%.0f, ALTAI: %.0fx%.0f)\n",
+        printf("PASS: CAT connection guidance and four radio image resources verified (Discovery: %.0fx%.0f, MP: %.0fx%.0f, PRO: %.0fx%.0f, ALTAI: %.0fx%.0f)\n",
                radioImg.size.width, radioImg.size.height,
                mpImg.size.width, mpImg.size.height,
                proImg.size.width, proImg.size.height,

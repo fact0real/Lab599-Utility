@@ -49,7 +49,11 @@ The included reference is a simplified **IARU Region 1 HF plan**, effective
 16 October 2020, covering 160–10 metres. It is not a complete regional rules
 engine and does not include Region 2/3 or 6 metres. Profiles may record those
 regions, but the page explicitly continues to identify its reference as
-Region 1. It links to the [official IARU document](https://www.iaru-r1.org/wp-content/uploads/2021/06/hf_r1_bandplan.pdf).
+Region 1. The **Official region plan** button opens the document for the active
+profile's region: [Region 1](https://www.iaru-r1.org/wp-content/uploads/2021/06/hf_r1_bandplan.pdf),
+[Region 2](https://www.iaru-r2.org/wp-content/uploads/2020/02/IARU-Region-2-Band-plan.pdf), or
+[Region 3](https://www.iaru-r3.org/wp-content/uploads/2025/01/R3-004-Band-Plans-IARU-Region-3.pdf).
+The on-screen chart remains the simplified Region 1 reference in every profile.
 Segment endpoints are half-open. Recommendations concern occupied bandwidth,
 not only the dial frequency; the reference is not national authorization.
 

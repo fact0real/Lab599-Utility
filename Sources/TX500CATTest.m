@@ -270,14 +270,7 @@ TXRadioState *TXReadRadioState(NSString *path, NSTimeInterval timeout, NSError *
 
     // 1. Model ID (ID;)
     NSString *idReply = SendOverPort(port, @"ID;", cmdTimeout, NULL, nil);
-    if (idReply) {
-        if ([idReply containsString:@"ID019"]) state.modelID = @"Lab599 TX-500 Discovery (ID019)";
-        else if ([idReply containsString:@"ID500"]) state.modelID = @"Lab599 TX-500 Discovery (ID500)";
-        else if ([idReply containsString:@"ID501"]) state.modelID = @"Lab599 TX-500MP (ID501)";
-        else if ([idReply containsString:@"ID502"]) state.modelID = @"Lab599 TX-500PRO (ID502)";
-        else if ([idReply containsString:@"ID505"]) state.modelID = @"Lab599 TX-500PRO ALTAI (ID505)";
-        else state.modelID = idReply;
-    }
+    if (idReply) state.modelID = TXModelNameForIDReply(idReply) ?: idReply;
 
     // 2. Comprehensive Status (IF;)
     NSString *ifReply = SendOverPort(port, @"IF;", cmdTimeout, NULL, nil);

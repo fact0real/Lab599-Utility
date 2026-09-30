@@ -151,6 +151,32 @@ int main(int argc, const char * argv[]) {
         [viz clearVisuals];
         NSLog(@"PASS: Visualizer view, waterfall mode, rhythm speed, and bandwidth span verified.");
 
+        // Existing waterfall rows must change palette without another audio
+        // callback; this also exercises the drawing snapshot used across threads.
+        [NSApplication sharedApplication];
+        viz.waterfallSpeed = TX500WaterfallSpeedFast;
+        float paletteMagnitudes[256];
+        for (NSUInteger i = 0; i < 256; i++) paletteMagnitudes[i] = 0.002f;
+        for (NSUInteger i = 0; i < 125; i++) {
+            [viz updateSpectrumWithMagnitudes:paletteMagnitudes count:256 sampleRate:48000.0f];
+        }
+        NSBitmapImageRep *(^snapshot)(void) = ^NSBitmapImageRep *{
+            NSBitmapImageRep *rep = [viz bitmapImageRepForCachingDisplayInRect:viz.bounds];
+            [viz cacheDisplayInRect:viz.bounds toBitmapImageRep:rep];
+            return rep;
+        };
+        viz.phosphorAmberTheme = NO;
+        NSColor *cyan = [snapshot() colorAtX:200 y:25];
+        viz.phosphorAmberTheme = YES;
+        NSColor *amber = [snapshot() colorAtX:200 y:25];
+        AssertTrue(cyan != nil && amber != nil, @"Waterfall snapshots rendered");
+        AssertTrue(amber.redComponent > cyan.redComponent + 0.08,
+                   @"Previously drawn waterfall rows immediately use the amber palette");
+        viz.phosphorAmberTheme = NO;
+        NSColor *restored = [snapshot() colorAtX:200 y:25];
+        AssertTrue(fabs(restored.redComponent - cyan.redComponent) < 0.05,
+                   @"Previously drawn waterfall rows return to cyan without new audio");
+
         // 9. Test Controller VFO Tuning & Memory Bank
         TX500AudioMonitorController *ctrl = [[TX500AudioMonitorController alloc] init];
         AssertTrue(ctrl != nil, @"Controller instantiated");

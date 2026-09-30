@@ -179,6 +179,22 @@ static NSString *Lab599ReadCATFrame(Lab599SerialPort *port, NSString *command,
 }
 @end
 
+@interface Lab599PreferencesWindow : NSWindow
+@end
+
+@implementation Lab599PreferencesWindow
+- (BOOL)makeFirstResponder:(NSResponder *)responder {
+    BOOL changed = [super makeFirstResponder:responder];
+    // Keep the focused control (and its focus ring) visible when Tab moves into the
+    // scrolled part of a tab. The field editor is skipped; its text field comes through too.
+    if (changed && [responder isKindOfClass:[NSView class]] && ![responder isKindOfClass:[NSText class]]) {
+        NSView *view = (NSView *)responder;
+        [view scrollRectToVisible:NSInsetRect(view.bounds, -4.0, -4.0)];
+    }
+    return changed;
+}
+@end
+
 static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     if (!v) return;
     [outStr appendFormat:@"%*s[%@ %p] fitting: %.1f x %.1f, intrinsic: %.1f x %.1f, frame: %.1f,%.1f %.1fx%.1f, hidden: %d\n",
@@ -292,6 +308,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 @property(nonatomic, strong) NSSegmentedControl *prefTabSegment;
 @property(nonatomic, strong) NSView *prefStationContainer;
 @property(nonatomic, strong) NSView *prefCloudContainer;
+@property(nonatomic, strong) NSScrollView *prefStationScrollView;
 @property(nonatomic) BOOL cloudSettingsLoadedForPresentation;
 
 // Station Preferences Controls
@@ -3103,10 +3120,11 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 - (void)showPreferencesWindow:(id)sender {
     (void)sender;
     if (!self.preferencesWindow) {
-        self.preferencesWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 680, 840)
-            styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable)
+        self.preferencesWindow = [[Lab599PreferencesWindow alloc] initWithContentRect:NSMakeRect(0, 0, 680, 840)
+            styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable)
             backing:NSBackingStoreBuffered defer:NO];
         self.preferencesWindow.title = @"Preferences";
+        self.preferencesWindow.contentMinSize = NSMakeSize(680, 420);
         self.preferencesWindow.releasedWhenClosed = NO;
         [self.preferencesWindow center];
 
@@ -3524,13 +3542,33 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         stationOuterStack.alignment = NSLayoutAttributeLeading;
         stationOuterStack.spacing = 10;
         stationOuterStack.translatesAutoresizingMaskIntoConstraints = NO;
-        [self.prefStationContainer addSubview:stationOuterStack];
+
+        // Station tab scrolls, so Save & Apply stays on screen on shorter displays
+        self.prefStationScrollView = [Lab599FittableScrollView new];
+        self.prefStationScrollView.translatesAutoresizingMaskIntoConstraints = NO;
+        self.prefStationScrollView.hasVerticalScroller = YES;
+        self.prefStationScrollView.hasHorizontalScroller = NO;
+        self.prefStationScrollView.autohidesScrollers = YES;
+        self.prefStationScrollView.borderType = NSNoBorder;
+        self.prefStationScrollView.drawsBackground = NO;
+        NSView *stationDocView = [Lab599DocumentView new];
+        stationDocView.translatesAutoresizingMaskIntoConstraints = NO;
+        self.prefStationScrollView.documentView = stationDocView;
+        [stationDocView addSubview:stationOuterStack];
+        [self.prefStationContainer addSubview:self.prefStationScrollView];
 
         [NSLayoutConstraint activateConstraints:@[
-            [stationOuterStack.topAnchor constraintEqualToAnchor:self.prefStationContainer.topAnchor],
-            [stationOuterStack.leadingAnchor constraintEqualToAnchor:self.prefStationContainer.leadingAnchor],
-            [stationOuterStack.trailingAnchor constraintEqualToAnchor:self.prefStationContainer.trailingAnchor],
-            [stationOuterStack.bottomAnchor constraintLessThanOrEqualToAnchor:self.prefStationContainer.bottomAnchor],
+            [self.prefStationScrollView.topAnchor constraintEqualToAnchor:self.prefStationContainer.topAnchor],
+            [self.prefStationScrollView.leadingAnchor constraintEqualToAnchor:self.prefStationContainer.leadingAnchor],
+            [self.prefStationScrollView.trailingAnchor constraintEqualToAnchor:self.prefStationContainer.trailingAnchor],
+            [self.prefStationScrollView.bottomAnchor constraintEqualToAnchor:self.prefStationContainer.bottomAnchor],
+            [stationDocView.leadingAnchor constraintEqualToAnchor:self.prefStationScrollView.contentView.leadingAnchor],
+            [stationDocView.topAnchor constraintEqualToAnchor:self.prefStationScrollView.contentView.topAnchor],
+            [stationDocView.widthAnchor constraintEqualToAnchor:self.prefStationScrollView.contentView.widthAnchor],
+            [stationOuterStack.topAnchor constraintEqualToAnchor:stationDocView.topAnchor],
+            [stationOuterStack.leadingAnchor constraintEqualToAnchor:stationDocView.leadingAnchor],
+            [stationOuterStack.trailingAnchor constraintEqualToAnchor:stationDocView.trailingAnchor],
+            [stationOuterStack.bottomAnchor constraintEqualToAnchor:stationDocView.bottomAnchor],
             [stationBox.widthAnchor constraintEqualToAnchor:stationOuterStack.widthAnchor],
             [timeBox.widthAnchor constraintEqualToAnchor:stationOuterStack.widthAnchor],
             [logBox.widthAnchor constraintEqualToAnchor:stationOuterStack.widthAnchor],
@@ -3574,6 +3612,8 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         saveBtn.keyEquivalent = @"\r";
         saveBtn.translatesAutoresizingMaskIntoConstraints = NO;
         self.preferencesWindow.initialFirstResponder = saveBtn;
+        // Let AppKit build the Tab order from the layout (no nextKeyView is set in this window)
+        self.preferencesWindow.autorecalculatesKeyViewLoop = YES;
 
         NSStackView *btnRow = [NSStackView stackViewWithViews:@[cancelBtn, saveBtn]];
         btnRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
@@ -3647,9 +3687,33 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 
     self.cloudSettingsLoadedForPresentation = NO;
     [self prefTabChanged:self.prefTabSegment];
-    [self.preferencesWindow center];
+    [self fitPreferencesWindowToScreen];
     [self.preferencesWindow makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
+}
+
+- (void)fitPreferencesWindowToScreen {
+    // Size the window to its content each time it opens, like the old fixed-size window:
+    // as wide as the layout needs and tall enough for the whole Station tab, but kept
+    // 12 pt inside the visible screen (as the main window's zoom does) and centred there.
+    NSWindow *win = self.preferencesWindow;
+    NSScreen *screen = (self.window.isVisible ? self.window.screen : nil) ?: win.screen ?: NSScreen.mainScreen;
+    if (!screen) {
+        [win center];
+        return;
+    }
+    NSScrollView *scroll = self.prefStationScrollView;
+    [win.contentView layoutSubtreeIfNeeded];
+    NSSize need = win.contentView.fittingSize;
+    need.height = MAX(need.height, win.contentView.frame.size.height + scroll.documentView.frame.size.height - scroll.contentView.bounds.size.height);
+    NSRect frame = [win frameRectForContentRect:NSMakeRect(0, 0, need.width, need.height)];
+    NSRect visible = NSInsetRect(screen.visibleFrame, 12.0, 12.0);
+    frame.size.width = MIN(frame.size.width, visible.size.width);
+    frame.size.height = MIN(frame.size.height, visible.size.height);
+    frame.origin.x = NSMidX(visible) - frame.size.width / 2.0;
+    frame.origin.y = NSMidY(visible) - frame.size.height / 2.0;
+    [win setFrame:frame display:NO];
+    [scroll.documentView scrollPoint:NSZeroPoint];
 }
 
 - (void)selectPreferencesTab:(NSInteger)tab {
@@ -4069,6 +4133,8 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 
 - (void)ensureWindowFitsVisibleScreen {
     if (!self.window) return;
+    // A full-screen window already fills its screen; resizing it here would only shrink it
+    if (self.window.styleMask & NSWindowStyleMaskFullScreen) return;
     NSScreen *screen = self.window.screen ?: [NSScreen mainScreen];
     if (!screen) return;
     NSRect screenRect = [screen visibleFrame];

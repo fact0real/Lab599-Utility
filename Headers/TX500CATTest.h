@@ -14,6 +14,18 @@ typedef struct {
 
 FOUNDATION_EXPORT TXCATOptions TXDefaultCATOptions(void);
 FOUNDATION_EXPORT TXCATCode TXClassifyCATReply(NSData *reply);
+// Display label for an exact, six-character ID; reply. ID500 identifies a
+// family, while ID501/ID502 are legacy accepted replies without a known model.
+static inline NSString *TXModelNameForIDReply(NSString *reply) {
+    // Lab599 CAT Protocol rev. 3 documents 019 (TS2000), 500 (TX-500
+    // family) and 505 (TX-500MP). The original TestCAT also accepts 501/502.
+    if ([reply isEqualToString:@"ID019;"]) return @"Lab599 radio, TS2000 protocol (ID019)";
+    if ([reply isEqualToString:@"ID500;"]) return @"Lab599 TX-500 family (ID500)";
+    if ([reply isEqualToString:@"ID501;"]) return @"Lab599 radio (ID501)";
+    if ([reply isEqualToString:@"ID502;"]) return @"Lab599 radio (ID502)";
+    if ([reply isEqualToString:@"ID505;"]) return @"Lab599 TX-500MP (ID505)";
+    return nil;
+}
 
 @interface TXCATSummary : NSObject <NSCopying>
 @property(nonatomic) NSUInteger checks;

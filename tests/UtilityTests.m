@@ -196,6 +196,10 @@ int main(void) { @autoreleasepool {
     printf("PASS: Binary formats, command fixtures, input validation\n");
     for(NSString *s in @[@"ID019;",@"ID500;",@"ID501;",@"ID502;",@"ID505;"]) Check(TXClassifyCATReply(ASCII(s))==TXCATOK,@"Original ID accepted");
     Check(TXClassifyCATReply(ASCII(@"ID503;"))==TXCATUnexpectedID && TXClassifyCATReply(ASCII(@"ID;"))==TXCATWrongLength,@"Original CAT error distinctions");
+    for(NSString *s in @[@"ID019;",@"ID500;",@"ID501;",@"ID502;",@"ID505;"]) Check([TXModelNameForIDReply(s) hasPrefix:@"Lab599 "],@"Accepted IDs retain the Lab599 prefix used by CAT controls");
+    Check([TXModelNameForIDReply(@"ID505;") containsString:@"TX-500MP"] && ![TXModelNameForIDReply(@"ID505;") containsString:@"ALTAI"],@"ID505 identifies TX-500MP");
+    Check(![TXModelNameForIDReply(@"ID500;") containsString:@"Discovery"] && ![TXModelNameForIDReply(@"ID501;") containsString:@"MP"],@"Undocumented model details are not inferred");
+    Check(TXModelNameForIDReply(@"noise ID505;")==nil && TXModelNameForIDReply(@"ID505;extra")==nil && TXModelNameForIDReply(@"ID503;")==nil,@"Malformed and unknown replies cannot provide a verified model label");
     CATScenario(@[@"ID019;",@"ID500;",@"ID501;",@"ID502;",@"ID505;"],NO,YES);
     CATScenario(@[@"",@"ID;",@"ID503;",@"ID500;extra",@"ID500;"],NO,NO);
     CATScenario(@[@""],YES,NO);

@@ -1861,11 +1861,8 @@ static NSString *StudioTimestamp(NSDate *date) {
         self.catSMeterDots = dots;
         [self refreshSMeterPresentation];
     } else if ([cmd hasPrefix:@"ID"] && reply) {
-        if ([reply containsString:@"ID019"]) self.catModelLabel.stringValue = @"Transceiver Model: Lab599 TX-500 Discovery (ID019)";
-        else if ([reply containsString:@"ID500"]) self.catModelLabel.stringValue = @"Transceiver Model: Lab599 TX-500 Discovery (ID500)";
-        else if ([reply containsString:@"ID501"]) self.catModelLabel.stringValue = @"Transceiver Model: Lab599 TX-500MP (ID501)";
-        else if ([reply containsString:@"ID502"]) self.catModelLabel.stringValue = @"Transceiver Model: Lab599 TX-500PRO (ID502)";
-        else if ([reply containsString:@"ID505"]) self.catModelLabel.stringValue = @"Transceiver Model: Lab599 TX-500PRO ALTAI (ID505)";
+        NSString *model = TXModelNameForIDReply(reply);
+        if (model) self.catModelLabel.stringValue = [NSString stringWithFormat:@"Transceiver Model: %@", model];
     }
 }
 

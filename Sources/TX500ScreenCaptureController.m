@@ -1,5 +1,6 @@
 #import "TX500ScreenCaptureController.h"
 #import "Lab599SerialPort.h"
+#import "TX500CATTest.h"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 #pragma mark - Custom Display View
@@ -1665,16 +1666,11 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
         // Query Model Identification (ID;)
         NSString *idResp = queryRadio(@"ID;");
         NSString *detectedModel = nil;
-        if (idResp) {
-            if ([idResp containsString:@"ID019"] || [idResp containsString:@"ID500"]) {
-                detectedModel = @"DISCOVERY";
-            } else if ([idResp containsString:@"MP"] || [idResp containsString:@"020"]) {
-                detectedModel = @"TX-500MP";
-            } else if ([idResp containsString:@"ALTAI"]) {
-                detectedModel = @"PRO ALTAI";
-            } else if ([idResp containsString:@"PRO"]) {
-                detectedModel = @"TX-500PRO";
-            }
+        if (TXModelNameForIDReply(idResp)) {
+            if ([idResp isEqualToString:@"ID505;"]) detectedModel = @"TX-500MP";
+            else if ([idResp isEqualToString:@"ID500;"]) detectedModel = @"TX-500 FAMILY";
+            else if ([idResp isEqualToString:@"ID019;"]) detectedModel = @"LAB599 / TS2000";
+            else detectedModel = @"LAB599 RADIO";
         }
 
         // Query Frequency (FA;)

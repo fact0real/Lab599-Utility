@@ -2,21 +2,30 @@
 
 A native macOS application for the Lab599 TX-500 family of transceivers. It includes a Station workspace, DX Cluster, FT8/FT4 and CW operation, Voice Keyer, contact logbook, firmware updates, live telemetry, radio screen capture, time sync, CAT diagnostics, settings and memory management. Developed by **EP2AES (factoreal)**.
 
-**Latest published release: v2.266 (Build 272) · macOS 12+ · Apple Silicon and Intel · English interface · Persian guide included**
+**Latest published release: v2.267 (Build 273) · macOS 12+ · Apple Silicon and Intel · English interface · Persian guide included**
 
-[Download v2.266](https://github.com/fact0real/Lab599-Utility/releases/tag/2.266) · [راهنمای فارسی](QUICKSTART-FA.md) · [Build instructions](UPDATER-README.md) · [Report an issue](https://github.com/fact0real/Lab599-Utility/issues/new)
+[Download v2.267](https://github.com/fact0real/Lab599-Utility/releases/tag/2.267) · [راهنمای فارسی](QUICKSTART-FA.md) · [Build instructions](UPDATER-README.md) · [Report an issue](https://github.com/fact0real/Lab599-Utility/issues/new)
 
 ## Download and install
 
-Download `Lab599-Utility-v2.266-macOS-universal.zip` from the [v2.266 release](https://github.com/fact0real/Lab599-Utility/releases/tag/2.266). Extract the ZIP and move `Lab599 Utility.app` to `/Applications`. The ZIP contains the app, English and Persian guides, and license notices; manufacturer firmware is not included.
+Download `Lab599-Utility-v2.267-macOS-universal.zip` from the [v2.267 release](https://github.com/fact0real/Lab599-Utility/releases/tag/2.267). Extract the ZIP and move `Lab599 Utility.app` to `/Applications`. The ZIP contains the app, English and Persian guides, and license notices; manufacturer firmware is not included.
 
 Verify the download before opening the app:
 
 ```sh
-shasum -a 256 Lab599-Utility-v2.266-macOS-universal.zip
+shasum -a 256 Lab599-Utility-v2.267-macOS-universal.zip
 ```
 
 Compare the result with the `SHA256SUMS.txt` asset on the release page. The app is ad-hoc signed, **not Apple notarized**. If macOS blocks the first launch, select this app in **System Settings → Privacy & Security → Open Anyway** after verifying the checksum.
+
+## What's new in v2.267
+
+- Preferences now fit the visible screen, can scroll on shorter displays, and support keyboard Tab navigation through Station fields. The main window no longer shrinks after entering full screen.
+- CAT model labels follow Lab599's documented IDs: `ID505;` identifies TX-500MP, while `ID500;` identifies only the TX-500 family. The legacy accepted `ID501;` and `ID502;` replies no longer claim a specific model.
+- The Station workspace's **Official region plan** button opens an IARU document for the saved profile's region. The on-screen chart remains the simplified Region 1 reference.
+- Changing the Live Audio palette immediately recolors existing waterfall rows, with a synchronized snapshot between the audio callback and drawing.
+
+Thanks to **EA3JIC** for the careful reports and optional patches that prompted these fixes.
 
 ## What's new in v2.266
 

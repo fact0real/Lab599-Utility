@@ -7,6 +7,7 @@
 
 #import "TX500AudioVisualizerView.h"
 #import <math.h>
+#import <pthread.h>
 
 #define DEFAULT_SPECTRUM_MAX_FREQ 4000.0f
 #define MAX_BINS 256
@@ -23,8 +24,10 @@
     float _waveformSamples[MAX_WAVE];
     NSInteger _waveformCount;
 
-    // Waterfall circular/rolling pixel buffer (32-bit RGBA)
-    uint32_t _waterfallPixels[WATERFALL_HEIGHT * WATERFALL_WIDTH];
+    // The AudioQueue writes levels; AppKit snapshots them before coloring.
+    // This keeps palette changes away from the real-time audio callback.
+    int16_t _waterfallLevels[WATERFALL_HEIGHT * WATERFALL_WIDTH];
+    pthread_mutex_t _waterfallLock;
     uint32_t _cyanPalette[256];
     uint32_t _amberPalette[256];
     NSInteger _waterfallSkipCounter;
@@ -92,10 +95,15 @@
         _lastRedrawTime = 0;
         _redrawScheduled = NO;
 
+        pthread_mutex_init(&_waterfallLock, NULL);
         [self initPalettes];
         [self clearWaterfallPixels];
     }
     return self;
+}
+
+- (void)dealloc {
+    pthread_mutex_destroy(&_waterfallLock);
 }
 
 - (void)initPalettes {
@@ -147,10 +155,21 @@
 }
 
 - (void)clearWaterfallPixels {
-    uint32_t darkBg = (15 << 24) | (20 << 16) | (28 << 8) | 0xFF;
+    pthread_mutex_lock(&_waterfallLock);
     for (NSInteger i = 0; i < WATERFALL_HEIGHT * WATERFALL_WIDTH; i++) {
-        _waterfallPixels[i] = darkBg;
+        _waterfallLevels[i] = -1;
     }
+    pthread_mutex_unlock(&_waterfallLock);
+}
+
+- (void)setPhosphorAmberTheme:(BOOL)phosphorAmberTheme {
+    if (![NSThread isMainThread]) {
+        dispatch_async(dispatch_get_main_queue(), ^{ self.phosphorAmberTheme = phosphorAmberTheme; });
+        return;
+    }
+    if (_phosphorAmberTheme == phosphorAmberTheme) return;
+    _phosphorAmberTheme = phosphorAmberTheme;
+    [self setNeedsDisplay:YES];
 }
 
 - (BOOL)isOpaque {
@@ -221,11 +240,8 @@
 }
 
 - (void)advanceWaterfallLine {
-    // Shift rows down by 1
-    memmove(&_waterfallPixels[WATERFALL_WIDTH], &_waterfallPixels[0], (WATERFALL_HEIGHT - 1) * WATERFALL_WIDTH * sizeof(uint32_t));
-
-    // Populate row 0 with mapped frequency spectrum
-    const uint32_t *palette = self.phosphorAmberTheme ? _amberPalette : _cyanPalette;
+    // Calculate outside the lock; only the short buffer swap needs to wait.
+    int16_t row[WATERFALL_WIDTH];
     float maxFreq = self.maxFrequencySpanHz > 0 ? self.maxFrequencySpanHz : DEFAULT_SPECTRUM_MAX_FREQ;
     float nyquist = _sampleRate * 0.5f;
 
@@ -247,8 +263,13 @@
         if (norm > 1.0f) norm = 1.0f;
 
         uint8_t pIdx = (uint8_t)(norm * 255.0f);
-        _waterfallPixels[x] = palette[pIdx];
+        row[x] = pIdx;
     }
+    pthread_mutex_lock(&_waterfallLock);
+    memmove(&_waterfallLevels[WATERFALL_WIDTH], &_waterfallLevels[0],
+            (WATERFALL_HEIGHT - 1) * WATERFALL_WIDTH * sizeof(int16_t));
+    memcpy(_waterfallLevels, row, sizeof(row));
+    pthread_mutex_unlock(&_waterfallLock);
 }
 
 - (void)updateWaveformWithSamples:(const float *)samples count:(NSInteger)count {
@@ -539,9 +560,22 @@
     CGFloat plotHeight = rect.size.height - 18.0;
     NSRect wfRect = NSMakeRect(startX, bottomY, plotWidth, plotHeight);
 
+    // Snapshot before drawing: the audio callback can advance its next row
+    // without racing a palette change or a bitmap read.
+    int16_t levels[WATERFALL_HEIGHT * WATERFALL_WIDTH];
+    uint32_t pixels[WATERFALL_HEIGHT * WATERFALL_WIDTH];
+    pthread_mutex_lock(&_waterfallLock);
+    memcpy(levels, _waterfallLevels, sizeof(levels));
+    pthread_mutex_unlock(&_waterfallLock);
+    const uint32_t *palette = self.phosphorAmberTheme ? _amberPalette : _cyanPalette;
+    const uint32_t background = (15 << 24) | (20 << 16) | (28 << 8) | 0xFF;
+    for (NSInteger i = 0; i < WATERFALL_HEIGHT * WATERFALL_WIDTH; i++) {
+        pixels[i] = levels[i] < 0 ? background : palette[levels[i]];
+    }
+
     // Draw Waterfall Bitmap
     CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
-    CGContextRef bitmapCtx = CGBitmapContextCreate(_waterfallPixels, WATERFALL_WIDTH, WATERFALL_HEIGHT, 8, WATERFALL_WIDTH * 4, colorSpace, kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+    CGContextRef bitmapCtx = CGBitmapContextCreate(pixels, WATERFALL_WIDTH, WATERFALL_HEIGHT, 8, WATERFALL_WIDTH * 4, colorSpace, kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
     if (bitmapCtx) {
         CGImageRef img = CGBitmapContextCreateImage(bitmapCtx);
         if (img) {

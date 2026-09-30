@@ -121,6 +121,12 @@ static void TestReporter(void) {
 
 }
 int main(int argc,const char *argv[]) { @autoreleasepool { (void)argc;(void)argv; char path[]="/tmp/StationTests.XXXXXX"; Check(mkdtemp(path)!=NULL,@"Isolated test directory"); NSURL *root=[NSURL fileURLWithPath:[NSString stringWithUTF8String:path]]; TestCore(); TestReceiveRecoveryReconnect(); TestStore(root); TestReporter();
+    for (NSString *region in @[@"1", @"2", @"3"]) {
+        NSURL *url=TX500BandPlanURLForRegion(region);
+        Check([url.scheme isEqualToString:@"https"] && [url.host hasPrefix:@"www.iaru"], @"Official region document uses a fixed IARU HTTPS URL");
+        Check([url.absoluteString containsString:[NSString stringWithFormat:@"Region-%@", region]] || [region isEqualToString:@"1"], @"Region selects its own document");
+    }
+    Check([TX500BandPlanURLForRegion(@"https://example.com").host isEqualToString:@"www.iaru-r1.org"], @"Unknown profile text cannot choose an arbitrary URL");
     if([NSProcessInfo.processInfo.arguments containsObject:@"--render"]) { setenv("TX500_STATION_TEST_ROOT",path,1); [NSApplication sharedApplication];
         for(NSNumber *width in @[@940,@560]) for(NSNumber *tab in @[@0,@1,@2,@3]) {
             TX500StationController *c=[TX500StationController new]; c.core=[TX500StationCore new]; NSWindow *w=[[NSWindow alloc] initWithContentRect:NSMakeRect(0,0,width.doubleValue,1100) styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO]; w.appearance=[NSAppearance appearanceNamed:NSAppearanceNameDarkAqua]; w.contentView=c.view;

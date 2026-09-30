@@ -5,6 +5,15 @@ static NSStackView *Stack(NSArray *a,BOOL vertical,CGFloat gap) { NSStackView *s
 static NSView *Spacer(void) { NSView *s=[NSView new]; s.translatesAutoresizingMaskIntoConstraints=NO; [s setContentHuggingPriority:1 forOrientation:NSLayoutConstraintOrientationHorizontal]; return s; }
 static NSBox *Card(NSView *content) { NSBox *b=[NSBox new]; b.boxType=NSBoxCustom; b.titlePosition=NSNoTitle; b.cornerRadius=12; b.fillColor=NSColor.controlBackgroundColor; b.borderColor=NSColor.separatorColor; b.borderWidth=1; b.translatesAutoresizingMaskIntoConstraints=NO; [b.contentView addSubview:content]; [NSLayoutConstraint activateConstraints:@[[content.leadingAnchor constraintEqualToAnchor:b.contentView.leadingAnchor constant:14],[content.trailingAnchor constraintEqualToAnchor:b.contentView.trailingAnchor constant:-14],[content.topAnchor constraintEqualToAnchor:b.contentView.topAnchor constant:14],[content.bottomAnchor constraintEqualToAnchor:b.contentView.bottomAnchor constant:-14]]]; return b; }
 static NSString *Mode(NSInteger m) { return @{@1:@"LSB",@2:@"USB",@3:@"CW",@4:@"FM",@5:@"AM",@6:@"DIG",@7:@"CW-R",@9:@"DIG-L"}[@(m)] ?: @"—"; }
+// Static official IARU documents; never build a URL from profile text.
+NSURL *TX500BandPlanURLForRegion(NSString *region) {
+    NSDictionary<NSString *, NSString *> *urls = @{
+        @"1": @"https://www.iaru-r1.org/wp-content/uploads/2021/06/hf_r1_bandplan.pdf",
+        @"2": @"https://www.iaru-r2.org/wp-content/uploads/2020/02/IARU-Region-2-Band-plan.pdf",
+        @"3": @"https://www.iaru-r3.org/wp-content/uploads/2025/01/R3-004-Band-Plans-IARU-Region-3.pdf"
+    };
+    return [NSURL URLWithString:urls[region] ?: urls[@"1"]];
+}
 @interface TXStationTableScroll : NSScrollView
 @end
 @implementation TXStationTableScroll
@@ -98,7 +107,7 @@ static NSString *Mode(NSInteger m) { return @{@1:@"LSB",@2:@"USB",@3:@"CW",@4:@"
     __weak typeof(self) weakSelf=self; _bandView.picked=^(NSDictionary *segment) { typeof(self) self=weakSelf; if(!self) return; NSUInteger i=[self->_segments indexOfObject:segment]; [self->_bandTable selectRowIndexes:[NSIndexSet indexSetWithIndex:i] byExtendingSelection:NO]; [self->_bandTable scrollRowToVisible:i]; };
     NSView *table=[self table:&_bandTable columns:@[@[@"range",@"Frequency range · MHz",@190],@[@"usage",@"Recommended use",@270],@[@"bandwidth",@"Max BW",@100]] height:230];
     _planInfo=Label(@"",11,NSFontWeightRegular); _planInfo.maximumNumberOfLines=4; _planInfo.lineBreakMode=NSLineBreakByWordWrapping;
-    NSStackView *head=Stack(@[Label(@"BAND REFERENCE",11,NSFontWeightBold),Spacer(),_band,[self button:@"Official source" symbol:@"arrow.up.right" action:@selector(source:) ]],NO,10);
+    NSStackView *head=Stack(@[Label(@"BAND REFERENCE",11,NSFontWeightBold),Spacer(),_band,[self button:@"Official region plan" symbol:@"arrow.up.right" action:@selector(source:) ]],NO,10);
     NSStackView *body=Stack(@[head,_bandView,table,_planInfo],YES,12); for(NSView *v in body.arrangedSubviews) [v.widthAnchor constraintEqualToAnchor:body.widthAnchor].active=YES; [self bandChanged:nil]; return Card(body);
 }
 - (NSView *)profilePane {
@@ -188,9 +197,13 @@ static NSString *Mode(NSInteger m) { return @{@1:@"LSB",@2:@"USB",@3:@"CW",@4:@"
 - (void)removeFrequency:(id)sender { (void)sender; if(!_frequencyID) return; NSError *e=nil; if([_store removeFrequency:_frequencyID error:&e]) { [self newFrequency:nil]; [self message:@"Frequency removed."]; } else [self message:e.localizedDescription]; }
 - (void)bandChanged:(id)sender { (void)sender; NSArray *limits=@[@[@1810000,@2000000],@[@3500000,@3800000],@[@5351500,@5366500],@[@7000000,@7200000],@[@10100000,@10150000],@[@14000000,@14350000],@[@18068000,@18168000],@[@21000000,@21450000],@[@24890000,@24990000],@[@28000000,@29700000]]; NSArray *r=limits[MAX(0,_band.indexOfSelectedItem)]; _segments=[[TX500StationStore bandSegments] filteredArrayUsingPredicate:[NSPredicate predicateWithBlock:^BOOL(NSDictionary *s,NSDictionary *b){(void)b;return [s[@"low"] unsignedLongLongValue]>=[r[0] unsignedLongLongValue] && [s[@"high"] unsignedLongLongValue]<=[r[1] unsignedLongLongValue];}]];
     _bandView.low=[r[0] unsignedLongLongValue]; _bandView.high=[r[1] unsignedLongLongValue]; _bandView.frequency=[self.core.snapshot[@"frequency"] unsignedLongLongValue]; _bandView.segments=_segments; _bandView.needsDisplay=YES; [_bandTable reloadData];
-    _planInfo.stringValue=[NSString stringWithFormat:@"IARU Region 1 HF reference · effective 16 Oct 2020 · simplified usage groups. Ranges describe transmitted spectrum, not just the dial. Consult the source for exceptions and national permissions.%@",[_store.activeProfile[@"region"] isEqual:@"1"]?@"":@" Your profile is in another region; this reference is not your local band plan."];
+    NSString *region = _store.activeProfile[@"region"];
+    NSString *note = [@[@"2", @"3"] containsObject:region] ?
+        [NSString stringWithFormat:@" Your active profile is in Region %@; this chart is not your local band plan. Official region plan opens the Region %@ document.", region, region] :
+        ([region isEqualToString:@"1"] ? @"" : @" Your active profile's region is unknown; this chart may not be your local band plan.");
+    _planInfo.stringValue=[NSString stringWithFormat:@"IARU Region 1 HF reference · effective 16 Oct 2020 · simplified usage groups. Ranges describe transmitted spectrum, not just the dial. Consult the source for exceptions and national permissions.%@",note];
 }
-- (void)source:(id)sender { (void)sender; [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:@"https://www.iaru-r1.org/wp-content/uploads/2021/06/hf_r1_bandplan.pdf"]]; }
+- (void)source:(id)sender { (void)sender; [NSWorkspace.sharedWorkspace openURL:TX500BandPlanURLForRegion(_store.activeProfile[@"region"])]; }
 - (void)loadProfile:(NSDictionary *)p { _editingID=p[@"id"]; for(NSPopUpButton *m in _routeMenus.allValues) [m removeAllItems]; for(NSString *k in _fields) ((NSTextField *)_fields[k]).stringValue=p[k] ?: @""; [_region selectItemAtIndex:MAX(0,MIN(2,[p[@"region"] integerValue]-1))]; [self refreshRoutes:nil]; for(NSMenuItem *item in _profileMenu.itemArray) if([item.representedObject isEqual:_editingID]) [_profileMenu selectItem:item]; }
 - (void)profileSelected:(id)sender { (void)sender; for(NSDictionary *p in _store.profiles) if([p[@"id"] isEqual:_profileMenu.selectedItem.representedObject]) { [self loadProfile:p]; break; } }
 - (void)newProfile:(id)sender { (void)sender; NSMutableDictionary *p=[_store.activeProfile mutableCopy]; [p removeObjectForKey:@"id"]; p[@"name"]=@"New station"; [self loadProfile:p]; }

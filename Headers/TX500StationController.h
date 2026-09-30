@@ -2,6 +2,7 @@
 #import "TX500StationCore.h"
 #import "TX500StationStore.h"
 NS_ASSUME_NONNULL_BEGIN
+FOUNDATION_EXPORT NSURL *TX500BandPlanURLForRegion(NSString *region);
 @interface TX500StationController : NSObject
 @property(nonatomic, readonly) NSView *view;
 @property(nonatomic, readonly) BOOL busy;

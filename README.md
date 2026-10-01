@@ -18,6 +18,10 @@ shasum -a 256 Lab599-Utility-v2.272-macOS-universal.zip
 
 Compare the result with the `SHA256SUMS.txt` asset on the release page. The app is ad-hoc signed, **not Apple notarized**. If macOS blocks the first launch, select this app in **System Settings → Privacy & Security → Open Anyway** after verifying the checksum.
 
+## Local build v2.273
+
+The installed local build, v2.273, contains fixes for DIG mode confirmation on FT8 start, custom digital frequency entry, Live Audio continuity between sections, compact-window layout, Help sizing, and a pictured-model confirmation before firmware updates. See [v2.273 notes](RELEASE-NOTES-2.273.md). The latest published download above remains v2.272 until v2.273 is released.
+
 ## What's new in v2.272
 
 - Live Audio and the digital/CW audio selectors now label generic USB audio devices accurately instead of identifying them as AD-508 from their name alone. The tested AD-508 connects directly to Mac USB-C, while the stock blue CAT cable is a separate serial connection.

@@ -147,14 +147,6 @@ static NSInteger TX500ThreeDigitCATValue(NSString *reply, NSString *prefix) {
     return digits.integerValue;
 }
 
-static uint64_t TX500FrequencyFromCATReply(NSString *reply) {
-    if (reply.length != 14 || ![reply hasPrefix:@"FA"] || ![reply hasSuffix:@";"]) return 0;
-    NSString *digits = [reply substringWithRange:NSMakeRange(2, 11)];
-    if ([digits rangeOfCharacterFromSet:NSCharacterSet.decimalDigitCharacterSet.invertedSet].location != NSNotFound) return 0;
-    uint64_t hz = (uint64_t)digits.longLongValue;
-    return (hz >= 500000 && hz <= 56000000) ? hz : 0;
-}
-
 static NSString * const kFT8CustomBandTitle = @"Custom…";
 
 @interface TX500FT8SlotProgressView : NSView
@@ -421,6 +413,8 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
 @property (nonatomic, strong) NSTextField *customFrequencyStatusLabel;
 @property (nonatomic, assign) NSUInteger frequencyRequestGeneration;
 @property (nonatomic, assign) BOOL frequencyOperationPending;
+@property (nonatomic, assign) BOOL digitalModePreparationPending;
+@property (nonatomic, assign) BOOL digitalModePreparationRequested;
 @property (nonatomic, assign) NSUInteger frequencyPollFailures;
 @property (nonatomic, strong) NSTimer *frequencyPollTimer;
 @property (nonatomic, strong) NSPopUpButton *audioInPopup;
@@ -1267,66 +1261,76 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
 }
 
 - (void)prepareRadioForDigitalMode {
-    if (self.audioEngine.isSimulationMode || !self.serialCommandSender) return;
+    if (self.audioEngine.isSimulationMode || self.audioEngine.isTransmitting || self.audioEngine.isTuning) return;
+    if (self.digitalModePreparationPending) return;
+    if (self.frequencyOperationPending) {
+        self.digitalModePreparationRequested = YES;
+        return;
+    }
+    if (!self.serialCommandSender || !self.catQueryHandler) {
+        self.audioEngine.catDialAndModeVerified = NO;
+        [self appendToQSOConsole:@"[Digital Setup] CAT control is unavailable; DIG mode was not verified."];
+        return;
+    }
+    self.digitalModePreparationRequested = NO;
+    self.digitalModePreparationPending = YES;
+    self.frequencyOperationPending = YES;
+    self.audioEngine.catDialAndModeVerified = NO;
+    NSUInteger generation = ++self.frequencyRequestGeneration;
+    self.dialFreqLabel.stringValue = @"Checking DIG mode…";
+    BOOL (^send)(NSString *) = [self.serialCommandSender copy];
+    NSString * (^query)(NSString *, NSTimeInterval) = [self.catQueryHandler copy];
     __weak typeof(self) weakSelf = self;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        typeof(self) strongSelf = weakSelf;
-        if (!strongSelf) return;
-
-        BOOL modeWritten = strongSelf.serialCommandSender(@"MD6;");
-        BOOL squelchWritten = strongSelf.serialCommandSender(@"SQ0000;");
-        BOOL widthWritten = strongSelf.serialCommandSender(@"FW3000;");
-        NSString *mdReply = strongSelf.catQueryHandler ? strongSelf.catQueryHandler(@"MD;", 0.5) : nil;
-        NSString *fwReply = strongSelf.catQueryHandler ? strongSelf.catQueryHandler(@"FW;", 0.5) : nil;
-        BOOL modeVerified = [mdReply isEqualToString:@"MD6;"];
-        BOOL widthVerified = [fwReply hasPrefix:@"FW3000"];
-
-        // New LAB599 firmware documents filter selection (FL), while some
-        // TS-2000 compatible firmware accepts a direct FW3000 width. Select
-        // FIL-1 as a deterministic fallback; its width remains user-adjustable
-        // on the radio when FW is unavailable.
-        if (!widthVerified) strongSelf.serialCommandSender(@"FL00;");
-
-        NSString *pcReply = strongSelf.catQueryHandler ? strongSelf.catQueryHandler(@"PC;", 0.8) : nil;
-        NSString *maReply = strongSelf.catQueryHandler ? strongSelf.catQueryHandler(@"MA;", 0.8) : nil;
-        NSInteger powerTenths = TX500ThreeDigitCATValue(pcReply, @"PC");
-        NSInteger digGain = TX500ThreeDigitCATValue(maReply, @"MA");
-        // Frequency refresh may be querying CAT at the same time as digital
-        // setup. Retry read-only values so a transient busy port cannot leave
-        // the power selector showing an unverified value.
-        for (NSUInteger attempt = 0; attempt < 2 &&
-             (powerTenths == NSNotFound || digGain == NSNotFound); attempt++) {
-            [NSThread sleepForTimeInterval:0.15];
-            if (powerTenths == NSNotFound) {
-                pcReply = strongSelf.catQueryHandler ? strongSelf.catQueryHandler(@"PC;", 0.8) : nil;
-                powerTenths = TX500ThreeDigitCATValue(pcReply, @"PC");
-            }
-            if (digGain == NSNotFound) {
-                maReply = strongSelf.catQueryHandler ? strongSelf.catQueryHandler(@"MA;", 0.8) : nil;
-                digGain = TX500ThreeDigitCATValue(maReply, @"MA");
-            }
+        uint64_t observedHz = 0;
+        NSString *failure = nil;
+        BOOL modeVerified = TX500EnsureDigitalCAT(send, query, &observedHz, &failure);
+        BOOL squelchWritten = NO, widthWritten = NO, widthVerified = NO;
+        NSInteger powerTenths = NSNotFound, digGain = NSNotFound;
+        if (modeVerified) {
+            squelchWritten = send(@"SQ0000;");
+            widthWritten = send(@"FW3000;");
+            widthVerified = [query(@"FW;", 0.8) hasPrefix:@"FW3000"];
+            // FIL-1 is the existing fallback when FW3000 is unavailable.
+            if (!widthVerified) send(@"FL00;");
+            powerTenths = TX500ThreeDigitCATValue(query(@"PC;", 0.8), @"PC");
+            digGain = TX500ThreeDigitCATValue(query(@"MA;", 0.8), @"MA");
         }
-
         dispatch_async(dispatch_get_main_queue(), ^{
             typeof(self) mainSelf = weakSelf;
-            if (!mainSelf) return;
-            if (powerTenths != NSNotFound) {
-                NSString *title = [NSString stringWithFormat:@"%ld W", (long)lround((double)powerTenths / 10.0)];
-                if ([mainSelf.rfPowerPopup itemWithTitle:title]) [mainSelf.rfPowerPopup selectItemWithTitle:title];
+            if (!mainSelf || generation != mainSelf.frequencyRequestGeneration) return;
+            mainSelf.digitalModePreparationPending = NO;
+            mainSelf.frequencyOperationPending = NO;
+            if (observedHz) [mainSelf updateFrequencyHz:observedHz mode:modeVerified ? @"DIG" : @"MD?"];
+            else [mainSelf showRadioFrequencyUnavailable];
+            mainSelf.audioEngine.catDialAndModeVerified = modeVerified;
+            if (modeVerified) {
+                if (powerTenths != NSNotFound) {
+                    NSString *title = [NSString stringWithFormat:@"%ld W", (long)lround((double)powerTenths / 10.0)];
+                    if ([mainSelf.rfPowerPopup itemWithTitle:title]) [mainSelf.rfPowerPopup selectItemWithTitle:title];
+                }
+                if (digGain >= 0 && digGain <= 100) [mainSelf displayDIGGain:digGain];
+                [mainSelf appendToQSOConsole:[NSString stringWithFormat:
+                    @"[Digital Setup] DIG and %.6f MHz dial confirmed in RX · filter %@ · squelch %@.",
+                    observedHz / 1e6, widthWritten ? (widthVerified ? @"3000 Hz" : @"FIL-1 fallback") : @"unchanged",
+                    squelchWritten ? @"open" : @"unchanged"]];
+            } else {
+                mainSelf.dialFreqLabel.textColor = NSColor.systemRedColor;
+                [mainSelf appendToQSOConsole:[NSString stringWithFormat:@"[Digital Setup] DIG not confirmed: %@", failure ?: @"no CAT readback"]];
             }
-            if (digGain != NSNotFound && digGain >= 0 && digGain <= 100) {
-                [mainSelf displayDIGGain:digGain];
+            if (mainSelf.digitalModePreparationRequested) {
+                mainSelf.digitalModePreparationRequested = NO;
+                [mainSelf prepareRadioForDigitalMode];
             }
-            if (modeVerified && mainSelf.audioEngine.dialFrequencyHz > 0)
-                mainSelf.audioEngine.catDialAndModeVerified = YES;
-            NSString *filterStatus = widthVerified ? @"3000 Hz" : @"FIL-1 fallback";
-            [mainSelf appendToQSOConsole:[NSString stringWithFormat:
-                @"[Digital Setup] DIG %@ · filter %@ · squelch %@ · frequency unchanged.",
-                (modeWritten && modeVerified) ? @"verified" : @"requested",
-                widthWritten ? filterStatus : @"FIL-1 requested",
-                squelchWritten ? @"open" : @"unchanged"]];
+            [mainSelf refreshTransmitButtonState];
         });
     });
+}
+
+- (void)runDeferredDigitalModePreparation {
+    if (!self.digitalModePreparationRequested) return;
+    self.digitalModePreparationRequested = NO;
+    [self prepareRadioForDigitalMode];
 }
 
 - (void)rfPowerChanged:(NSPopUpButton *)sender {
@@ -1536,6 +1540,10 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
 
 - (void)stopStation {
     ++self.monitoringStartGeneration;
+    ++self.frequencyRequestGeneration;
+    self.frequencyOperationPending = NO;
+    self.digitalModePreparationPending = NO;
+    self.digitalModePreparationRequested = NO;
     self.monitoringStartInProgress = NO;
     self.startStopButton.enabled = YES;
     [self.autoEngine stopAutoCQ];
@@ -1614,6 +1622,7 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
     if (!self.catQueryHandler) {
         self.frequencyOperationPending = NO;
         [self showRadioFrequencyUnavailable];
+        [self runDeferredDigitalModePreparation];
         return;
     }
     __weak typeof(self) weakSelf = self;
@@ -1636,6 +1645,7 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
                 [mainSelf showRadioFrequencyUnavailable];
                 [mainSelf appendToQSOConsole:@"[CAT] Cannot read the radio frequency. Check the selected serial port and CAT mode."];
             }
+            [mainSelf runDeferredDigitalModePreparation];
         });
     });
 }
@@ -1658,7 +1668,10 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
             typeof(self) mainSelf = weakSelf;
             if (!mainSelf || generation != mainSelf.frequencyRequestGeneration) return;
             mainSelf.frequencyOperationPending = NO;
-            if (mainSelf.audioEngine.isTransmitting || mainSelf.audioEngine.isTuning) return;
+            if (mainSelf.audioEngine.isTransmitting || mainSelf.audioEngine.isTuning) {
+                [mainSelf runDeferredDigitalModePreparation];
+                return;
+            }
             if (actual) {
                 mainSelf.frequencyPollFailures = 0;
                 BOOL ready = [modeReply isEqualToString:@"MD6;"];
@@ -1683,6 +1696,7 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
                 [mainSelf showRadioFrequencyUnavailable];
                 [mainSelf refreshTransmitButtonState];
             }
+            [mainSelf runDeferredDigitalModePreparation];
         });
     });
 }
@@ -1721,6 +1735,7 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
         self.armTxButton.enabled = YES;
         [self showRadioFrequencyUnavailable];
         [self appendToQSOConsole:@"[CAT] No radio control connection is available for band selection."];
+        [self runDeferredDigitalModePreparation];
         return;
     }
     __weak typeof(self) weakSelf = self;
@@ -1736,9 +1751,9 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
             if (actual == requested) break;
         }
         BOOL frequencyVerified = written && actual == requested;
-        BOOL modeWritten = frequencyVerified && strongSelf.serialCommandSender(@"MD6;");
-        NSString *modeReply = modeWritten ? strongSelf.catQueryHandler(@"MD;", 0.8) : nil;
-        BOOL modeVerified = [modeReply isEqualToString:@"MD6;"];
+        NSString *modeFailure = nil;
+        BOOL modeVerified = frequencyVerified && TX500EnsureDigitalCAT(strongSelf.serialCommandSender,
+            strongSelf.catQueryHandler, NULL, &modeFailure);
         dispatch_async(dispatch_get_main_queue(), ^{
             typeof(self) mainSelf = weakSelf;
             if (!mainSelf || generation != mainSelf.frequencyRequestGeneration) return;
@@ -1764,6 +1779,7 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
                 mainSelf.dialFreqLabel.textColor = [NSColor systemRedColor];
                 mainSelf.dialFreqLabel.toolTip = @"The requested frequency or DIG mode was not confirmed. The displayed value is the last CAT readback.";
             }
+            [mainSelf runDeferredDigitalModePreparation];
         });
     });
 }
@@ -1806,8 +1822,9 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
     self.dialFreqLabel.font = [NSFont monospacedSystemFontOfSize:12.0 weight:NSFontWeightBold];
     self.dialFreqLabel.textColor = [NSColor colorWithCalibratedRed:0.80 green:0.48 blue:0.0 alpha:1.0];
     self.customFrequencyButton = [NSButton buttonWithTitle:@"Set MHz…" target:self action:@selector(showCustomFrequencyEditor:)];
-    self.customFrequencyButton.bezelStyle = NSBezelStyleInline;
+    self.customFrequencyButton.bezelStyle = NSBezelStyleRounded;
     self.customFrequencyButton.controlSize = NSControlSizeSmall;
+    self.customFrequencyButton.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
     self.customFrequencyButton.toolTip = @"Enter an exact dial frequency for FT8 or FT4.";
     self.customFrequencyButton.accessibilityLabel = @"Set custom digital frequency";
 
@@ -1914,52 +1931,54 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
     self.powerMeterLabel.toolTip = @"TX-500 live output meter in 0–30 radio display dots (SM0), not calibrated watts.";
 
     // Row 1: Session Control, Mode, Band, Dial VFO, Audio Interface & Audio Input VU Meter
-    NSBox *sepRow1_1 = [NSBox new]; sepRow1_1.boxType = NSBoxSeparator; [sepRow1_1.heightAnchor constraintEqualToConstant:16].active = YES;
-    NSBox *sepRow1_2 = [NSBox new]; sepRow1_2.boxType = NSBoxSeparator; [sepRow1_2.heightAnchor constraintEqualToConstant:16].active = YES;
-
     self.audioLevelMeter = [[TX500AudioLevelMeterView alloc] initWithFrame:NSMakeRect(0, 0, 74, 20)];
     [self.audioLevelMeter.widthAnchor constraintEqualToConstant:74].active = YES;
     [self.audioLevelMeter.heightAnchor constraintEqualToConstant:20].active = YES;
 
-    NSView *spacerR1 = [NSView new];
-    spacerR1.translatesAutoresizingMaskIntoConstraints = NO;
-    [spacerR1 setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
-
     NSStackView *row1Stack = [NSStackView stackViewWithViews:@[
-        self.startStopButton, self.modeSegment, self.bandPopup, self.dialFreqLabel,
-        self.customFrequencyButton, sepRow1_1,
-        self.audioInPopup, self.audioLevelMeter, sepRow1_2, self.simCheckbox, spacerR1
+        self.startStopButton, self.modeSegment, self.bandPopup, self.simCheckbox
     ]];
     row1Stack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     row1Stack.alignment = NSLayoutAttributeCenterY;
     row1Stack.spacing = 8;
 
-    // Row 2: AF Frequencies, Tuning, Transmit Control, Split/Fake-It, Parity & SWR Protection
-    NSBox *sepRow2_1 = [NSBox new]; sepRow2_1.boxType = NSBoxSeparator; [sepRow2_1.heightAnchor constraintEqualToConstant:16].active = YES;
-    NSBox *sepRow2_2 = [NSBox new]; sepRow2_2.boxType = NSBoxSeparator; [sepRow2_2.heightAnchor constraintEqualToConstant:16].active = YES;
+    NSStackView *dialRow = [NSStackView stackViewWithViews:@[
+        self.dialFreqLabel, self.customFrequencyButton, self.audioInPopup, self.audioLevelMeter
+    ]];
+    dialRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    dialRow.alignment = NSLayoutAttributeCenterY;
+    dialRow.spacing = 8;
+
+    // Keep each control row usable at the minimum document width.
 
     self.fakeItCheckbox = [NSButton checkboxWithTitle:@"Fake It" target:self action:@selector(toggleFakeIt:)];
     self.fakeItCheckbox.state = self.audioEngine.splitFakeItEnabled ? NSControlStateValueOn : NSControlStateValueOff;
 
-    NSView *spacerR2 = [NSView new];
-    spacerR2.translatesAutoresizingMaskIntoConstraints = NO;
-    [spacerR2 setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
-
     NSStackView *row2Stack = [NSStackView stackViewWithViews:@[
         rxLbl, self.rxFreqField, txLbl, self.txFreqField,
-        self.lockFreqsButton, self.tuneButton, self.armTxButton, sepRow2_1,
-        rfPowerLabel, self.rfPowerPopup, digGainLabel, digGainControls,
-        self.txParitySegment, self.fakeItCheckbox, sepRow2_2,
-        self.powerMeterLabel, self.alcLabel, self.swrLabel, spacerR2
+        self.lockFreqsButton, self.tuneButton, self.armTxButton
     ]];
     row2Stack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     row2Stack.alignment = NSLayoutAttributeCenterY;
     row2Stack.spacing = 8;
 
-    NSStackView *ribbonVStack = [NSStackView stackViewWithViews:@[row1Stack, row2Stack]];
+    NSStackView *radioSettingsRow = [NSStackView stackViewWithViews:@[
+        rfPowerLabel, self.rfPowerPopup, digGainLabel, digGainControls,
+        self.txParitySegment, self.fakeItCheckbox
+    ]];
+    radioSettingsRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    radioSettingsRow.alignment = NSLayoutAttributeCenterY;
+    radioSettingsRow.spacing = 8;
+
+    NSStackView *metersRow = [NSStackView stackViewWithViews:@[self.powerMeterLabel, self.alcLabel, self.swrLabel]];
+    metersRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    metersRow.alignment = NSLayoutAttributeCenterY;
+    metersRow.spacing = 12;
+
+    NSStackView *ribbonVStack = [NSStackView stackViewWithViews:@[row1Stack, dialRow, row2Stack, radioSettingsRow, metersRow]];
     ribbonVStack.orientation = NSUserInterfaceLayoutOrientationVertical;
     ribbonVStack.alignment = NSLayoutAttributeLeading;
-    ribbonVStack.spacing = 8;
+    ribbonVStack.spacing = 5;
     ribbonVStack.translatesAutoresizingMaskIntoConstraints = NO;
     [topRibbon.contentView addSubview:ribbonVStack];
 
@@ -1968,9 +1987,11 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
         [ribbonVStack.leadingAnchor constraintEqualToAnchor:topRibbon.contentView.leadingAnchor constant:10],
         [ribbonVStack.trailingAnchor constraintEqualToAnchor:topRibbon.contentView.trailingAnchor constant:-10],
         [ribbonVStack.bottomAnchor constraintEqualToAnchor:topRibbon.contentView.bottomAnchor constant:-7],
-        [row1Stack.widthAnchor constraintEqualToAnchor:ribbonVStack.widthAnchor],
-        [row2Stack.widthAnchor constraintEqualToAnchor:ribbonVStack.widthAnchor],
-        [topRibbon.heightAnchor constraintEqualToConstant:72]
+        [row1Stack.trailingAnchor constraintLessThanOrEqualToAnchor:ribbonVStack.trailingAnchor],
+        [dialRow.trailingAnchor constraintLessThanOrEqualToAnchor:ribbonVStack.trailingAnchor],
+        [row2Stack.trailingAnchor constraintLessThanOrEqualToAnchor:ribbonVStack.trailingAnchor],
+        [radioSettingsRow.trailingAnchor constraintLessThanOrEqualToAnchor:ribbonVStack.trailingAnchor],
+        [metersRow.trailingAnchor constraintLessThanOrEqualToAnchor:ribbonVStack.trailingAnchor]
     ]];
 
     // --- 2. Lab599 Precision Panadapter & Spectrogram Chassis ---
@@ -2043,17 +2064,22 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
     self.collapseWaterfallButton.toolTip = @"Collapse waterfall to expand decode tables";
 
     NSStackView *dspStack = [NSStackView stackViewWithViews:@[
-        self.palettePopup, gainLbl, self.gainSlider, contrastLbl, self.contrastSlider,
-        self.callsignTagsCheckbox, self.collapseWaterfallButton, self.liveUtcLabel
+        self.palettePopup, gainLbl, self.gainSlider, contrastLbl, self.contrastSlider
     ]];
     dspStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     dspStack.spacing = 6;
     dspStack.alignment = NSLayoutAttributeCenterY;
 
-    NSStackView *panHeader = [NSStackView stackViewWithViews:@[panHeaderLeft, dspStack]];
-    panHeader.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    panHeader.alignment = NSLayoutAttributeCenterY;
-    panHeader.distribution = NSStackViewDistributionEqualSpacing;
+    NSStackView *panOptions = [NSStackView stackViewWithViews:@[
+        self.callsignTagsCheckbox, self.collapseWaterfallButton, self.liveUtcLabel
+    ]];
+    panOptions.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    panOptions.alignment = NSLayoutAttributeCenterY;
+    panOptions.spacing = 8;
+    NSStackView *panHeader = [NSStackView stackViewWithViews:@[panHeaderLeft, dspStack, panOptions]];
+    panHeader.orientation = NSUserInterfaceLayoutOrientationVertical;
+    panHeader.alignment = NSLayoutAttributeLeading;
+    panHeader.spacing = 3;
     panHeader.translatesAutoresizingMaskIntoConstraints = NO;
     [panadapterBox.contentView addSubview:panHeader];
 
@@ -2077,7 +2103,7 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
         [panHeader.topAnchor constraintEqualToAnchor:panadapterBox.contentView.topAnchor constant:5],
         [panHeader.leadingAnchor constraintEqualToAnchor:panadapterBox.contentView.leadingAnchor constant:10],
         [panHeader.trailingAnchor constraintEqualToAnchor:panadapterBox.contentView.trailingAnchor constant:-10],
-        [panHeader.heightAnchor constraintEqualToConstant:16],
+        [panHeader.heightAnchor constraintGreaterThanOrEqualToConstant:56],
 
         [self.slotProgressView.topAnchor constraintEqualToAnchor:panHeader.bottomAnchor constant:4],
         [self.slotProgressView.leadingAnchor constraintEqualToAnchor:panadapterBox.contentView.leadingAnchor constant:8],
@@ -2119,8 +2145,6 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
     self.autoCQStatusLabel.font = [NSFont systemFontOfSize:10.5 weight:NSFontWeightMedium];
     self.autoCQStatusLabel.textColor = [NSColor colorWithCalibratedRed:0.08 green:0.55 blue:0.20 alpha:1.0];
 
-    NSBox *algoSep = [NSBox new]; algoSep.boxType = NSBoxSeparator; [algoSep.heightAnchor constraintEqualToConstant:16].active = YES;
-
     self.autoHunterButton = [NSButton buttonWithTitle:@"Auto-Hunter" target:self action:@selector(toggleAutoHunter:)];
     self.autoHunterButton.bezelStyle = NSBezelStyleRounded;
     [self.autoHunterButton.widthAnchor constraintEqualToConstant:95].active = YES;
@@ -2144,23 +2168,32 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
     self.soundAlertsButton.toolTip = @"Choose and preview Digital contact sounds and a safe listening output.";
     [self.soundAlertsButton.widthAnchor constraintEqualToConstant:92].active = YES;
 
-    NSStackView *algoStack = [NSStackView stackViewWithViews:@[
-        self.autoCQButton, self.autoCQStepper, self.autoCQCountLabel, self.autoCQStatusLabel,
-        algoSep,
-        self.autoHunterButton, self.hunterCriteriaPopup, self.autoHunterStatusLabel,
-        self.soundAlertsButton
+    NSStackView *cqRow = [NSStackView stackViewWithViews:@[
+        self.autoCQButton, self.autoCQStepper, self.autoCQCountLabel, self.autoCQStatusLabel
     ]];
-    algoStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    algoStack.alignment = NSLayoutAttributeCenterY;
-    algoStack.spacing = 8;
+    cqRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    cqRow.alignment = NSLayoutAttributeCenterY;
+    cqRow.spacing = 8;
+    NSStackView *hunterRow = [NSStackView stackViewWithViews:@[
+        self.autoHunterButton, self.hunterCriteriaPopup, self.autoHunterStatusLabel, self.soundAlertsButton
+    ]];
+    hunterRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    hunterRow.alignment = NSLayoutAttributeCenterY;
+    hunterRow.spacing = 8;
+    NSStackView *algoStack = [NSStackView stackViewWithViews:@[cqRow, hunterRow]];
+    algoStack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    algoStack.alignment = NSLayoutAttributeLeading;
+    algoStack.spacing = 4;
     algoStack.translatesAutoresizingMaskIntoConstraints = NO;
     [algoBox.contentView addSubview:algoStack];
 
     [NSLayoutConstraint activateConstraints:@[
         [algoStack.leadingAnchor constraintEqualToAnchor:algoBox.contentView.leadingAnchor constant:8],
         [algoStack.trailingAnchor constraintLessThanOrEqualToAnchor:algoBox.contentView.trailingAnchor constant:-8],
-        [algoStack.centerYAnchor constraintEqualToAnchor:algoBox.contentView.centerYAnchor],
-        [algoBox.heightAnchor constraintEqualToConstant:36]
+        [algoStack.topAnchor constraintEqualToAnchor:algoBox.contentView.topAnchor constant:6],
+        [algoStack.bottomAnchor constraintEqualToAnchor:algoBox.contentView.bottomAnchor constant:-6],
+        [cqRow.trailingAnchor constraintLessThanOrEqualToAnchor:algoBox.contentView.trailingAnchor constant:-8],
+        [hunterRow.trailingAnchor constraintLessThanOrEqualToAnchor:algoBox.contentView.trailingAnchor constant:-8]
     ]];
 
     // --- 5. Main Workstation Container (Split Left / Right) ---
@@ -2238,10 +2271,17 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
     [self.alertCountryPopup.widthAnchor constraintGreaterThanOrEqualToConstant:155].active = YES;
     [self rebuildAlertCountryMenu];
 
-    NSStackView *advFilterBar = [NSStackView stackViewWithViews:@[
-        snrMinLbl, self.snrMinField, snrMaxLbl, self.snrMaxField, snrUnit,
-        self.alertEnabledCheckbox, self.alertCountryPopup
+    NSStackView *snrFilterRow = [NSStackView stackViewWithViews:@[
+        snrMinLbl, self.snrMinField, snrMaxLbl, self.snrMaxField, snrUnit
     ]];
+    snrFilterRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    snrFilterRow.alignment = NSLayoutAttributeCenterY;
+    snrFilterRow.spacing = 5;
+    NSStackView *alertFilterRow = [NSStackView stackViewWithViews:@[self.alertEnabledCheckbox, self.alertCountryPopup]];
+    alertFilterRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    alertFilterRow.alignment = NSLayoutAttributeCenterY;
+    alertFilterRow.spacing = 5;
+    NSStackView *advFilterBar = [NSStackView stackViewWithViews:@[snrFilterRow, alertFilterRow]];
     // Live Cycle Status & Transmission Banner
     self.cycleBannerBox = [NSBox new];
     self.cycleBannerBox.translatesAutoresizingMaskIntoConstraints = NO;
@@ -2285,19 +2325,28 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
         [self.cycleClockLabel.widthAnchor constraintEqualToConstant:90]
     ]];
 
-    advFilterBar.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    advFilterBar.alignment = NSLayoutAttributeCenterY;
-    advFilterBar.spacing = 5;
+    advFilterBar.orientation = NSUserInterfaceLayoutOrientationVertical;
+    advFilterBar.alignment = NSLayoutAttributeLeading;
+    advFilterBar.spacing = 4;
     advFilterBar.translatesAutoresizingMaskIntoConstraints = NO;
     [leftArea addSubview:advFilterBar];
 
-    NSStackView *filterBar = [NSStackView stackViewWithViews:@[
-        self.tableFilterSegment, self.searchField, clearDecodesBtn,
+    NSStackView *searchFilterRow = [NSStackView stackViewWithViews:@[
+        self.tableFilterSegment, self.searchField, clearDecodesBtn
+    ]];
+    searchFilterRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    searchFilterRow.alignment = NSLayoutAttributeCenterY;
+    searchFilterRow.spacing = 8;
+    NSStackView *viewFilterRow = [NSStackView stackViewWithViews:@[
         self.pskReporterCheckbox, self.wideTablesBtn, self.fullHeightBtn
     ]];
-    filterBar.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    filterBar.alignment = NSLayoutAttributeCenterY;
-    filterBar.spacing = 8;
+    viewFilterRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    viewFilterRow.alignment = NSLayoutAttributeCenterY;
+    viewFilterRow.spacing = 8;
+    NSStackView *filterBar = [NSStackView stackViewWithViews:@[searchFilterRow, viewFilterRow]];
+    filterBar.orientation = NSUserInterfaceLayoutOrientationVertical;
+    filterBar.alignment = NSLayoutAttributeLeading;
+    filterBar.spacing = 4;
     filterBar.translatesAutoresizingMaskIntoConstraints = NO;
     [leftArea addSubview:filterBar];
 
@@ -2431,13 +2480,11 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
 
         [filterBar.topAnchor constraintEqualToAnchor:self.cycleBannerBox.bottomAnchor constant:4],
         [filterBar.leadingAnchor constraintEqualToAnchor:leftArea.leadingAnchor],
-        [filterBar.trailingAnchor constraintEqualToAnchor:leftArea.trailingAnchor],
-        [filterBar.heightAnchor constraintEqualToConstant:24],
+        [filterBar.trailingAnchor constraintLessThanOrEqualToAnchor:leftArea.trailingAnchor],
 
         [advFilterBar.topAnchor constraintEqualToAnchor:filterBar.bottomAnchor constant:4],
         [advFilterBar.leadingAnchor constraintEqualToAnchor:leftArea.leadingAnchor],
-        [advFilterBar.trailingAnchor constraintEqualToAnchor:leftArea.trailingAnchor],
-        [advFilterBar.heightAnchor constraintEqualToConstant:22],
+        [advFilterBar.trailingAnchor constraintLessThanOrEqualToAnchor:leftArea.trailingAnchor],
 
         [self.tablesSplitView.topAnchor constraintEqualToAnchor:advFilterBar.bottomAnchor constant:4],
         [self.tablesSplitView.leadingAnchor constraintEqualToAnchor:leftArea.leadingAnchor],
@@ -2607,7 +2654,7 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
     NSLayoutConstraint *rightBoxWidth = [self.rightBox.widthAnchor constraintEqualToConstant:315];
     rightBoxWidth.priority = NSLayoutPriorityDefaultHigh;
     [NSLayoutConstraint activateConstraints:@[
-        [leftArea.widthAnchor constraintGreaterThanOrEqualToConstant:320],
+        [leftArea.widthAnchor constraintGreaterThanOrEqualToConstant:380],
         rightBoxWidth,
         [self.rightBox.widthAnchor constraintGreaterThanOrEqualToConstant:220],
         [self.rightBox.widthAnchor constraintLessThanOrEqualToConstant:550]
@@ -2730,7 +2777,11 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
     (void)sender;
     NSString *band = self.bandPopup.titleOfSelectedItem;
     if ([band isEqualToString:kFT8CustomBandTitle]) {
-        [self showCustomFrequencyEditor:nil];
+        // Let the native popup menu finish tracking before presenting a transient popover.
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if ([self.bandPopup.titleOfSelectedItem isEqualToString:kFT8CustomBandTitle])
+                [self showCustomFrequencyEditor:self.bandPopup];
+        });
     } else if (band.length > 0) {
         uint64_t freq = [self defaultFrequencyForBand:band protocol:self.protocol];
         if (freq > 0) [self requestRadioFrequencyHz:freq];
@@ -2744,7 +2795,7 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
     popover.behavior = NSPopoverBehaviorTransient;
     NSViewController *controller = [[NSViewController alloc] init];
     BOOL activeContact = self.autoEngine.isQSOActive || self.autoEngine.isAutoCQActive;
-    NSView *content = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 355, activeContact ? 235 : 215)];
+    NSView *content = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 360, activeContact ? 255 : 235)];
     controller.view = content;
     popover.contentViewController = controller;
 
@@ -2816,7 +2867,8 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
     ]];
     self.customFrequencyPopover = popover;
     popover.delegate = self;
-    [popover showRelativeToRect:self.customFrequencyButton.bounds ofView:self.customFrequencyButton preferredEdge:NSRectEdgeMaxY];
+    NSView *anchor = sender == self.bandPopup ? self.bandPopup : self.customFrequencyButton;
+    [popover showRelativeToRect:anchor.bounds ofView:anchor preferredEdge:NSRectEdgeMaxY];
     [self.customFrequencyButton.window makeFirstResponder:self.customFrequencyField];
 }
 
@@ -4268,7 +4320,7 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
     if (splitView == self.tablesSplitView) {
         return 180.0;
     } else if (splitView == self.workstationSplitView) {
-        return 320.0;
+        return 380.0;
     }
     return proposedMinimumPosition;
 }

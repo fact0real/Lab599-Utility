@@ -9,18 +9,18 @@
     :root { color-scheme: light dark; --ink:#202833; --muted:#576578; --line:#d7e0ea; --card:#fff; --bg:#f4f7fa; --accent:#1859a7; --soft:#eaf3ff; --warn:#fff6dc; }
     @media (prefers-color-scheme: dark) { :root { --ink:#e8edf5; --muted:#adbacb; --line:#3d4a5c; --card:#222b38; --bg:#151b24; --accent:#8bbdff; --soft:#263b56; --warn:#413722; } }
     html { scroll-behavior:smooth; }
-    body { margin:0; padding:0 24px 56px; background:var(--bg); color:var(--ink); font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    body { margin:0; padding:0 20px 48px; background:var(--bg); color:var(--ink); font:14px/1.52 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
     main { max-width:960px; margin:auto; }
-    h1 { font-size:32px; line-height:1.18; margin:10px 0 10px; letter-spacing:-.02em; }
-    h2 { font-size:23px; line-height:1.25; margin:0 0 10px; }
-    h3 { font-size:17px; margin:20px 0 5px; }
+    h1 { font-size:28px; line-height:1.2; margin:10px 0 10px; letter-spacing:-.02em; }
+    h2 { font-size:20px; line-height:1.25; margin:0 0 10px; }
+    h3 { font-size:16px; margin:18px 0 5px; }
     p, ol, ul { margin:7px 0 13px; }
     li { margin:5px 0; }
     a { color:var(--accent); text-decoration-thickness:1px; text-underline-offset:3px; }
     a:focus-visible { outline:2px solid var(--accent); outline-offset:3px; border-radius:3px; }
     .eyebrow { margin-top:26px; color:var(--accent); font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:.12em; }
-    .lead { font-size:17px; color:var(--muted); max-width:780px; }
-    .card, section { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:22px 26px; margin-top:20px; }
+    .lead { font-size:15px; color:var(--muted); max-width:780px; }
+    .card, section { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px 22px; margin-top:16px; }
     .toc { display:grid; grid-template-columns:repeat(auto-fit,minmax(185px,1fr)); gap:4px 20px; padding-left:20px; }
     .toc li { margin:3px 0; }
     .note { background:var(--soft); border-left:4px solid var(--accent); padding:12px 15px; border-radius:5px; margin:15px 0; }
@@ -98,7 +98,7 @@
     <h2>4. FT8 / FT4 Digital</h2>
     <ol>
       <li>Connect CAT and an audio interface, then select the correct audio input and output in the digital workspace.</li>
-      <li>Confirm time synchronization and choose FT8 or FT4 and the intended band or a custom frequency.</li>
+      <li>Confirm time synchronization and choose FT8 or FT4 and the intended band. Choose <strong>Custom…</strong> or click <strong>Set MHz</strong> to enter a custom dial frequency. Starting the station requests DIG mode and confirms it over CAT before transmission can be enabled.</li>
       <li>Start monitoring. Check the receive level and decoded messages before arming transmission.</li>
       <li>Review the intended message, frequency and radio mode. Enable TX only when you are ready to operate. Watch the radio during the first transmission.</li>
       <li>Use <strong>Stop</strong> to halt the digital station. If the radio does not confirm a return to RX, follow the on-screen recovery prompt before any new transmission.</li>
@@ -175,7 +175,7 @@
     <div class="caution"><strong>Use stable power and the exact firmware for your radio.</strong> Do not disconnect power or CAT during a transfer. A successful file check does not prove the selected physical radio's exact model after you enter bootloader mode.</div>
     <ol>
       <li>Choose a reviewed official <code>.fw</code> file or use <strong>Download from Lab599</strong>. The app checks the entire file against known official hashes.</li>
-      <li>With the radio on normally, CAT set to LAB599 and the correct port selected, click <strong>Verify Radio (CAT)</strong>. A missing or incompatible identity stops the update.</li>
+      <li>Compare the larger target-radio picture with your connected radio, check the printed model, and confirm that they match. With the radio on normally, CAT set to LAB599 and the correct port selected, click <strong>Verify Radio (CAT)</strong>. A missing or incompatible identity stops the update.</li>
       <li>Power off and enter the bootloader exactly as your model's manual describes. Wait for “The loader is waiting...” on the radio.</li>
       <li>Click <strong>Update Firmware</strong> and confirm the model printed on your radio. Keep power and cable connected until transfer and final acknowledgement complete.</li>
       <li>Restart the radio and check the displayed firmware version.</li>

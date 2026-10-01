@@ -6,6 +6,7 @@
 @property(nonatomic, strong) WKWebView *webView;
 @property(nonatomic, strong) NSURL *helpURL;
 @property(nonatomic) BOOL loaded;
+@property(nonatomic, strong) NSLayoutConstraint *viewportHeightConstraint;
 @end
 
 @implementation Lab599HelpController
@@ -22,7 +23,8 @@
     self.webView.navigationDelegate = self;
     self.webView.allowsBackForwardNavigationGestures = NO;
     self.view = self.webView;
-    [self.view.heightAnchor constraintEqualToConstant:620].active = YES;
+    self.viewportHeightConstraint = [self.view.heightAnchor constraintEqualToConstant:620];
+    self.viewportHeightConstraint.active = YES;
 
     self.helpURL = [[NSBundle mainBundle] URLForResource:@"index" withExtension:@"html" subdirectory:@"Help"];
     if (!self.helpURL) {
@@ -42,6 +44,10 @@
     } else {
         [self.webView loadHTMLString:@"<html><body><h1>Help is unavailable</h1><p>The bundled guide could not be found. Reinstall the complete app.</p></body></html>" baseURL:nil];
     }
+}
+
+- (void)setViewportHeight:(CGFloat)height {
+    self.viewportHeightConstraint.constant = MAX(420.0, height);
 }
 
 - (void)showTopic:(NSString *)topic {

@@ -87,6 +87,44 @@ int main(int argc, const char * argv[]) {
                        [NSString stringWithFormat:@"Reject invalid custom dial input: %@", invalid]);
         }
 
+        // Entering DIG must be confirmed without retuning or keying the radio.
+        __block NSString *catMode = @"MD2;";
+        __block NSString *catPTT = @"PT0;";
+        __block NSString *catDial = @"FA00014074000;";
+        __block NSMutableArray<NSString *> *catWrites = [NSMutableArray array];
+        BOOL (^sendCAT)(NSString *) = ^BOOL(NSString *command) {
+            [catWrites addObject:command];
+            if ([command isEqualToString:@"MD6;"]) { catMode = @"MD6;"; return YES; }
+            return NO;
+        };
+        NSString *(^queryCAT)(NSString *, NSTimeInterval) = ^NSString *(NSString *command, NSTimeInterval timeout) {
+            (void)timeout;
+            return [command isEqualToString:@"PT;"] ? catPTT :
+                   [command isEqualToString:@"FA;"] ? catDial :
+                   [command isEqualToString:@"MD;"] ? catMode : nil;
+        };
+        NSString *modeFailure = nil;
+        uint64_t confirmedDial = 0;
+        AssertTrue(TX500EnsureDigitalCAT(sendCAT, queryCAT, &confirmedDial, &modeFailure) &&
+                   confirmedDial == 14074000 && [catWrites isEqualToArray:@[@"MD6;"]],
+                   @"Digital start changes only CAT mode and confirms the unchanged dial");
+        [catWrites removeAllObjects];
+        AssertTrue(TX500EnsureDigitalCAT(sendCAT, queryCAT, &confirmedDial, &modeFailure) && catWrites.count == 0,
+                   @"Digital start leaves an already confirmed DIG radio unchanged");
+        catPTT = @"PT1;";
+        AssertTrue(!TX500EnsureDigitalCAT(sendCAT, queryCAT, &confirmedDial, &modeFailure) && catWrites.count == 0,
+                   @"Digital start refuses mode changes while transmit state is not RX");
+        catPTT = @"PT0;";
+        catMode = @"MD2;";
+        catDial = @"FA00014074000;";
+        AssertTrue(!TX500EnsureDigitalCAT(^BOOL(NSString *command) {
+                       [catWrites addObject:command];
+                       catDial = @"FA00014075000;";
+                       catMode = @"MD6;";
+                       return YES;
+                   }, queryCAT, &confirmedDial, &modeFailure),
+                   @"Digital start rejects an unexpected dial change after mode selection");
+
         // 1. Test FT8 Message Encoding & 8-FSK Tone Generation
         const char *testMsg = "CQ EP2AES KM35";
         unsigned char tones[FT8808_MAX_TONES];

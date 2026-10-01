@@ -6,5 +6,6 @@
 
 - (void)loadHelpIfNeeded;
 - (void)showTopic:(NSString *)topic;
+- (void)setViewportHeight:(CGFloat)height;
 
 @end

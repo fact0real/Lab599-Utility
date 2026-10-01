@@ -286,6 +286,8 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 @property(nonatomic, strong) NSLayoutConstraint *sidebarCollapsedTrailingConstraint;
 @property(nonatomic, strong) NSLayoutConstraint *sidebarDividerWidthConstraint;
 @property(nonatomic, assign) BOOL sidebarCollapsed;
+@property(nonatomic, assign) BOOL sidebarAutoCollapsed;
+@property(nonatomic, assign) BOOL sidebarManualOverride;
 @property(nonatomic, strong) NSView *mainContentView;
 @property(nonatomic, strong) NSScrollView *mainScrollView;
 @property(nonatomic, strong) NSBox *connectionBar;
@@ -353,6 +355,8 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 // Radio Hardware Preview
 @property(nonatomic, strong) NSBox *radioPreviewBox;
 @property(nonatomic, strong) NSImageView *radioImageView;
+@property(nonatomic, strong) NSButton *radioPictureConfirmation;
+@property(nonatomic, copy) NSString *radioPictureConfirmedHash;
 @property(nonatomic, strong) NSTextField *radioModelLabel;
 @property(nonatomic, strong) NSTextField *radioSpecsLabel;
 @property(nonatomic, strong) NSTextField *radioCompatibilityBadge;
@@ -390,6 +394,9 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     (void)sender;
     if(![self stationCanEdit]) { if(self.stationPort.length) [self.portMenu selectItemWithTitle:self.stationPort]; [self appendLog:@"Stop station activity before changing the CAT port."]; return; }
     [self clearFirmwareCATVerification];
+    self.radioPictureConfirmation.state = NSControlStateValueOff;
+    self.radioPictureConfirmedHash = nil;
+    self.verifyRadioButton.enabled = NO;
     self.stationPort=[self currentStationPort];
     [self.tools portsAvailable:self.hasPorts];
     if(self.stationCore.owner.length) [self.stationCore selectOwner:self.stationCore.owner port:self.stationPort error:nil];
@@ -410,7 +417,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     self.cwStationController.assistant.myCallsign=profile[@"call"] ?: @"";
     [self.cwStationController applyStationInputDeviceUID:profile[@"radioInput"]];
     // Engines retain their DSP implementations but share a station-level route configuration.
-    if ([self stationCanEdit]) {
+    if ([self stationCanEdit] && !self.audioMonitorController.engine.isMonitoring) {
         NSString *input=profile[@"radioInput"], *output=profile[@"radioOutput"];
         BOOL configured=profile[@"radioInput"]!=nil;
         if(configured) {
@@ -526,15 +533,15 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         defaultW = MIN(960.0, screenRect.size.width - 60.0);
         defaultH = MIN(620.0, screenRect.size.height - 80.0);
     }
-    if (defaultW < 780.0) defaultW = 780.0;
-    if (defaultH < 460.0) defaultH = 460.0;
+    defaultW = MIN(screenRect.size.width - 24.0, MAX(580.0, defaultW));
+    defaultH = MIN(screenRect.size.height - 24.0, MAX(380.0, defaultH));
 
     self.window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, defaultW, defaultH)
         styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable | NSWindowStyleMaskResizable)
         backing:NSBackingStoreBuffered defer:NO];
     self.window.title = @"Lab599 Utility";
     self.window.delegate = self;
-    self.window.minSize = NSMakeSize(780, 460);
+    self.window.minSize = NSMakeSize(MIN(780, MAX(580, screenRect.size.width - 24)), MIN(460, MAX(380, screenRect.size.height - 24)));
     [self.window setFrameAutosaveName:@"Lab599UtilityMainWindow"];
 
     // Ensure the restored or initial frame strictly fits within current display visible bounds
@@ -1024,6 +1031,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     connStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     connStack.alignment = NSLayoutAttributeCenterY;
     connStack.spacing = 8;
+    connStack.detachesHiddenViews = YES;
     connStack.translatesAutoresizingMaskIntoConstraints = NO;
     [self.connectionBar.contentView addSubview:connStack];
 
@@ -1243,6 +1251,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     self.audioMonitorController.onMonitoringStateChanged = ^(BOOL isMonitoring) {
         (void)isMonitoring;
         [weakSelf updateConnectionStatusBar];
+        [weakSelf refreshFirmwareActionAvailability];
     };
     self.audioMonitorController.selectedPortProvider = ^NSString *{
         if (!weakSelf.hasPorts) return nil;
@@ -1486,7 +1495,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     self.mainScrollView = [Lab599FittableScrollView new];
     self.mainScrollView.translatesAutoresizingMaskIntoConstraints = NO;
     self.mainScrollView.hasVerticalScroller = YES;
-    self.mainScrollView.hasHorizontalScroller = NO;
+    self.mainScrollView.hasHorizontalScroller = YES;
     self.mainScrollView.autohidesScrollers = YES;
     self.mainScrollView.borderType = NSNoBorder;
     self.mainScrollView.drawsBackground = NO;
@@ -1513,8 +1522,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     NSLayoutConstraint *docWidthConstraint = [mainDocView.widthAnchor constraintEqualToAnchor:self.mainScrollView.contentView.widthAnchor];
     docWidthConstraint.priority = 999;
 
-    NSLayoutConstraint *minDocW = [mainDocView.widthAnchor constraintGreaterThanOrEqualToConstant:500.0];
-    minDocW.priority = NSLayoutPriorityDefaultLow;
+    NSLayoutConstraint *minDocW = [mainDocView.widthAnchor constraintGreaterThanOrEqualToConstant:660.0];
 
     [NSLayoutConstraint activateConstraints:@[
         [self.connectionBar.topAnchor constraintEqualToAnchor:self.mainContentView.topAnchor constant:12],
@@ -1572,6 +1580,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     [self applySidebarCollapsed:(requestedSidebarExpanded ? NO : (requestedSidebarCollapsed || savedSidebarCollapsed))
                        animated:NO
                         persist:NO];
+    [self updateCompactLayout];
     [self updateConnectionStatusBar];
     if ([[NSProcessInfo processInfo].arguments containsObject:@"--telemetry-demo"]) {
         self.operationPicker.selectedSegment = 2;
@@ -1803,9 +1812,13 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         [self.portMenu selectItemWithTitle:previous];
     }
     self.portMenu.enabled = self.hasPorts;
-    if (![previous isEqualToString:self.portMenu.selectedItem.title]) [self clearFirmwareCATVerification];
-    self.verifyRadioButton.enabled = self.hasPorts && self.firmwareURL != nil;
-    self.updateButton.enabled = self.hasPorts && self.firmwareURL != nil && [self firmwareCATVerificationIsCurrentForPort:self.portMenu.selectedItem.title hash:self.firmwareLoadedSHA256];
+    if (![previous isEqualToString:self.portMenu.selectedItem.title]) {
+        [self clearFirmwareCATVerification];
+        self.radioPictureConfirmation.state = NSControlStateValueOff;
+        self.radioPictureConfirmedHash = nil;
+    }
+    self.verifyRadioButton.enabled = self.hasPorts && [self stationCanEdit] && [self radioPictureIsConfirmed];
+    self.updateButton.enabled = self.hasPorts && [self stationCanEdit] && [self radioPictureIsConfirmed] && [self firmwareCATVerificationIsCurrentForPort:self.portMenu.selectedItem.title hash:self.firmwareLoadedSHA256];
     self.syncButton.enabled = self.hasPorts;
     [self.tools portsAvailable:self.hasPorts];
     if (sender) {
@@ -1907,7 +1920,25 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 
 - (void)toggleSidebar:(id)sender {
     (void)sender;
+    self.sidebarAutoCollapsed = NO;
+    self.sidebarManualOverride = YES;
     [self applySidebarCollapsed:!self.sidebarCollapsed animated:YES persist:YES];
+}
+
+- (void)updateCompactLayout {
+    if (!self.window || !self.sidebarView) return;
+    CGFloat width = self.window.contentView.bounds.size.width;
+    self.outdoorModeButton.hidden = width < 720.0;
+    self.consoleToggleButton.hidden = width < 720.0;
+    self.statusPillBox.hidden = width < 620.0;
+    if (self.sidebarManualOverride) return;
+    if (width < 890.0 && !self.sidebarCollapsed) {
+        self.sidebarAutoCollapsed = YES;
+        [self applySidebarCollapsed:YES animated:NO persist:NO];
+    } else if (width > 970.0 && self.sidebarAutoCollapsed) {
+        self.sidebarAutoCollapsed = NO;
+        [self applySidebarCollapsed:NO animated:NO persist:NO];
+    }
 }
 
 - (void)applySidebarCollapsed:(BOOL)collapsed animated:(BOOL)animated persist:(BOOL)persist {
@@ -1978,6 +2009,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     self.logCardHeightConstraint.active = !self.logCollapsed;
     [self updateConsoleToggleButton];
     [self.window layoutIfNeeded];
+    [self.helpController setViewportHeight:MAX(420.0, self.mainScrollView.contentView.bounds.size.height - 95.0)];
 }
 
 - (void)updateConsoleToggleButton {
@@ -2104,7 +2136,6 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     if(leavingVoice && ![self.voiceKeyerController deactivate]) { self.operationPicker.selectedSegment=14; return; }
     if(exclusive || (!passive && ![self.stationCore.owner isEqual:desired])) {
         [self.ft8StationController stopStation]; [self.cwStationController stopStation];
-        [self.audioMonitorController stopController];
         NSError *releaseError=nil;
         if(![self.stationCore releaseOwnedTX:&releaseError]) { [self appendLog:releaseError.localizedDescription]; return; }
     }
@@ -2277,7 +2308,11 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     if (isDocs) [self.docsController refreshLocalAvailability];
 
     self.helpController.view.hidden = !isHelp;
-    if (isHelp) [self.helpController loadHelpIfNeeded];
+    if (isHelp) {
+        [self.helpController loadHelpIfNeeded];
+        [self.mainContentView layoutSubtreeIfNeeded];
+        [self.helpController setViewportHeight:MAX(420.0, self.mainScrollView.contentView.bounds.size.height - 95.0)];
+    }
 
     self.feedbackController.view.hidden = !isFeedback;
     if (isFeedback) [self.feedbackController refreshDiagnostics];
@@ -2301,7 +2336,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     self.instructions.preferredMaxLayoutWidth = (availW > 300.0) ? (availW - 4.0) : 720.0;
 
     if (isFW) {
-    self.instructions.stringValue = @"Select a reviewed firmware file. With the radio on normally and CAT set to LAB599 at 9600 baud, click Verify Radio (CAT). Then power off, enter the loader using your model's manual, and click Update Firmware. Keep stable power and the cable connected.";
+        self.instructions.stringValue = @"Select reviewed firmware and confirm the pictured target matches your radio's printed model. With the radio on normally and CAT set to LAB599 at 9600 baud, click Verify Radio (CAT). Then enter the loader using your model's manual and click Update Firmware. Keep stable power and the cable connected.";
         self.statusLabel.stringValue = @"Select the transceiver's serial port and choose or download the firmware file.";
     } else if (isSync) {
         self.instructions.stringValue = @"Turn the radio on normally with POWER. Lab599 Utility disciplines an internal continuous UTC clock using multi-source network time, calibrated holdover, and robust FT8 timing consensus when offline. Choose local time or UTC for the radio display; the host system clock is never stepped.";
@@ -2361,6 +2396,10 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     [self.instructions invalidateIntrinsicContentSize];
     [self updateClockPreview:nil];
     [self updateConnectionStatusBar];
+    [self refreshFirmwareActionAvailability];
+    if (isFW && self.audioMonitorController.engine.isMonitoring) {
+        self.statusLabel.stringValue = @"Live Audio is still playing. Stop monitoring in Live Audio before verifying or updating firmware.";
+    }
 }
 
 - (void)setToolsBusy:(BOOL)busy {
@@ -2368,8 +2407,8 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     self.operationPicker.enabled = self.timeZoneMenu.enabled = self.refreshButton.enabled = !busy;
     self.chooseButton.enabled = self.onlineButton.enabled = !busy;
     self.portMenu.enabled = !busy && self.hasPorts;
-    self.verifyRadioButton.enabled = !busy && self.hasPorts && self.firmwareURL != nil;
-    self.updateButton.enabled = !busy && self.hasPorts && self.firmwareURL != nil && [self firmwareCATVerificationIsCurrentForPort:self.portMenu.selectedItem.title hash:self.firmwareLoadedSHA256];
+    self.verifyRadioButton.enabled = !busy && self.hasPorts && [self stationCanEdit] && [self radioPictureIsConfirmed];
+    self.updateButton.enabled = !busy && self.hasPorts && [self stationCanEdit] && [self radioPictureIsConfirmed] && [self firmwareCATVerificationIsCurrentForPort:self.portMenu.selectedItem.title hash:self.firmwareLoadedSHA256];
     self.syncButton.enabled = !busy && self.hasPorts;
     self.outdoorModeButton.enabled = !busy;
     for (TX500SidebarButton *btn in self.sidebarItems) {
@@ -2457,10 +2496,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         [NSString stringWithFormat:@"Resources/%@", filename],
         [NSString stringWithFormat:@"../Resources/%@", filename],
         [NSString stringWithFormat:@"assets/%@", filename],
-        [NSString stringWithFormat:@"../assets/%@", filename],
-        [NSString stringWithFormat:@"/Users/factoreal/Downloads/TX-500/Updater/Resources/%@", filename],
-        [NSString stringWithFormat:@"/Users/factoreal/Downloads/TX-500/Updater/assets/%@", filename],
-        [NSString stringWithFormat:@"/Users/factoreal/Downloads/TX-500/Manual/%@", filename]
+        [NSString stringWithFormat:@"../assets/%@", filename]
     ];
     for (NSString *path in candidates) {
         if ([[NSFileManager defaultManager] fileExistsAtPath:path]) {
@@ -2487,12 +2523,14 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 
     NSImageView *imageView = [NSImageView new];
     imageView.imageScaling = NSImageScaleProportionallyUpOrDown;
-    imageView.image = [self loadRadioImage];
+    imageView.image = nil;
     imageView.translatesAutoresizingMaskIntoConstraints = NO;
     self.radioImageView = imageView;
 
     self.radioModelLabel = [NSTextField labelWithString:@"Target Radio: —"];
     self.radioModelLabel.font = [NSFont systemFontOfSize:14 weight:NSFontWeightBold];
+    self.radioModelLabel.maximumNumberOfLines = 0;
+    self.radioModelLabel.lineBreakMode = NSLineBreakByWordWrapping;
 
     self.radioSpecsLabel = [self wrappingLabel:@"Target details appear after a reviewed firmware file is selected."];
     self.radioSpecsLabel.textColor = NSColor.secondaryLabelColor;
@@ -2501,6 +2539,8 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     self.radioCompatibilityBadge = [NSTextField labelWithString:@"Select a reviewed .fw file to inspect its target; connected radio model is not verified here."];
     self.radioCompatibilityBadge.font = [NSFont systemFontOfSize:12 weight:NSFontWeightMedium];
     self.radioCompatibilityBadge.textColor = NSColor.secondaryLabelColor;
+    self.radioCompatibilityBadge.maximumNumberOfLines = 0;
+    self.radioCompatibilityBadge.lineBreakMode = NSLineBreakByWordWrapping;
 
     NSStackView *textStack = [NSStackView stackViewWithViews:@[self.radioModelLabel, self.radioSpecsLabel, self.radioCompatibilityBadge]];
     textStack.orientation = NSUserInterfaceLayoutOrientationVertical;
@@ -2508,21 +2548,23 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     textStack.spacing = 3;
     textStack.translatesAutoresizingMaskIntoConstraints = NO;
 
-    NSStackView *hStack = [NSStackView stackViewWithViews:@[imageView, textStack]];
-    hStack.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    hStack.alignment = NSLayoutAttributeCenterY;
-    hStack.spacing = 14;
-    hStack.translatesAutoresizingMaskIntoConstraints = NO;
-    [box.contentView addSubview:hStack];
+    self.radioPictureConfirmation = [NSButton checkboxWithTitle:@"I confirm my connected radio matches this picture and the printed model" target:self action:@selector(radioPictureConfirmationChanged:)];
+    self.radioPictureConfirmation.enabled = NO;
+    NSStackView *previewStack = [NSStackView stackViewWithViews:@[imageView, textStack, self.radioPictureConfirmation]];
+    previewStack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    previewStack.alignment = NSLayoutAttributeLeading;
+    previewStack.spacing = 7;
+    previewStack.translatesAutoresizingMaskIntoConstraints = NO;
+    [box.contentView addSubview:previewStack];
 
     [NSLayoutConstraint activateConstraints:@[
-        [imageView.widthAnchor constraintEqualToConstant:150],
-        [imageView.heightAnchor constraintEqualToConstant:80],
-        [hStack.leadingAnchor constraintEqualToAnchor:box.contentView.leadingAnchor constant:12],
-        [hStack.trailingAnchor constraintEqualToAnchor:box.contentView.trailingAnchor constant:-12],
-        [hStack.topAnchor constraintEqualToAnchor:box.contentView.topAnchor constant:7],
-        [hStack.bottomAnchor constraintEqualToAnchor:box.contentView.bottomAnchor constant:-7],
-        [textStack.trailingAnchor constraintEqualToAnchor:hStack.trailingAnchor]
+        [imageView.widthAnchor constraintEqualToConstant:300],
+        [imageView.heightAnchor constraintEqualToConstant:155],
+        [previewStack.leadingAnchor constraintEqualToAnchor:box.contentView.leadingAnchor constant:12],
+        [previewStack.trailingAnchor constraintLessThanOrEqualToAnchor:box.contentView.trailingAnchor constant:-12],
+        [previewStack.topAnchor constraintEqualToAnchor:box.contentView.topAnchor constant:9],
+        [previewStack.bottomAnchor constraintEqualToAnchor:box.contentView.bottomAnchor constant:-9],
+        [textStack.widthAnchor constraintEqualToAnchor:box.contentView.widthAnchor constant:-24]
     ]];
 
     return box;
@@ -2662,8 +2704,11 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 
 - (void)updateRadioPreviewForFirmwareData:(NSData *)data url:(NSURL *)url {
     (void)url;
+    self.radioPictureConfirmation.state = NSControlStateValueOff;
+    self.radioPictureConfirmedHash = nil;
+    self.radioPictureConfirmation.enabled = NO;
     if (!data || data.length < 16) {
-        self.radioImageView.image = [self loadRadioImageNamed:@"tx500_radio"];
+        self.radioImageView.image = nil;
         self.radioModelLabel.stringValue = @"Target Radio: —";
         self.radioSpecsLabel.stringValue = @"Target details appear after a reviewed firmware file is selected.";
         self.radioCompatibilityBadge.stringValue = @"Select a .fw file to inspect its intended target. Connected radio model is not verified here.";
@@ -2684,30 +2729,57 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         self.radioCompatibilityBadge.stringValue = @"Firmware target: TX-500 Discovery (BL20 ID 0xc61ab4aa). Connected radio model not verified.";
         self.radioCompatibilityBadge.textColor = NSColor.systemOrangeColor;
     } else if (isAltai) {
-        self.radioImageView.image = [self loadRadioImageNamed:@"tx500_pro_altai"] ?: [self loadRadioImage];
+        self.radioImageView.image = [self loadRadioImageNamed:@"tx500_pro_altai"];
         self.radioModelLabel.stringValue = @"Target Radio: Lab599 TX-500PRO ALTAI";
         self.radioSpecsLabel.stringValue = @"Keypad Arrow Navigation • Channelized ALTAI OS • Commercial / Tactical Waterproof Transceiver";
         self.radioCompatibilityBadge.stringValue = @"Reviewed firmware target: TX-500PRO ALTAI. Connected radio model not verified.";
         self.radioCompatibilityBadge.textColor = NSColor.systemOrangeColor;
     } else if (isPro) {
-        self.radioImageView.image = [self loadRadioImageNamed:@"tx500_pro"] ?: [self loadRadioImage];
+        self.radioImageView.image = [self loadRadioImageNamed:@"tx500_pro"];
         self.radioModelLabel.stringValue = @"Target Radio: Lab599 TX-500PRO (Tactical)";
         self.radioSpecsLabel.stringValue = @"Rotary Volume & Squelch Knobs • TUNE/MULTI Dial • Tactical Audio DSP & Extended Filters";
         self.radioCompatibilityBadge.stringValue = @"Reviewed firmware target: TX-500PRO. Connected radio model not verified.";
         self.radioCompatibilityBadge.textColor = NSColor.systemOrangeColor;
     } else if (isMP) {
-        self.radioImageView.image = [self loadRadioImageNamed:@"tx500_mp"] ?: [self loadRadioImage];
+        self.radioImageView.image = [self loadRadioImageNamed:@"tx500_mp"];
         self.radioModelLabel.stringValue = @"Target Radio: Lab599 TX-500MP (Manpack)";
         self.radioSpecsLabel.stringValue = @"192×96 Monochrome LCD • Integrated Battery System • Rugged Manpack Transceiver";
         self.radioCompatibilityBadge.stringValue = @"Firmware target: TX-500MP (BL20 ID 0x963bcdf4). Connected radio model not verified.";
         self.radioCompatibilityBadge.textColor = [NSColor colorWithSRGBRed:0.85 green:0.45 blue:0.0 alpha:1.0];
     } else {
-        self.radioImageView.image = [self loadRadioImageNamed:@"tx500_radio"];
+        self.radioImageView.image = nil;
         self.radioModelLabel.stringValue = @"Target Radio: Custom / Unknown Lab599 Hardware";
         self.radioSpecsLabel.stringValue = @"Target Specs: Lab599 Transceiver Hardware Platform";
         self.radioCompatibilityBadge.stringValue = @"Unreviewed or unrecognized firmware: flashing is blocked.";
         self.radioCompatibilityBadge.textColor = NSColor.systemOrangeColor;
     }
+    self.radioPictureConfirmation.enabled = model.length > 0 && self.radioImageView.image != nil;
+    if (!self.radioImageView.image && model.length) {
+        self.radioCompatibilityBadge.stringValue = @"The matching model picture is unavailable. Firmware verification is blocked.";
+        self.radioCompatibilityBadge.textColor = NSColor.systemRedColor;
+    }
+}
+
+- (BOOL)radioPictureIsConfirmed {
+    return self.firmwareURL != nil && self.radioImageView.image != nil &&
+        self.radioPictureConfirmation.state == NSControlStateValueOn &&
+        [self.radioPictureConfirmedHash isEqualToString:self.firmwareLoadedSHA256];
+}
+
+- (void)refreshFirmwareActionAvailability {
+    BOOL ready = self.hasPorts && [self stationCanEdit] && [self radioPictureIsConfirmed];
+    self.verifyRadioButton.enabled = ready;
+    self.updateButton.enabled = ready &&
+        [self firmwareCATVerificationIsCurrentForPort:self.portMenu.selectedItem.title hash:self.firmwareLoadedSHA256];
+}
+
+- (void)radioPictureConfirmationChanged:(NSButton *)sender {
+    self.radioPictureConfirmedHash = sender.state == NSControlStateValueOn ? self.firmwareLoadedSHA256 : nil;
+    [self clearFirmwareCATVerification];
+    self.statusLabel.stringValue = sender.state == NSControlStateValueOn ?
+        @"Picture and printed model confirmed. Click Verify Radio (CAT) while the radio is on normally." :
+        @"Compare the pictured target with the connected radio before CAT verification.";
+    [self refreshFirmwareActionAvailability];
 }
 
 #pragma mark - Local Firmware Loading
@@ -2770,9 +2842,9 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         [self appendLog:@"Matches the official TX-500 Discovery v1.30.00 release (mtrx1.30.00.fw)."];
     }
     self.statusLabel.stringValue = [NSString stringWithFormat:@"Firmware ready: %@. Turn the radio on normally, then click Verify Radio (CAT).", url.lastPathComponent];
-    self.verifyRadioButton.enabled = self.hasPorts;
     self.updateButton.enabled = NO;
     [self updateRadioPreviewForFirmwareData:data url:url];
+    self.verifyRadioButton.enabled = self.hasPorts && [self stationCanEdit] && [self radioPictureIsConfirmed];
 }
 
 #pragma mark - Online Firmware Catalog Sheet
@@ -3907,6 +3979,10 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 - (void)verifyRadioForFirmware:(id)sender {
     (void)sender;
     if (self.busy || self.operationPicker.selectedSegment != 0 || ![self stationCanEdit]) return;
+    if (![self radioPictureIsConfirmed]) {
+        [self showAlert:@"Confirm the radio picture" message:@"Compare the pictured target with your connected radio and confirm its printed model before CAT verification." warning:YES];
+        return;
+    }
     NSString *portPath = self.portMenu.selectedItem.title;
     if (!self.hasPorts || ![portPath hasPrefix:@"/dev/cu."] || !self.firmwareURL) return;
     [self clearFirmwareCATVerification];
@@ -3947,8 +4023,16 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 - (void)startUpdate:(id)sender {
     (void)sender;
     if (self.busy || self.operationPicker.selectedSegment != 0) return;
+    if (![self stationCanEdit]) {
+        [self showAlert:@"Stop active radio sessions" message:@"Stop Live Audio or other active station operations before updating firmware. No firmware was sent." warning:YES];
+        return;
+    }
     NSString *port = self.portMenu.selectedItem.title;
     if (!self.hasPorts || ![port hasPrefix:@"/dev/cu."] || !self.firmwareURL) return;
+    if (![self radioPictureIsConfirmed]) {
+        [self showAlert:@"Confirm the radio picture" message:@"The connected radio must match the pictured firmware target and printed model. No firmware was sent." warning:YES];
+        return;
+    }
 
     NSError *error = nil;
     NSData *firmware = [NSData dataWithContentsOfURL:self.firmwareURL options:0 error:&error];
@@ -4019,18 +4103,25 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     confirmation.informativeText = [NSString stringWithFormat:
         @"Firmware: %@\nReviewed target: %@\nNormal-mode CAT reply: %@ on %@\n%@\n\nThe CAT check distinguishes TX-500 family from TX-500MP; it does not independently distinguish Discovery, PRO, or ALTAI. Select the exact model printed on the radio below. Confirm it now displays \"The loader is waiting...\" and keep power and cable connected.",
         self.firmwareURL.lastPathComponent, firmwareModel, self.verifiedCATReply, port, powerInfo];
-    NSView *modelAccessory = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 400, 54)];
+    NSView *modelAccessory = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 420, 86)];
     NSTextField *modelPrompt = [NSTextField labelWithString:@"Model printed on the connected radio:"];
-    modelPrompt.frame = NSMakeRect(0, 32, 400, 20);
+    modelPrompt.frame = NSMakeRect(0, 64, 420, 20);
     [modelAccessory addSubview:modelPrompt];
-    NSPopUpButton *declaredModelMenu = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 400, 28) pullsDown:NO];
+    NSPopUpButton *declaredModelMenu = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 34, 420, 28) pullsDown:NO];
     [declaredModelMenu addItemsWithTitles:@[@"Select radio model", @"TX-500 Discovery", @"TX-500MP", @"TX-500PRO", @"TX-500PRO ALTAI"]];
     [declaredModelMenu selectItemAtIndex:0];
     [modelAccessory addSubview:declaredModelMenu];
+    NSButton *finalPictureCheck = [NSButton checkboxWithTitle:@"Yes, this radio matches the target picture and model above" target:nil action:NULL];
+    finalPictureCheck.frame = NSMakeRect(0, 2, 420, 26);
+    [modelAccessory addSubview:finalPictureCheck];
     confirmation.accessoryView = modelAccessory;
     [confirmation addButtonWithTitle:@"Start Update"];
     [confirmation addButtonWithTitle:@"Cancel"];
     if ([confirmation runModal] != NSAlertFirstButtonReturn) return;
+    if (finalPictureCheck.state != NSControlStateValueOn) {
+        [self showAlert:@"Picture confirmation required" message:@"Compare the radio with the target picture and confirm its printed model. No firmware was sent." warning:YES];
+        return;
+    }
     NSString *declaredModel = declaredModelMenu.indexOfSelectedItem > 0 ? declaredModelMenu.selectedItem.title : nil;
     NSString *preflightError = [Lab599FirmwareCatalog preflightErrorForFirmwareData:firmware
                                                                 declaredRadioModel:declaredModel];
@@ -4105,6 +4196,8 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 
 - (void)windowDidResize:(NSNotification *)notification {
     (void)notification;
+    [self updateCompactLayout];
+    [self.helpController setViewportHeight:MAX(420.0, self.mainScrollView.contentView.bounds.size.height - 95.0)];
     CGFloat availW = self.mainContentView.bounds.size.width - 28.0;
     if (availW > 300.0) {
         self.instructions.preferredMaxLayoutWidth = availW - 4.0;
@@ -4183,8 +4276,9 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     NSRect winFrame = self.window.frame;
 
     BOOL needsAdjust = NO;
-    CGFloat maxW = MAX(780.0, screenRect.size.width - 24.0);
-    CGFloat maxH = MAX(460.0, screenRect.size.height - 44.0);
+    CGFloat maxW = MAX(1.0, screenRect.size.width - 24.0);
+    CGFloat maxH = MAX(1.0, screenRect.size.height - 24.0);
+    self.window.minSize = NSMakeSize(MIN(780.0, maxW), MIN(460.0, maxH));
 
     CGFloat targetW = winFrame.size.width;
     CGFloat targetH = winFrame.size.height;
@@ -4193,8 +4287,8 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     // clamp overly bloated restored frames to comfortable bounds
     CGFloat comfortableMaxW = MIN(1080.0, screenRect.size.width - 40.0);
     CGFloat comfortableMaxH = MIN(720.0, screenRect.size.height - 50.0);
-    if (comfortableMaxW < 780.0) comfortableMaxW = 780.0;
-    if (comfortableMaxH < 460.0) comfortableMaxH = 460.0;
+    comfortableMaxW = MIN(maxW, MAX(580.0, comfortableMaxW));
+    comfortableMaxH = MIN(maxH, MAX(380.0, comfortableMaxH));
 
     if (targetW > maxW) {
         targetW = maxW;
@@ -4212,12 +4306,12 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         needsAdjust = YES;
     }
 
-    if (targetW < 780.0 && screenRect.size.width >= 780.0) {
-        targetW = 780.0;
+    if (targetW < self.window.minSize.width) {
+        targetW = self.window.minSize.width;
         needsAdjust = YES;
     }
-    if (targetH < 460.0 && screenRect.size.height >= 460.0) {
-        targetH = 460.0;
+    if (targetH < self.window.minSize.height) {
+        targetH = self.window.minSize.height;
         needsAdjust = YES;
     }
 
@@ -4256,8 +4350,8 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 
     CGFloat defaultW = MIN(960.0, screenRect.size.width - 60.0);
     CGFloat defaultH = MIN(620.0, screenRect.size.height - 80.0);
-    if (defaultW < 780.0) defaultW = 780.0;
-    if (defaultH < 460.0) defaultH = 460.0;
+    defaultW = MIN(screenRect.size.width - 24.0, MAX(580.0, defaultW));
+    defaultH = MIN(screenRect.size.height - 24.0, MAX(380.0, defaultH));
 
     NSRect targetFrame;
     targetFrame.size.width = defaultW;

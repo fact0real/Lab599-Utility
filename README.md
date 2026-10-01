@@ -2,21 +2,26 @@
 
 A native macOS application for the Lab599 TX-500 family of transceivers. It includes a Station workspace, DX Cluster, FT8/FT4 and CW operation, Voice Keyer, contact logbook, firmware updates, live telemetry, radio screen capture, time sync, CAT diagnostics, settings and memory management. Developed by **EP2AES (factoreal)**.
 
-**Latest published release: v2.270 (Build 276) · macOS 12+ · Apple Silicon and Intel · English interface · Persian guide included**
+**Latest published release: v2.271 (Build 277) · macOS 12+ · Apple Silicon and Intel · English interface · Persian guide included**
 
-[Download v2.270](https://github.com/fact0real/Lab599-Utility/releases/tag/2.270) · [In-app Help guide](Resources/Help/index.html) · [راهنمای فارسی](QUICKSTART-FA.md) · [Build instructions](UPDATER-README.md) · [Report an issue](https://github.com/fact0real/Lab599-Utility/issues/new)
+[Download v2.271](https://github.com/fact0real/Lab599-Utility/releases/tag/2.271) · [In-app Help guide](Resources/Help/index.html) · [راهنمای فارسی](QUICKSTART-FA.md) · [Build instructions](UPDATER-README.md) · [Report an issue](https://github.com/fact0real/Lab599-Utility/issues/new)
 
 ## Download and install
 
-Download `Lab599-Utility-v2.270-macOS-universal.zip` from the [v2.270 release](https://github.com/fact0real/Lab599-Utility/releases/tag/2.270). Extract the ZIP and move `Lab599 Utility.app` to `/Applications`. The ZIP contains the app, offline illustrated Help, English and Persian guides, and license notices; manufacturer firmware is not included.
+Download `Lab599-Utility-v2.271-macOS-universal.zip` from the [v2.271 release](https://github.com/fact0real/Lab599-Utility/releases/tag/2.271). Extract the ZIP and move `Lab599 Utility.app` to `/Applications`. The ZIP contains the app, offline illustrated Help, English and Persian guides, and license notices; manufacturer firmware is not included.
 
 Verify the download before opening the app:
 
 ```sh
-shasum -a 256 Lab599-Utility-v2.268-macOS-universal.zip
+shasum -a 256 Lab599-Utility-v2.271-macOS-universal.zip
 ```
 
 Compare the result with the `SHA256SUMS.txt` asset on the release page. The app is ad-hoc signed, **not Apple notarized**. If macOS blocks the first launch, select this app in **System Settings → Privacy & Security → Open Anyway** after verifying the checksum.
+
+## What's new in v2.271
+
+- The Live Audio waterfall palette regression test now renders and checks both 1x and 2x snapshots on every test Mac, sampling the same view point at either scale. This corrects a test-only coordinate error; the app's palette rendering and radio behavior are unchanged.
+- Thanks to **EA3JIC** for reporting the Retina failure and providing a focused patch for review.
 
 ## What's new in v2.270
 

@@ -160,22 +160,41 @@ int main(int argc, const char * argv[]) {
         for (NSUInteger i = 0; i < 125; i++) {
             [viz updateSpectrumWithMagnitudes:paletteMagnitudes count:256 sampleRate:48000.0f];
         }
-        NSBitmapImageRep *(^snapshot)(void) = ^NSBitmapImageRep *{
-            NSBitmapImageRep *rep = [viz bitmapImageRepForCachingDisplayInRect:viz.bounds];
+        NSBitmapImageRep *(^snapshot)(NSInteger) = ^NSBitmapImageRep *(NSInteger scale) {
+            // Exercise both display densities even when the test Mac is 1x.
+            NSBitmapImageRep *rep = [[NSBitmapImageRep alloc]
+                initWithBitmapDataPlanes:NULL
+                pixelsWide:(NSInteger)lround(NSWidth(viz.bounds) * scale)
+                pixelsHigh:(NSInteger)lround(NSHeight(viz.bounds) * scale)
+                bitsPerSample:8 samplesPerPixel:4 hasAlpha:YES isPlanar:NO
+                colorSpaceName:NSDeviceRGBColorSpace bytesPerRow:0 bitsPerPixel:0];
+            AssertTrue(rep != nil, @"Waterfall snapshot allocated");
+            rep.size = viz.bounds.size;
             [viz cacheDisplayInRect:viz.bounds toBitmapImageRep:rep];
             return rep;
         };
-        viz.phosphorAmberTheme = NO;
-        NSColor *cyan = [snapshot() colorAtX:200 y:25];
-        viz.phosphorAmberTheme = YES;
-        NSColor *amber = [snapshot() colorAtX:200 y:25];
-        AssertTrue(cyan != nil && amber != nil, @"Waterfall snapshots rendered");
-        AssertTrue(amber.redComponent > cyan.redComponent + 0.08,
-                   @"Previously drawn waterfall rows immediately use the amber palette");
-        viz.phosphorAmberTheme = NO;
-        NSColor *restored = [snapshot() colorAtX:200 y:25];
-        AssertTrue(fabs(restored.redComponent - cyan.redComponent) < 0.05,
-                   @"Previously drawn waterfall rows return to cyan without new audio");
+        // AppKit renders cache images in pixels, while view bounds use points.
+        // Sample the same view location on both standard and Retina displays.
+        NSColor *(^sampleWaterfall)(NSInteger) = ^NSColor *(NSInteger scale) {
+            NSBitmapImageRep *rep = snapshot(scale);
+            CGFloat xScale = (CGFloat)rep.pixelsWide / NSWidth(viz.bounds);
+            CGFloat yScale = (CGFloat)rep.pixelsHigh / NSHeight(viz.bounds);
+            return [rep colorAtX:(NSInteger)lround(200.0 * xScale)
+                             y:(NSInteger)lround(25.0 * yScale)];
+        };
+        for (NSInteger scale = 1; scale <= 2; scale++) {
+            viz.phosphorAmberTheme = NO;
+            NSColor *cyan = sampleWaterfall(scale);
+            viz.phosphorAmberTheme = YES;
+            NSColor *amber = sampleWaterfall(scale);
+            AssertTrue(cyan != nil && amber != nil, @"Waterfall snapshots rendered");
+            AssertTrue(amber.redComponent > cyan.redComponent + 0.08,
+                       [NSString stringWithFormat:@"Existing waterfall rows use amber at %ldx", (long)scale]);
+            viz.phosphorAmberTheme = NO;
+            NSColor *restored = sampleWaterfall(scale);
+            AssertTrue(fabs(restored.redComponent - cyan.redComponent) < 0.05,
+                       [NSString stringWithFormat:@"Existing waterfall rows return to cyan at %ldx", (long)scale]);
+        }
 
         // 9. Test Controller VFO Tuning & Memory Bank
         TX500AudioMonitorController *ctrl = [[TX500AudioMonitorController alloc] init];

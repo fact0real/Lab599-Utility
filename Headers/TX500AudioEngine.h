@@ -28,7 +28,7 @@ typedef NS_ENUM(NSInteger, TX500AudioFilterPreset) {
 @interface TX500AudioDeviceItem : NSObject
 @property (nonatomic, copy) NSString *name;
 @property (nonatomic, copy) NSString *uid;
-@property (nonatomic, assign) BOOL isAD508;
+@property (nonatomic, assign) BOOL isPreferredUSBAudio;
 @property (nonatomic, assign) BOOL isUSB;
 @property (nonatomic, assign) BOOL isVirtual;
 @property (nonatomic, assign) BOOL isInput;
@@ -39,8 +39,8 @@ typedef NS_ENUM(NSInteger, TX500AudioFilterPreset) {
 // State
 @property (nonatomic, assign, readonly) BOOL isMonitoring;
 @property (nonatomic, assign, readonly) BOOL isRecording;
-@property (nonatomic, assign, readonly) BOOL isAD508Connected;
-@property (nonatomic, copy, readonly, nullable) NSString *ad508DeviceName;
+@property (nonatomic, assign, readonly) BOOL isPreferredUSBAudioConnected;
+@property (nonatomic, copy, readonly, nullable) NSString *preferredUSBAudioDeviceName;
 @property (nonatomic, assign) BOOL isSimulationMode;
 
 // Hardware Devices

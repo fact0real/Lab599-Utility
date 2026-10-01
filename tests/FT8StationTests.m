@@ -52,6 +52,28 @@ int main(int argc, const char * argv[]) {
         (void)argc; (void)argv;
         NSLog(@"Running Lab599 Discovery TX-500 FT8 Digital Suite Tests...");
 
+        // The tested AD-508 appears as separate :1 output and :2 input UIDs.
+        // A second generic "USB Audio" device must not steal the TX output.
+        NSString *radioInputUID = @"AppleUSBAudioEngine:TTGK Technology:USB Audio:radio-serial:2";
+        NSString *radioOutputUID = @"AppleUSBAudioEngine:TTGK Technology:USB Audio:radio-serial:1";
+        NSArray *pairInputs = @[@{@"uid": radioInputUID, @"name": @"USB Audio", @"isUSB": @"YES"}];
+        NSArray *pairOutputs = @[
+            @{@"uid": @"AppleUSBAudioEngine:TTGK Technology:USB Audio:other-serial:1", @"name": @"USB Audio", @"isUSB": @"YES"},
+            @{@"uid": radioOutputUID, @"name": @"USB Audio", @"isUSB": @"YES"}
+        ];
+        AssertTrue([[TX500FT8AudioEngine matchingOutputUIDForInputUID:radioInputUID
+                                                            inputDevices:pairInputs
+                                                           outputDevices:pairOutputs] isEqualToString:radioOutputUID],
+                   @"FT8 pairs the selected USB input with its own output, not another device of the same name");
+        AssertTrue([TX500FT8AudioEngine matchingOutputUIDForInputUID:radioInputUID
+                                                        inputDevices:pairInputs
+                                                       outputDevices:@[pairOutputs.firstObject]] == nil,
+                   @"FT8 does not guess a TX output from a generic USB Audio name");
+        AssertTrue([[TX500FT8AudioEngine matchingOutputUIDForInputUID:@"shared-uid"
+                                                            inputDevices:@[@{@"uid": @"shared-uid"}]
+                                                           outputDevices:@[@{@"uid": @"shared-uid"}]] isEqualToString:@"shared-uid"],
+                   @"FT8 supports interfaces with one shared input/output UID");
+
         uint64_t dialHz = 0;
         AssertTrue(TX500ParseDigitalDialMHz(@"14.075001", &dialHz) && dialHz == 14075001,
                    @"Custom digital dial preserves one-hertz precision");

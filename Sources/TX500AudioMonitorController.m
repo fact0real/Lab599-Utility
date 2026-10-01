@@ -408,7 +408,7 @@
     [self.statusLEDView.widthAnchor constraintEqualToConstant:8].active = YES;
     [self.statusLEDView.heightAnchor constraintEqualToConstant:8].active = YES;
 
-    self.statusLabel = [NSTextField labelWithString:@"Checking AD-508 Cable..."];
+    self.statusLabel = [NSTextField labelWithString:@"Checking audio inputs..."];
     self.statusLabel.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
     self.statusLabel.translatesAutoresizingMaskIntoConstraints = NO;
 
@@ -912,7 +912,7 @@
     title.font = [NSFont systemFontOfSize:10.5 weight:NSFontWeightBold];
     title.textColor = [NSColor secondaryLabelColor];
 
-    NSTextField *inLabel = [NSTextField labelWithString:@"Input (AD-508 / Radio):"];
+    NSTextField *inLabel = [NSTextField labelWithString:@"Input (Radio Audio):"];
     inLabel.font = [NSFont systemFontOfSize:10.5 weight:NSFontWeightMedium];
     self.inputDevicePopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
     self.inputDevicePopup.controlSize = NSControlSizeSmall;
@@ -1299,7 +1299,7 @@
 - (NSView *)buildCableGuideCard {
     NSView *container = [self createCardView];
 
-    self.guideDisclosureButton = [NSButton buttonWithTitle:(_isGuideCollapsed ? @"▶ AD-508 HARDWARE CABLING & OPERATION GUIDE" : @"▼ AD-508 HARDWARE CABLING & OPERATION GUIDE")
+    self.guideDisclosureButton = [NSButton buttonWithTitle:(_isGuideCollapsed ? @"▶ RADIO AUDIO CABLING & OPERATION GUIDE" : @"▼ RADIO AUDIO CABLING & OPERATION GUIDE")
                                                     target:self
                                                     action:@selector(toggleCableGuide:)];
     self.guideDisclosureButton.bezelStyle = NSBezelStyleInline;
@@ -1307,7 +1307,7 @@
     self.guideDisclosureButton.contentTintColor = [NSColor secondaryLabelColor];
 
     self.guideContentLabel = [NSTextField wrappingLabelWithString:
-        @"• Hardware Connection: Connect the 7-pin GX12 connector of your official Lab599 AD-508 cable to the TX-500 REM/DATA port. Connect the USB-C end directly to your Mac. macOS natively recognizes the built-in USB Audio Class codec without third-party drivers.\n"
+        @"• Hardware Connection: The tested AD-508 connects the TX-500 REM/DATA port directly to Mac USB-C and appears as a USB Audio input and output. Choose the actual macOS input device; a generic USB Audio name alone does not identify a cable model. Other compatible audio interfaces can also be selected. The stock blue CAT cable is a separate serial connection and carries no audio.\n"
         @"• Transceiver Settings: For cleanest audio, adjust the radio's AF Gain knob or set DIG Audio Level (Menu 27/28) to nominal. Click 'LISTEN LIVE' to monitor radio audio with ultra-low latency directly on your laptop speakers or headphones."
     ];
     self.guideContentLabel.translatesAutoresizingMaskIntoConstraints = NO;
@@ -1340,10 +1340,10 @@
     [self.inputDevicePopup removeAllItems];
     for (TX500AudioDeviceItem *item in self.engine.inputDevices) {
         NSString *disp = item.name;
-        if (item.isAD508) {
-            disp = [NSString stringWithFormat:@"★ %@ (AD-508 USB-C)", item.name];
+        if (item.isPreferredUSBAudio) {
+            disp = [NSString stringWithFormat:@"★ %@ (USB Audio)", item.name];
         } else if (item.isUSB) {
-            disp = [NSString stringWithFormat:@"★ %@ (Radio USB Audio)", item.name];
+            disp = [NSString stringWithFormat:@"★ %@ (USB Audio)", item.name];
         } else if (item.isVirtual) {
             disp = [NSString stringWithFormat:@"%@ (Virtual)", item.name];
         }
@@ -1362,10 +1362,10 @@
     [self.outputDevicePopup removeAllItems];
     for (TX500AudioDeviceItem *item in self.engine.outputDevices) {
         NSString *disp = item.name;
-        if (item.isAD508) {
-            disp = [NSString stringWithFormat:@"★ %@ (AD-508 USB-C)", item.name];
+        if (item.isPreferredUSBAudio) {
+            disp = [NSString stringWithFormat:@"★ %@ (USB Audio)", item.name];
         } else if (item.isUSB) {
-            disp = [NSString stringWithFormat:@"★ %@ (Radio USB Audio)", item.name];
+            disp = [NSString stringWithFormat:@"★ %@ (USB Audio)", item.name];
         } else if (item.isVirtual) {
             disp = [NSString stringWithFormat:@"%@ (Virtual)", item.name];
         }
@@ -1390,15 +1390,24 @@
 }
 
 - (void)updateHardwareStatusPill {
-    if (self.engine.isAD508Connected) {
+    TX500AudioDeviceItem *selectedInput = nil;
+    for (TX500AudioDeviceItem *item in self.engine.inputDevices) {
+        if ([item.uid isEqualToString:self.engine.selectedInputDeviceUID]) {
+            selectedInput = item;
+            break;
+        }
+    }
+    if (selectedInput.isUSB) {
         self.statusLEDView.layer.backgroundColor = [NSColor colorWithCalibratedRed:0.16 green:0.82 blue:0.25 alpha:1.0].CGColor;
-        self.statusLabel.stringValue = [NSString stringWithFormat:@"AD-508 Connected: %@", self.engine.ad508DeviceName ?: @"USB Audio"];
+        self.statusLabel.stringValue = [NSString stringWithFormat:@"USB audio input selected: %@", selectedInput.name];
         self.statusLabel.textColor = [NSColor colorWithCalibratedRed:0.12 green:0.68 blue:0.22 alpha:1.0];
         self.statusPillBox.fillColor = [NSColor colorWithCalibratedRed:0.16 green:0.82 blue:0.25 alpha:0.14];
         self.statusPillBox.borderColor = [NSColor colorWithCalibratedRed:0.16 green:0.82 blue:0.25 alpha:0.40];
     } else {
         self.statusLEDView.layer.backgroundColor = [NSColor systemOrangeColor].CGColor;
-        self.statusLabel.stringValue = @"AD-508 Not Detected (Using Default Input)";
+        self.statusLabel.stringValue = selectedInput ?
+            [NSString stringWithFormat:@"Audio input selected: %@", selectedInput.name] :
+            @"Select a radio audio input";
         self.statusLabel.textColor = [NSColor systemOrangeColor];
         self.statusPillBox.fillColor = [NSColor colorWithCalibratedRed:1.0 green:0.6 blue:0.0 alpha:0.10];
         self.statusPillBox.borderColor = [NSColor colorWithCalibratedRed:1.0 green:0.6 blue:0.0 alpha:0.30];
@@ -1837,7 +1846,7 @@
     (void)sender;
     _isGuideCollapsed = !_isGuideCollapsed;
     [[NSUserDefaults standardUserDefaults] setBool:_isGuideCollapsed forKey:@"TX500_AudioCableGuideCollapsed"];
-    self.guideDisclosureButton.title = _isGuideCollapsed ? @"▶ AD-508 HARDWARE CABLING & OPERATION GUIDE" : @"▼ AD-508 HARDWARE CABLING & OPERATION GUIDE";
+    self.guideDisclosureButton.title = _isGuideCollapsed ? @"▶ RADIO AUDIO CABLING & OPERATION GUIDE" : @"▼ RADIO AUDIO CABLING & OPERATION GUIDE";
     self.guideContentLabel.hidden = _isGuideCollapsed;
 }
 
@@ -1856,7 +1865,7 @@
     } else {
         NSError *error = nil;
         if ([self.engine startMonitoring:&error]) {
-            if (self.logHandler) self.logHandler([NSString stringWithFormat:@"Started live radio monitoring via AD-508 (Latency: %.1f ms).", self.engine.currentLatencyMs]);
+            if (self.logHandler) self.logHandler([NSString stringWithFormat:@"Started live radio audio monitoring (Latency: %.1f ms).", self.engine.currentLatencyMs]);
         } else {
             if (self.logHandler) self.logHandler([NSString stringWithFormat:@"Failed to start audio monitoring: %@", error.localizedDescription]);
         }
@@ -1921,6 +1930,7 @@
     }
     if (uid) {
         self.engine.selectedInputDeviceUID = uid;
+        [self updateHardwareStatusPill];
         if (self.engine.isMonitoring) {
             [self.engine stopMonitoring];
             [self.engine startMonitoring:nil];

@@ -643,7 +643,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 
     // Setup legacy operation picker for CLI arguments and underlying state
     self.operationPicker = [NSSegmentedControl segmentedControlWithLabels:@[
-        @"Firmware Update", @"Time Sync", @"Telemetry", @"Radio Screen", @"CAT Studio", @"Settings", @"Memory", @"CAT Connection", @"Documentation", @"Feedback & Suggestion", @"CW Station", @"Live Audio (AD-508)", @"FT8 / FT4 Digital", @"Logbook & Cloud", @"Voice Keyer", @"Station", @"DX Cluster", @"Help"
+        @"Firmware Update", @"Time Sync", @"Telemetry", @"Radio Screen", @"CAT Studio", @"Settings", @"Memory", @"CAT Connection", @"Documentation", @"Feedback & Suggestion", @"CW Station", @"Live Audio", @"FT8 / FT4 Digital", @"Logbook & Cloud", @"Voice Keyer", @"Station", @"DX Cluster", @"Help"
     ] trackingMode:NSSegmentSwitchTrackingSelectOne target:self action:@selector(operationChanged:)];
     self.operationPicker.selectedSegment = 0;
     self.operationPicker.hidden = YES;
@@ -745,7 +745,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     TX500SidebarButton *btnHelp = [[TX500SidebarButton alloc] initWithTitle:@"Help" iconName:@"questionmark.circle" tag:17 target:self action:@selector(sidebarItemClicked:)];
     TX500SidebarButton *btnFeedback = [[TX500SidebarButton alloc] initWithTitle:@"Feedback" iconName:@"bubble.left.and.bubble.right" tag:9 target:self action:@selector(sidebarItemClicked:)];
     TX500SidebarButton *btnCW = [[TX500SidebarButton alloc] initWithTitle:@"CW Station" iconName:@"waveform" tag:10 target:self action:@selector(sidebarItemClicked:)];
-    TX500SidebarButton *btnAudio = [[TX500SidebarButton alloc] initWithTitle:@"Live Audio (AD-508)" iconName:@"headphones" tag:11 target:self action:@selector(sidebarItemClicked:)];
+    TX500SidebarButton *btnAudio = [[TX500SidebarButton alloc] initWithTitle:@"Live Audio" iconName:@"headphones" tag:11 target:self action:@selector(sidebarItemClicked:)];
     TX500SidebarButton *btnFT8 = [[TX500SidebarButton alloc] initWithTitle:@"FT8 / FT4 Digital" iconName:@"dot.radiowaves.left.and.right" tag:12 target:self action:@selector(sidebarItemClicked:)];
     TX500SidebarButton *btnLogbook = [[TX500SidebarButton alloc] initWithTitle:@"Logbook & Cloud" iconName:@"books.vertical" tag:13 target:self action:@selector(sidebarItemClicked:)];
 
@@ -2029,9 +2029,9 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         self.statusPillBox.fillColor   = [NSColor colorWithSRGBRed:0.75 green:0.25 blue:0.95 alpha:0.14];
         self.statusPillBox.borderColor = [NSColor colorWithSRGBRed:0.75 green:0.25 blue:0.95 alpha:0.40];
     } else if (audioLive) {
-        // Live Audio Monitoring via AD-508 active — vivid green
+        // Live Audio Monitoring active — vivid green
         self.statusLEDView.layer.backgroundColor = [NSColor colorWithSRGBRed:0.10 green:0.85 blue:0.45 alpha:1.0].CGColor;
-        self.connectionStatusLabel.stringValue = @"Live Audio (AD-508)";
+        self.connectionStatusLabel.stringValue = @"Live Audio";
         self.connectionStatusLabel.textColor = [NSColor colorWithSRGBRed:0.08 green:0.75 blue:0.38 alpha:1.0];
         self.statusPillBox.fillColor   = [NSColor colorWithSRGBRed:0.10 green:0.85 blue:0.45 alpha:0.14];
         self.statusPillBox.borderColor = [NSColor colorWithSRGBRed:0.10 green:0.85 blue:0.45 alpha:0.40];
@@ -2140,8 +2140,8 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
             @7: @"CAT Connection & Serial Ports",
             @8: @"Documentation & Official Manuals",
             @9: @"Feedback & Bug Reports",
-            @10: @"CW Station & Semi-Automated QSO Studio (AD-508 & CAT)",
-            @11: @"AD-508 Live Audio Monitor & DSP Studio",
+            @10: @"CW Station & Semi-Automated QSO Studio (Radio Audio & CAT)",
+            @11: @"Live Audio Monitor & DSP Studio",
             @12: @"FT8 / FT4 Digital Mode Studio & Autonomous Operating Co-Pilot",
             @13: @"Logbook & Cloud",
             @14: @"Voice Keyer · Auto-CQ & Live Replies",
@@ -2333,14 +2333,14 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         self.instructions.stringValue = @"Share your feedback, feature requests, or report bugs directly to GitHub Issues. Callsign and contact info are saved locally for convenience.";
         self.statusLabel.stringValue = @"Ready to prepare and submit feedback to GitHub Issues.";
     } else if (isCWStation) {
-        self.instructions.stringValue = @"Real-time Goertzel DSP Morse decoding via AD-508 audio, Kenwood CAT keying (KS/KY), automatic CQ roster, and ADIF 3.1 logging with offline practice simulation.";
-        self.statusLabel.stringValue = @"Ready. Select AD-508 audio input and CAT serial port, or enable Practice Mode.";
+        self.instructions.stringValue = @"Real-time Goertzel DSP Morse decoding via the selected radio audio input, Kenwood CAT keying (KS/KY), automatic CQ roster, and ADIF 3.1 logging with offline practice simulation.";
+        self.statusLabel.stringValue = @"Ready. Select the radio audio input and CAT serial port, or enable Practice Mode.";
     } else if (isAudio) {
-        self.instructions.stringValue = @"CoreAudio passthrough for TX-500 via AD-508 cable, real-time FFT spectrum & oscilloscope visualizers, precision VU meters, customizable filters, and studio WAV recording.";
-        self.statusLabel.stringValue = @"Ready. Connect AD-508 USB-C audio cable to REM/DATA port and click 'LISTEN LIVE' to hear your radio.";
+        self.instructions.stringValue = @"CoreAudio monitoring of TX-500 audio, real-time FFT spectrum & oscilloscope visualizers, precision VU meters, customizable filters, and studio WAV recording.";
+        self.statusLabel.stringValue = @"Ready. Connect an audio interface such as AD-508 to REM/DATA, select its input, and click 'LISTEN LIVE'.";
     } else if (isFT8) {
         self.instructions.stringValue = @"";
-        self.statusLabel.stringValue = @"Ready. Select AD-508 audio input/output and CAT serial port, or test using internal simulated signals.";
+        self.statusLabel.stringValue = @"Ready. Select the radio audio input/output and CAT serial port, or test using internal simulated signals.";
     } else if (isCluster) {
         self.instructions.stringValue=@"Find active stations, check your contact history and prepare your next QSO. Selecting a spot never transmits.";
     } else if (isStation) {

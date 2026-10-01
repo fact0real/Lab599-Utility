@@ -252,8 +252,8 @@ static void TX500ComputeFFT(const float *realIn, float *magnitudesOut, int n) {
 @property (nonatomic, assign, readwrite) BOOL isReplaying;
 @property (nonatomic, assign, readwrite) float replayProgress;
 @property (nonatomic, assign, readwrite) float detectedAutoNotchHz;
-@property (nonatomic, assign, readwrite) BOOL isAD508Connected;
-@property (nonatomic, copy, readwrite, nullable) NSString *ad508DeviceName;
+@property (nonatomic, assign, readwrite) BOOL isPreferredUSBAudioConnected;
+@property (nonatomic, copy, readwrite, nullable) NSString *preferredUSBAudioDeviceName;
 
 @property (nonatomic, strong, readwrite) NSMutableArray<TX500AudioDeviceItem *> *internalInputDevices;
 @property (nonatomic, strong, readwrite) NSMutableArray<TX500AudioDeviceItem *> *internalOutputDevices;
@@ -507,7 +507,7 @@ static OSStatus AudioMonitorHardwareDevicesListener(AudioObjectID inObjectID,
                                         [lower containsString:@"signallink"] ||
                                         [lower containsString:@"codec"];
 
-                    BOOL isExplicitAD508 = [lower containsString:@"ad-508"] ||
+                    BOOL isPreferredUSBAudioCandidate = [lower containsString:@"ad-508"] ||
                                            [lower containsString:@"ad-509"] ||
                                            [lower containsString:@"ttgk"] ||
                                            [lower containsString:@"tx-500"] ||
@@ -524,7 +524,7 @@ static OSStatus AudioMonitorHardwareDevicesListener(AudioObjectID inObjectID,
                         TX500AudioDeviceItem *item = [TX500AudioDeviceItem new];
                         item.name = name;
                         item.uid = uid;
-                        item.isAD508 = isExplicitAD508;
+                        item.isPreferredUSBAudio = isPreferredUSBAudioCandidate;
                         item.isUSB = (isRadioOrUSB && !isVirtual);
                         item.isVirtual = isVirtual;
                         item.isInput = YES;
@@ -542,7 +542,7 @@ static OSStatus AudioMonitorHardwareDevicesListener(AudioObjectID inObjectID,
                         TX500AudioDeviceItem *item = [TX500AudioDeviceItem new];
                         item.name = name;
                         item.uid = uid;
-                        item.isAD508 = isExplicitAD508;
+                        item.isPreferredUSBAudio = isPreferredUSBAudioCandidate;
                         item.isUSB = (isRadioOrUSB && !isVirtual);
                         item.isVirtual = isVirtual;
                         item.isInput = NO;
@@ -555,17 +555,17 @@ static OSStatus AudioMonitorHardwareDevicesListener(AudioObjectID inObjectID,
     }
 
     // Sort inputs:
-    // Priority 0: AD-508 / Radio USB Audio
+    // Preserve USB-audio ordering; this heuristic does not identify a cable model.
     // Priority 1: Other USB Audio
     // Priority 2: Built-in
     // Priority 3: Virtual
     NSComparator comp = ^NSComparisonResult(TX500AudioDeviceItem *d1, TX500AudioDeviceItem *d2) {
         int p1 = 2, p2 = 2;
-        if (d1.isAD508) p1 = 0;
+        if (d1.isPreferredUSBAudio) p1 = 0;
         else if (d1.isUSB) p1 = 1;
         else if (d1.isVirtual) p1 = 3;
 
-        if (d2.isAD508) p2 = 0;
+        if (d2.isPreferredUSBAudio) p2 = 0;
         else if (d2.isUSB) p2 = 1;
         else if (d2.isVirtual) p2 = 3;
 
@@ -590,24 +590,24 @@ static OSStatus AudioMonitorHardwareDevicesListener(AudioObjectID inObjectID,
         [outputs addObject:def];
     }
 
-    // Check if AD-508 is present
-    BOOL foundAD508 = NO;
-    NSString *ad508Name = nil;
-    NSString *bestAD508InUID = nil;
+    // Track availability of the preferred USB audio input, not cable identity.
+    BOOL foundPreferredUSBAudio = NO;
+    NSString *preferredUSBAudioName = nil;
+    NSString *bestPreferredUSBAudioInUID = nil;
     NSString *bestUSBInUID = nil;
 
     for (TX500AudioDeviceItem *item in inputs) {
-        if (item.isAD508) {
-            foundAD508 = YES;
-            if (!ad508Name) ad508Name = item.name;
-            if (!bestAD508InUID) bestAD508InUID = item.uid;
+        if (item.isPreferredUSBAudio) {
+            foundPreferredUSBAudio = YES;
+            if (!preferredUSBAudioName) preferredUSBAudioName = item.name;
+            if (!bestPreferredUSBAudioInUID) bestPreferredUSBAudioInUID = item.uid;
         }
         if (item.isUSB && !bestUSBInUID) {
             bestUSBInUID = item.uid;
         }
     }
-    self.isAD508Connected = foundAD508;
-    self.ad508DeviceName = ad508Name;
+    self.isPreferredUSBAudioConnected = foundPreferredUSBAudio;
+    self.preferredUSBAudioDeviceName = preferredUSBAudioName;
 
     // Check if current selection is valid or needs upgrade
     BOOL selectedInValid = NO;
@@ -620,9 +620,9 @@ static OSStatus AudioMonitorHardwareDevicesListener(AudioObjectID inObjectID,
         }
     }
 
-    if (!self.preserveDeviceSelection && (!selectedInValid || (currentInIsVirtual && (bestAD508InUID || bestUSBInUID)) || !self.selectedInputDeviceUID || [self.selectedInputDeviceUID isEqualToString:@"default"])) {
-        if (bestAD508InUID) {
-            _selectedInputDeviceUID = bestAD508InUID;
+    if (!self.preserveDeviceSelection && (!selectedInValid || (currentInIsVirtual && (bestPreferredUSBAudioInUID || bestUSBInUID)) || !self.selectedInputDeviceUID || [self.selectedInputDeviceUID isEqualToString:@"default"])) {
+        if (bestPreferredUSBAudioInUID) {
+            _selectedInputDeviceUID = bestPreferredUSBAudioInUID;
         } else if (bestUSBInUID) {
             _selectedInputDeviceUID = bestUSBInUID;
         } else {
@@ -650,7 +650,7 @@ static OSStatus AudioMonitorHardwareDevicesListener(AudioObjectID inObjectID,
         }
         if (!bestOutput) {
             for (TX500AudioDeviceItem *outItem in outputs) {
-                if (!outItem.isAD508 && ![outItem.name containsString:@"USB Audio"]) {
+                if (!outItem.isPreferredUSBAudio && ![outItem.name containsString:@"USB Audio"]) {
                     bestOutput = outItem;
                     break;
                 }

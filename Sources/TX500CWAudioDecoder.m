@@ -309,17 +309,17 @@ static OSStatus CWAudioHardwareDevicesListener(AudioObjectID inObjectID,
                                             [lower containsString:@"signallink"] ||
                                             [lower containsString:@"codec"];
 
-                        BOOL isExplicitAD508 = [lower containsString:@"ad-508"] ||
+                        BOOL isPreferredUSBAudioCandidate = [lower containsString:@"ad-508"] ||
                                                [lower containsString:@"ad-509"] ||
                                                [lower containsString:@"ttgk"] ||
                                                [lower containsString:@"tx-500"] ||
                                                ([lower containsString:@"usb audio"] && !isVirtual);
 
                         NSString *displayName = devName;
-                        if (isExplicitAD508) {
-                            displayName = [NSString stringWithFormat:@"★ %@ (AD-508 USB-C)", devName];
+                        if (isPreferredUSBAudioCandidate) {
+                            displayName = [NSString stringWithFormat:@"★ %@ (USB Audio)", devName];
                         } else if (isRadioOrUSB && !isVirtual) {
-                            displayName = [NSString stringWithFormat:@"★ %@ (Radio USB Audio)", devName];
+                            displayName = [NSString stringWithFormat:@"★ %@ (USB Audio)", devName];
                         } else if (isVirtual) {
                             displayName = [NSString stringWithFormat:@"%@ (Virtual)", devName];
                         }
@@ -328,7 +328,7 @@ static OSStatus CWAudioHardwareDevicesListener(AudioObjectID inObjectID,
                             @"name": devName,
                             @"displayName": displayName,
                             @"uid": devUID,
-                            @"isAD508": isExplicitAD508 ? @"YES" : @"NO",
+                            @"isPreferredUSBAudio": isPreferredUSBAudioCandidate ? @"YES" : @"NO",
                             @"isUSB": (isRadioOrUSB && !isVirtual) ? @"YES" : @"NO",
                             @"isVirtual": isVirtual ? @"YES" : @"NO"
                         }];
@@ -339,14 +339,14 @@ static OSStatus CWAudioHardwareDevicesListener(AudioObjectID inObjectID,
         }
     }
 
-    // Sort: AD-508 / USB Audio first, BuiltIn second, Virtual third
+    // Preserve USB-audio ordering; this heuristic does not identify a cable model.
     NSComparator comp = ^NSComparisonResult(NSDictionary *d1, NSDictionary *d2) {
         int p1 = 2, p2 = 2;
-        if ([d1[@"isAD508"] isEqualToString:@"YES"]) p1 = 0;
+        if ([d1[@"isPreferredUSBAudio"] isEqualToString:@"YES"]) p1 = 0;
         else if ([d1[@"isUSB"] isEqualToString:@"YES"]) p1 = 1;
         else if ([d1[@"isVirtual"] isEqualToString:@"YES"]) p1 = 3;
 
-        if ([d2[@"isAD508"] isEqualToString:@"YES"]) p2 = 0;
+        if ([d2[@"isPreferredUSBAudio"] isEqualToString:@"YES"]) p2 = 0;
         else if ([d2[@"isUSB"] isEqualToString:@"YES"]) p2 = 1;
         else if ([d2[@"isVirtual"] isEqualToString:@"YES"]) p2 = 3;
 
@@ -361,7 +361,7 @@ static OSStatus CWAudioHardwareDevicesListener(AudioObjectID inObjectID,
             @"name": @"Default System Audio Input",
             @"displayName": @"Default System Audio Input",
             @"uid": @"default",
-            @"isAD508": @"NO",
+            @"isPreferredUSBAudio": @"NO",
             @"isUSB": @"NO",
             @"isVirtual": @"NO"
         }];
@@ -370,27 +370,27 @@ static OSStatus CWAudioHardwareDevicesListener(AudioObjectID inObjectID,
     if (@available(macOS 14.2, *)) {
         [devices addObject:@{@"name": @"System Audio", @"displayName": @"System Audio (Direct)",
                              @"uid": TX500CWSystemAudioDeviceUID,
-                             @"isAD508": @"NO", @"isUSB": @"NO", @"isVirtual": @"YES"}];
+                             @"isPreferredUSBAudio": @"NO", @"isUSB": @"NO", @"isVirtual": @"YES"}];
     }
     @synchronized (self.internalAudioDevices) {
         [self.internalAudioDevices setArray:devices];
     }
 
     // Smart selection
-    NSString *bestAD508UID = nil;
+    NSString *bestPreferredUSBAudioUID = nil;
     NSString *bestUSBUID = nil;
     BOOL selectedValid = NO;
     for (NSDictionary *d in devices) {
         if ([d[@"uid"] isEqualToString:self.selectedAudioDeviceUID]) {
             selectedValid = YES;
         }
-        if ([d[@"isAD508"] isEqualToString:@"YES"] && !bestAD508UID) bestAD508UID = d[@"uid"];
+        if ([d[@"isPreferredUSBAudio"] isEqualToString:@"YES"] && !bestPreferredUSBAudioUID) bestPreferredUSBAudioUID = d[@"uid"];
         if ([d[@"isUSB"] isEqualToString:@"YES"] && !bestUSBUID) bestUSBUID = d[@"uid"];
     }
 
     if (!self.preserveDeviceSelection && (!selectedValid || !self.selectedAudioDeviceUID)) {
-        if (bestAD508UID) {
-            self.selectedAudioDeviceUID = bestAD508UID;
+        if (bestPreferredUSBAudioUID) {
+            self.selectedAudioDeviceUID = bestPreferredUSBAudioUID;
         } else if (bestUSBUID) {
             self.selectedAudioDeviceUID = bestUSBUID;
         } else {

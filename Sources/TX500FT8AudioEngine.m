@@ -250,6 +250,44 @@ static void FT8AudioQueueOutputCallback(void *inUserData,
 
 @implementation TX500FT8AudioEngine
 
++ (NSString *)matchingOutputUIDForInputUID:(NSString *)inputUID
+                              inputDevices:(NSArray<NSDictionary<NSString *, NSString *> *> *)inputs
+                             outputDevices:(NSArray<NSDictionary<NSString *, NSString *> *> *)outputs {
+    if (inputUID.length == 0) return nil;
+    BOOL inputExists = NO;
+    for (NSDictionary<NSString *, NSString *> *device in inputs) {
+        if ([device[@"uid"] isEqualToString:inputUID]) { inputExists = YES; break; }
+    }
+    if (!inputExists) return nil;
+
+    // Some interfaces expose a single UID for both directions.
+    for (NSDictionary<NSString *, NSString *> *device in outputs) {
+        if ([device[@"uid"] isEqualToString:inputUID]) return device[@"uid"];
+    }
+
+    // Apple USB Audio uses distinct :1 and :2 CoreAudio endpoints for the
+    // tested cable. The shared prefix includes the USB device serial number.
+    NSString *prefix = @"AppleUSBAudioEngine:";
+    if ([inputUID hasPrefix:prefix]) {
+        NSRange suffix = [inputUID rangeOfString:@":" options:NSBackwardsSearch];
+        if (suffix.location != NSNotFound && suffix.location > prefix.length) {
+            NSString *family = [inputUID substringToIndex:suffix.location + 1];
+            NSString *match = nil;
+            for (NSDictionary<NSString *, NSString *> *device in outputs) {
+                NSString *uid = device[@"uid"];
+                if (![uid hasPrefix:family]) continue;
+                if (match) return nil;
+                match = uid;
+            }
+            if (match) return match;
+        }
+    }
+
+    // A shared name (including "USB Audio") cannot prove that two different
+    // devices belong together. Leave output selection unchanged in that case.
+    return nil;
+}
+
 - (instancetype)init {
     self = [super init];
     if (self) {
@@ -447,17 +485,17 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
                                     [lower containsString:@"signallink"] ||
                                     [lower containsString:@"codec"];
 
-                BOOL isExplicitAD508 = [lower containsString:@"ad-508"] ||
+                BOOL isPreferredUSBAudioCandidate = [lower containsString:@"ad-508"] ||
                                        [lower containsString:@"ad-509"] ||
                                        [lower containsString:@"ttgk"] ||
                                        [lower containsString:@"tx-500"] ||
                                        ([lower containsString:@"usb audio"] && !isVirtual);
 
                 NSString *displayName = name;
-                if (isExplicitAD508) {
-                    displayName = [NSString stringWithFormat:@"★ %@ (AD-508 USB-C)", name];
+                if (isPreferredUSBAudioCandidate) {
+                    displayName = [NSString stringWithFormat:@"★ %@ (USB Audio)", name];
                 } else if (isRadioOrUSB && !isVirtual) {
-                    displayName = [NSString stringWithFormat:@"★ %@ (Radio USB Audio)", name];
+                    displayName = [NSString stringWithFormat:@"★ %@ (USB Audio)", name];
                 } else if (isVirtual) {
                     displayName = [NSString stringWithFormat:@"%@ (Virtual)", name];
                 }
@@ -474,7 +512,7 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
                         @"name": name,
                         @"displayName": displayName,
                         @"uid": uid,
-                        @"isAD508": isExplicitAD508 ? @"YES" : @"NO",
+                        @"isPreferredUSBAudio": isPreferredUSBAudioCandidate ? @"YES" : @"NO",
                         @"isUSB": (isRadioOrUSB && !isVirtual) ? @"YES" : @"NO",
                         @"isVirtual": isVirtual ? @"YES" : @"NO"
                     }];
@@ -492,7 +530,7 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
                         @"name": name,
                         @"displayName": displayName,
                         @"uid": uid,
-                        @"isAD508": isExplicitAD508 ? @"YES" : @"NO",
+                        @"isPreferredUSBAudio": isPreferredUSBAudioCandidate ? @"YES" : @"NO",
                         @"isUSB": (isRadioOrUSB && !isVirtual) ? @"YES" : @"NO",
                         @"isVirtual": isVirtual ? @"YES" : @"NO"
                     }];
@@ -503,17 +541,17 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
     }
 
     // Sort inputs:
-    // Priority 0: AD-508 / Radio USB Audio
+    // Preserve the preferred USB-audio ordering; it is not cable identification.
     // Priority 1: Other USB Audio
     // Priority 2: Built-in / System
     // Priority 3: Virtual
     NSComparator comp = ^NSComparisonResult(NSDictionary *d1, NSDictionary *d2) {
         int p1 = 2, p2 = 2;
-        if ([d1[@"isAD508"] isEqualToString:@"YES"]) p1 = 0;
+        if ([d1[@"isPreferredUSBAudio"] isEqualToString:@"YES"]) p1 = 0;
         else if ([d1[@"isUSB"] isEqualToString:@"YES"]) p1 = 1;
         else if ([d1[@"isVirtual"] isEqualToString:@"YES"]) p1 = 3;
 
-        if ([d2[@"isAD508"] isEqualToString:@"YES"]) p2 = 0;
+        if ([d2[@"isPreferredUSBAudio"] isEqualToString:@"YES"]) p2 = 0;
         else if ([d2[@"isUSB"] isEqualToString:@"YES"]) p2 = 1;
         else if ([d2[@"isVirtual"] isEqualToString:@"YES"]) p2 = 3;
 
@@ -532,29 +570,29 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
     }
 
     // Update connection flags
-    BOOL hasAD508In = NO, hasAD508Out = NO;
-    NSString *bestAD508InUID = nil, *bestAD508OutUID = nil;
+    BOOL hasPreferredUSBAudioIn = NO, hasPreferredUSBAudioOut = NO;
+    NSString *bestPreferredUSBAudioInUID = nil, *bestPreferredUSBAudioOutUID = nil;
     NSString *bestUSBInUID = nil, *bestUSBOutUID = nil;
     for (NSDictionary *d in inputs) {
-        if ([d[@"isAD508"] isEqualToString:@"YES"]) {
-            hasAD508In = YES;
-            if (!bestAD508InUID) bestAD508InUID = d[@"uid"];
+        if ([d[@"isPreferredUSBAudio"] isEqualToString:@"YES"]) {
+            hasPreferredUSBAudioIn = YES;
+            if (!bestPreferredUSBAudioInUID) bestPreferredUSBAudioInUID = d[@"uid"];
         }
         if ([d[@"isUSB"] isEqualToString:@"YES"] && !bestUSBInUID) {
             bestUSBInUID = d[@"uid"];
         }
     }
     for (NSDictionary *d in outputs) {
-        if ([d[@"isAD508"] isEqualToString:@"YES"]) {
-            hasAD508Out = YES;
-            if (!bestAD508OutUID) bestAD508OutUID = d[@"uid"];
+        if ([d[@"isPreferredUSBAudio"] isEqualToString:@"YES"]) {
+            hasPreferredUSBAudioOut = YES;
+            if (!bestPreferredUSBAudioOutUID) bestPreferredUSBAudioOutUID = d[@"uid"];
         }
         if ([d[@"isUSB"] isEqualToString:@"YES"] && !bestUSBOutUID) {
             bestUSBOutUID = d[@"uid"];
         }
     }
-    _isAD508InputConnected = hasAD508In;
-    _isAD508OutputConnected = hasAD508Out;
+    _isPreferredUSBAudioInputConnected = hasPreferredUSBAudioIn;
+    _isPreferredUSBAudioOutputConnected = hasPreferredUSBAudioOut;
 
     // Check if current selection is valid or needs upgrade:
     BOOL selectedInValid = NO;
@@ -574,10 +612,10 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
     // A preserved UID is therefore only a preference, never a reason to keep
     // an unavailable device selected. Rebind to the best physical interface
     // immediately so reconnecting the cable does not leave FT8 unusable.
-    if ((!selectedInValid && (bestAD508InUID || bestUSBInUID)) ||
+    if ((!selectedInValid && (bestPreferredUSBAudioInUID || bestUSBInUID)) ||
         (!self.preserveDeviceSelection && (currentInIsVirtual || !_selectedInputDeviceUID))) {
-        if (bestAD508InUID) {
-            _selectedInputDeviceUID = bestAD508InUID;
+        if (bestPreferredUSBAudioInUID) {
+            _selectedInputDeviceUID = bestPreferredUSBAudioInUID;
         } else if (bestUSBInUID) {
             _selectedInputDeviceUID = bestUSBInUID;
         } else if (inputs.count > 0) {
@@ -597,10 +635,15 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
             break;
         }
     }
-    if ((!selectedOutValid && (bestAD508OutUID || bestUSBOutUID)) ||
+    if ((!selectedOutValid && (bestPreferredUSBAudioOutUID || bestUSBOutUID)) ||
         (!self.preserveDeviceSelection && (currentOutIsVirtual || !_selectedOutputDeviceUID))) {
-        if (bestAD508OutUID) {
-            _selectedOutputDeviceUID = bestAD508OutUID;
+        NSString *matchingOutput = [TX500FT8AudioEngine matchingOutputUIDForInputUID:_selectedInputDeviceUID
+                                                                        inputDevices:inputs
+                                                                       outputDevices:outputs];
+        if (matchingOutput) {
+            _selectedOutputDeviceUID = matchingOutput;
+        } else if (bestPreferredUSBAudioOutUID) {
+            _selectedOutputDeviceUID = bestPreferredUSBAudioOutUID;
         } else if (bestUSBOutUID) {
             _selectedOutputDeviceUID = bestUSBOutUID;
         } else if (outputs.count > 0) {
@@ -1315,7 +1358,7 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
         _fakeItVfoShiftHz = 0;
     }
 
-    // Discard TX loopback and rebuild the full-duplex USB queues. Some AD-508
+    // Discard TX loopback and rebuild the full-duplex USB queues. Some USB audio
     // devices stop delivering input after a CAT keyed burst until CoreAudio is
     // reopened; tab switching used to hide this recovery accidentally.
     [_rxBufferLock lock];
@@ -1340,8 +1383,8 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
     }
     if (self.logHandler) {
         self.logHandler(recovered ?
-            @"[RX RECOVERY] RX confirmed; AD-508 capture restarted and decoding resumed." :
-            @"[FT8 TX OFF] RX confirmed; AD-508 capture restarted for the next slot.");
+            @"[RX RECOVERY] RX confirmed; audio capture restarted and decoding resumed." :
+            @"[FT8 TX OFF] RX confirmed; audio capture restarted for the next slot.");
     }
     if (self.onTransmitStateChanged) self.onTransmitStateChanged(NO, @"");
 }
@@ -1370,7 +1413,7 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
             !strongSelf.isMonitoring || strongSelf.isSimulationMode || strongSelf.isTransmitting) return;
         if (strongSelf->_lastInputCallbackMonotonic > restartedAt) return;
         if (strongSelf.logHandler) {
-            strongSelf.logHandler(@"[RX RECOVERY] AD-508 delivered no input after RX; reopening the audio path once more.");
+            strongSelf.logHandler(@"[RX RECOVERY] The selected audio input delivered no data after RX; reopening the audio path once more.");
         }
         [strongSelf restartAudioHardware];
     });

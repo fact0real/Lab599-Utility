@@ -2,21 +2,27 @@
 
 A native macOS application for the Lab599 TX-500 family of transceivers. It includes a Station workspace, DX Cluster, FT8/FT4 and CW operation, Voice Keyer, contact logbook, firmware updates, live telemetry, radio screen capture, time sync, CAT diagnostics, settings and memory management. Developed by **EP2AES (factoreal)**.
 
-**Latest published release: v2.271 (Build 277) · macOS 12+ · Apple Silicon and Intel · English interface · Persian guide included**
+**Latest published release: v2.272 (Build 278) · macOS 12+ · Apple Silicon and Intel · English interface · Persian guide included**
 
-[Download v2.271](https://github.com/fact0real/Lab599-Utility/releases/tag/2.271) · [In-app Help guide](Resources/Help/index.html) · [راهنمای فارسی](QUICKSTART-FA.md) · [Build instructions](UPDATER-README.md) · [Report an issue](https://github.com/fact0real/Lab599-Utility/issues/new)
+[Download v2.272](https://github.com/fact0real/Lab599-Utility/releases/tag/2.272) · [In-app Help guide](Resources/Help/index.html) · [راهنمای فارسی](QUICKSTART-FA.md) · [Build instructions](UPDATER-README.md) · [Report an issue](https://github.com/fact0real/Lab599-Utility/issues/new)
 
 ## Download and install
 
-Download `Lab599-Utility-v2.271-macOS-universal.zip` from the [v2.271 release](https://github.com/fact0real/Lab599-Utility/releases/tag/2.271). Extract the ZIP and move `Lab599 Utility.app` to `/Applications`. The ZIP contains the app, offline illustrated Help, English and Persian guides, and license notices; manufacturer firmware is not included.
+Download `Lab599-Utility-v2.272-macOS-universal.zip` from the [v2.272 release](https://github.com/fact0real/Lab599-Utility/releases/tag/2.272). Extract the ZIP and move `Lab599 Utility.app` to `/Applications`. The ZIP contains the app, offline illustrated Help, English and Persian guides, and license notices; manufacturer firmware is not included.
 
 Verify the download before opening the app:
 
 ```sh
-shasum -a 256 Lab599-Utility-v2.271-macOS-universal.zip
+shasum -a 256 Lab599-Utility-v2.272-macOS-universal.zip
 ```
 
 Compare the result with the `SHA256SUMS.txt` asset on the release page. The app is ad-hoc signed, **not Apple notarized**. If macOS blocks the first launch, select this app in **System Settings → Privacy & Security → Open Anyway** after verifying the checksum.
+
+## What's new in v2.272
+
+- Live Audio and the digital/CW audio selectors now label generic USB audio devices accurately instead of identifying them as AD-508 from their name alone. The tested AD-508 connects directly to Mac USB-C, while the stock blue CAT cable is a separate serial connection.
+- FT8 matches separate CoreAudio input and output endpoints by their shared device UID when available. This prevents another device named `USB Audio` from being chosen as the transmit output when the matching endpoint can be identified.
+- The in-app Help and Persian quick start document the tested connections and the limits of device-name identification.
 
 ## What's new in v2.271
 
@@ -81,6 +87,10 @@ Thanks to **u/kantorcodes1** for asking where cross-model enforcement actually h
 Thanks to **EA3JIC** for the detailed review, bug reports, and contributions behind many of these fixes.
 
 ## Supported Hardware
+
+### Audio and CAT connections
+
+The TX-500 uses separate connections for audio and CAT. In the tested Discovery setup, the official AD-508 runs directly from the 7-pin REM/DATA port to Mac USB-C. After an unplug/replug check, macOS enumerated that cable as a TTGK Technology `USB Audio` device with one input channel and two output channels. The stock blue CAT-USB adapter supplied with the radio connects to the separate 4-pin CAT port and appears as a serial device. This observation verifies one cable assembly, not the internal placement of its converter or every AD-508 hardware revision. A generic `USB Audio` device name does not identify the cable model; select and verify the actual audio routes before operating. Lab599's [product catalog](https://downloads.lab599.com/Lab599-Product-Catalog-2025-EN.pdf) lists AD-508 as a USB-C audio-data cable and AD-509 separately as a USB PnP audio interface.
 
 | Model | Firmware catalog | BL20 Model ID |
 | --- | --- | --- |

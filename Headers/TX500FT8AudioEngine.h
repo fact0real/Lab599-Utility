@@ -36,8 +36,15 @@ typedef NS_ENUM(NSInteger, TX500FT8SlotParity) {
 @property (nonatomic, copy, nullable) NSString *selectedOutputDeviceUID;
 @property (nonatomic, strong, readonly) NSArray<NSDictionary<NSString *, NSString *> *> *inputDevices;
 @property (nonatomic, strong, readonly) NSArray<NSDictionary<NSString *, NSString *> *> *outputDevices;
-@property (nonatomic, assign, readonly) BOOL isAD508InputConnected;
-@property (nonatomic, assign, readonly) BOOL isAD508OutputConnected;
+@property (nonatomic, assign, readonly) BOOL isPreferredUSBAudioInputConnected;
+@property (nonatomic, assign, readonly) BOOL isPreferredUSBAudioOutputConnected;
+
+// Pair separate CoreAudio input/output UIDs from one USB interface. Returns nil
+// if the UID does not establish a unique match; callers may keep the selected
+// output or use the existing automatic-selection fallback.
++ (nullable NSString *)matchingOutputUIDForInputUID:(NSString *)inputUID
+                                        inputDevices:(NSArray<NSDictionary<NSString *, NSString *> *> *)inputs
+                                       outputDevices:(NSArray<NSDictionary<NSString *, NSString *> *> *)outputs;
 
 // Radio & Frequencies
 @property (nonatomic, assign) uint64_t dialFrequencyHz; // e.g. 14074000

@@ -70,7 +70,7 @@
       <li>Choose the adapter's <code>/dev/cu.*</code> port in the top bar. Use the refresh icon after connecting a cable.</li>
       <li>Set the radio's CAT protocol to <strong>LAB599</strong> at <strong>9600 baud, 8N1</strong>. Menu numbers vary by model and firmware.</li>
       <li>Open <strong>CAT Studio</strong> and use <strong>Read All</strong> to verify that the selected port actually talks to your radio.</li>
-      <li>For FT8/FT4, CW decoding, Voice Keyer or Live Audio, connect and select a separate audio interface such as AD-508. The CAT cable does not carry audio.</li>
+      <li>For FT8/FT4, CW decoding, Voice Keyer or Live Audio, connect and select a separate audio interface. The tested AD-508 connects directly to Mac USB-C; the stock blue CAT cable is a separate serial connection and does not carry audio.</li>
     </ol>
     <p>The sidebar opens each workspace. The top bar shows connection state and port selection. <strong>Console</strong> opens diagnostic messages; <strong>Field Mode</strong> changes the display for outdoor use. A listed port or a demo screen is not proof of a live radio connection.</p>
     <div class="note"><strong>Before transmitting:</strong> confirm the radio display, frequency, mode, audio routing, power level and antenna. Simulation and Demo Mode do not transmit RF.</div>
@@ -123,9 +123,9 @@
   </section>
 
   <section id="audio">
-    <h2>7. Live Audio (AD-508)</h2>
-    <p>Connect the AD-508 audio cable to the radio's REM/DATA port and choose the Mac's input and listening output. Start <strong>Listen Live</strong> to monitor received audio. The spectrum, oscilloscope and level meters help you set an appropriate receive level. Filters and WAV recording operate on the Mac's audio stream.</p>
-    <p>If the desired device is missing, check macOS audio input permissions and the selected device. CAT and audio are separate connections.</p>
+    <h2>7. Live Audio</h2>
+    <p>Connect a compatible audio interface to the radio's REM/DATA port. The tested AD-508 connects directly to Mac USB-C and enumerates as <code>USB Audio</code> with separate input and output devices. Choose the radio audio input and your preferred listening output, then start <strong>Listen Live</strong>. The spectrum, oscilloscope, level meters, filters and WAV recording operate on the selected Mac audio stream.</p>
+    <p>A generic <code>USB Audio</code> name does not establish the cable model or prove a radio connection. If the input is missing, check Audio MIDI Setup and macOS microphone permission. The stock blue CAT adapter connects to the radio's CAT port separately.</p>
     <figure><img src="images/live-audio.png" alt="Live Audio monitor with device selectors and audio visualizers"><figcaption>Live Audio controls. The illustrated view has no live radio audio.</figcaption></figure>
     <a class="back" href="#top">Back to contents ↑</a>
   </section>
@@ -199,7 +199,7 @@
       <tbody>
         <tr><td>No CAT port</td><td>Reconnect the adapter, refresh the port list, identify FT232 versus PL2303 in macOS System Information, then follow the compatible macOS VCP/serial driver guidance. D2XX alone is not this app's serial-port driver.</td></tr>
         <tr><td>Port listed, no CAT reply</td><td>Close other radio apps, check the selected port, cable, radio power, LAB599 CAT protocol and 9600-baud setting. Use CAT Studio Read All.</td></tr>
-        <tr><td>No FT8/CW audio</td><td>Confirm AD-508 or another audio interface, input/output selection, macOS microphone permission, radio DIG/audio settings and levels. CAT and audio are separate.</td></tr>
+        <tr><td>No FT8/CW audio</td><td>Confirm that the selected audio interface appears as both an input and output in macOS, then check device selection, microphone permission, radio DIG/audio settings and levels. The CAT cable is a separate serial connection.</td></tr>
         <tr><td>Unexpected TX state</td><td>Use the app's Stop control, then verify the radio's physical TX/RX state. Do not rely only on a software label after a connection failure.</td></tr>
         <tr><td>Firmware update blocked</td><td>Confirm the official file, selected model and normal-mode CAT identity before entering the loader. Keep the same radio, port and stable power.</td></tr>
         <tr><td>Keychain prompt</td><td>macOS protects saved cloud credentials separately. A new locally signed build can prompt again when you open Logbook or cloud settings.</td></tr>

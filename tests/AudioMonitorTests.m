@@ -48,8 +48,8 @@ int main(int argc, const char * argv[]) {
         NSLog(@"PASS: Device enumeration found %lu input(s) and %lu output(s).",
               (unsigned long)engine.inputDevices.count, (unsigned long)engine.outputDevices.count);
 
-        if (engine.isAD508Connected) {
-            NSLog(@"INFO: Official AD-508 audio hardware detected on this Mac: '%@'", engine.ad508DeviceName);
+        if (engine.isPreferredUSBAudioConnected) {
+            NSLog(@"INFO: Preferred USB audio input available on this Mac: '%@'", engine.preferredUSBAudioDeviceName);
         } else {
             NSLog(@"INFO: Running in standalone / test-bench audio mode.");
         }

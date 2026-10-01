@@ -1473,7 +1473,7 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
 
     self.monitoringStartInProgress = YES;
     NSUInteger generation = ++self.monitoringStartGeneration;
-    self.startStopButton.title = @"Opening AD-508…";
+    self.startStopButton.title = @"Opening audio…";
     self.startStopButton.enabled = NO;
     [self appendToQSOConsole:@"[FT8 Audio] Opening the selected radio audio devices…"];
 
@@ -1519,7 +1519,7 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
             } else {
                 mainSelf.startStopButton.title = [NSString stringWithFormat:@"Start %@", mName];
                 mainSelf.startStopButton.bezelColor = nil;
-                [mainSelf appendToQSOConsole:[NSString stringWithFormat:@"[FT8 Audio] Could not open AD-508: %@",
+                [mainSelf appendToQSOConsole:[NSString stringWithFormat:@"[FT8 Audio] Could not open the selected audio devices: %@",
                                               err.localizedDescription ?: @"device unavailable"]];
                 if (mainSelf.diagnosticSessionStateChangedHandler) mainSelf.diagnosticSessionStateChangedHandler(NO);
             }
@@ -1530,7 +1530,7 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
         typeof(self) mainSelf = weakSelf;
         if (!mainSelf || generation != mainSelf.monitoringStartGeneration || !mainSelf.monitoringStartInProgress) return;
         mainSelf.startStopButton.title = @"Audio stalled";
-        [mainSelf appendToQSOConsole:@"[FT8 Audio] AD-508 is not responding to CoreAudio. The interface remains usable; RF transmission is blocked until audio opens."];
+        [mainSelf appendToQSOConsole:@"[FT8 Audio] The selected audio device is not responding to CoreAudio. The interface remains usable; RF transmission is blocked until audio opens."];
     });
 }
 
@@ -4142,7 +4142,7 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
     for (NSDictionary *dev in devices) {
         NSString *title = dev[@"displayName"] ?: dev[@"name"];
         NSString *uid = dev[@"uid"];
-        BOOL isUSB = [dev[@"isUSB"] isEqualToString:@"YES"] || [dev[@"isAD508"] isEqualToString:@"YES"];
+        BOOL isUSB = [dev[@"isUSB"] isEqualToString:@"YES"] || [dev[@"isPreferredUSBAudio"] isEqualToString:@"YES"];
         BOOL isVirtual = [dev[@"isVirtual"] isEqualToString:@"YES"];
 
         // Add a separator before non-USB devices if we had USB devices
@@ -4157,7 +4157,7 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
         item.representedObject = uid;
 
         if (isUSB) {
-            item.toolTip = @"Physical USB Audio Interface connected to Lab599 Discovery TX-500 / AD-508";
+            item.toolTip = @"Physical USB audio interface; verify that it is connected to the radio";
         } else if (isVirtual) {
             item.toolTip = @"Virtual loopback audio driver (not connected to physical radio)";
         }
@@ -4205,16 +4205,10 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
     if (uid && uid.length > 0) {
         self.audioEngine.selectedInputDeviceUID = uid;
 
-        // Automatically match corresponding output device if AD-508 / USB Audio
-        for (NSDictionary *outDev in self.audioEngine.outputDevices) {
-            if ([outDev[@"uid"] isEqualToString:uid] ||
-                ([outDev[@"name"] isEqualToString:item.title] ||
-                 ([outDev[@"isAD508"] isEqualToString:@"YES"] && [item.title containsString:@"AD-508"]) ||
-                 ([outDev[@"isUSB"] isEqualToString:@"YES"] && [item.title containsString:@"USB"]))) {
-                self.audioEngine.selectedOutputDeviceUID = outDev[@"uid"];
-                break;
-            }
-        }
+        NSString *matchingOutput = [TX500FT8AudioEngine matchingOutputUIDForInputUID:uid
+                                                                        inputDevices:self.audioEngine.inputDevices
+                                                                       outputDevices:self.audioEngine.outputDevices];
+        if (matchingOutput) self.audioEngine.selectedOutputDeviceUID = matchingOutput;
         [self.audioEngine restartAudioHardware];
     }
 }

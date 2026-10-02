@@ -18,7 +18,6 @@
 		1000000A /* tx500_mp.png in Resources */ = {isa = PBXBuildFile; fileRef = 2000000A /* tx500_mp.png */; };
 		1000000B /* tx500_pro.png in Resources */ = {isa = PBXBuildFile; fileRef = 2000000B /* tx500_pro.png */; };
 		1000000C /* tx500_pro_altai.png in Resources */ = {isa = PBXBuildFile; fileRef = 2000000C /* tx500_pro_altai.png */; };
-		100000D0 /* Manual in Resources */ = {isa = PBXBuildFile; fileRef = 200000D0 /* Manual */; };
 		10000030 /* Lab599SerialPort.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000030 /* Lab599SerialPort.m */; };
 		10000031 /* TX500CATTest.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000031 /* TX500CATTest.m */; };
 		10000032 /* TX500Configuration.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000032 /* TX500Configuration.m */; };
@@ -101,7 +100,6 @@
 		2000000A /* tx500_mp.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = tx500_mp.png; sourceTree = "<group>"; };
 		2000000B /* tx500_pro.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = tx500_pro.png; sourceTree = "<group>"; };
 		2000000C /* tx500_pro_altai.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = tx500_pro_altai.png; sourceTree = "<group>"; };
-		200000D0 /* Manual */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Manual; sourceTree = "<group>"; };
 		20000011 /* Lab599FirmwareCatalog.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Lab599FirmwareCatalog.h; sourceTree = "<group>"; };
 		20000012 /* TX500Transfer.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TX500Transfer.h; sourceTree = "<group>"; };
 		20000013 /* TX500TimeSync.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TX500TimeSync.h; sourceTree = "<group>"; };
@@ -384,7 +382,6 @@
 				2000000A /* tx500_mp.png */,
 				2000000B /* tx500_pro.png */,
 				2000000C /* tx500_pro_altai.png */,
-				200000D0 /* Manual */,
 				20000312 /* Help */,
 				20000020 /* Info.plist */,
 			);
@@ -477,7 +474,6 @@
 				1000000A /* tx500_mp.png in Resources */,
 				1000000B /* tx500_pro.png in Resources */,
 				1000000C /* tx500_pro_altai.png in Resources */,
-				100000D0 /* Manual in Resources */,
 				10000312 /* Help in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

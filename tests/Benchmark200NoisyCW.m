@@ -188,7 +188,7 @@ int main(int argc, const char * argv[]) {
         BOOL blind = argc > 1 && strcmp(argv[1], "--blind") == 0;
         NSLog(@"=== Running TX-500 CW Audio Decoder 200-Word Noisy Benchmark ===");
 
-        NSString *samplesDir = @"/Users/factoreal/Downloads/TX-500/Updater/test_cw_audio/noisy_samples";
+        NSString *samplesDir = [NSFileManager.defaultManager.currentDirectoryPath stringByAppendingPathComponent:@"build/cw-decoder-tests/noisy_samples"];
         [[NSFileManager defaultManager] createDirectoryAtPath:samplesDir withIntermediateDirectories:YES attributes:nil error:nil];
 
         TestCase cases[200];

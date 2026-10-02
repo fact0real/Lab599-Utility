@@ -8,6 +8,7 @@
 
 #import "TX500FT8StationController.h"
 #import "TX500FT8Frequency.h"
+#import "TX500ModeLabels.h"
 #import "TX500LogbookManager.h"
 #import "TX500TimeDiscipline.h"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
@@ -1638,7 +1639,8 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
             if (actual) {
                 mainSelf.frequencyPollFailures = 0;
                 NSString *mode = [modeReply isEqualToString:@"MD6;"] ? @"DIG" :
-                                 [modeReply isEqualToString:@"MD8;"] || [modeReply isEqualToString:@"MD9;"] ? @"DIG-R" : @"MD?";
+                                 [modeReply isEqualToString:@"MD8;"] ? TX500UndocumentedModeLabel(8) :
+                                 [modeReply isEqualToString:@"MD9;"] ? TX500UndocumentedModeLabel(9) : @"MD?";
                 [mainSelf updateFrequencyHz:actual mode:mode];
                 mainSelf.audioEngine.catDialAndModeVerified = [modeReply isEqualToString:@"MD6;"];
             } else {
@@ -1685,7 +1687,8 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
                 mainSelf.audioEngine.catDialAndModeVerified = ready;
                 if (changed || modeChanged) {
                     NSString *mode = [modeReply isEqualToString:@"MD6;"] ? @"DIG" :
-                        ([modeReply isEqualToString:@"MD8;"] || [modeReply isEqualToString:@"MD9;"]) ? @"DIG-R" : @"MD?";
+                        [modeReply isEqualToString:@"MD8;"] ? TX500UndocumentedModeLabel(8) :
+                        [modeReply isEqualToString:@"MD9;"] ? TX500UndocumentedModeLabel(9) : @"MD?";
                     [mainSelf updateFrequencyHz:actual mode:mode];
                     [mainSelf appendToQSOConsole:[NSString stringWithFormat:@"[CAT] Radio dial is now %.6f MHz.", actual / 1e6]];
                 }

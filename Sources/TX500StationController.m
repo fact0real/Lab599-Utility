@@ -1,10 +1,11 @@
 #import "TX500StationController.h"
 #import "TX500PSKReporter.h"
+#import "TX500ModeLabels.h"
 static NSTextField *Label(NSString *s,CGFloat size,NSFontWeight weight) { NSTextField *v=[NSTextField labelWithString:s]; v.font=[NSFont systemFontOfSize:size weight:weight]; v.translatesAutoresizingMaskIntoConstraints=NO; [v setContentCompressionResistancePriority:1 forOrientation:NSLayoutConstraintOrientationHorizontal]; return v; }
 static NSStackView *Stack(NSArray *a,BOOL vertical,CGFloat gap) { NSStackView *s=[NSStackView stackViewWithViews:a]; s.orientation=vertical?NSUserInterfaceLayoutOrientationVertical:NSUserInterfaceLayoutOrientationHorizontal; s.alignment=vertical?NSLayoutAttributeLeading:NSLayoutAttributeCenterY; s.spacing=gap; s.translatesAutoresizingMaskIntoConstraints=NO; return s; }
 static NSView *Spacer(void) { NSView *s=[NSView new]; s.translatesAutoresizingMaskIntoConstraints=NO; [s setContentHuggingPriority:1 forOrientation:NSLayoutConstraintOrientationHorizontal]; return s; }
 static NSBox *Card(NSView *content) { NSBox *b=[NSBox new]; b.boxType=NSBoxCustom; b.titlePosition=NSNoTitle; b.cornerRadius=12; b.fillColor=NSColor.controlBackgroundColor; b.borderColor=NSColor.separatorColor; b.borderWidth=1; b.translatesAutoresizingMaskIntoConstraints=NO; [b.contentView addSubview:content]; [NSLayoutConstraint activateConstraints:@[[content.leadingAnchor constraintEqualToAnchor:b.contentView.leadingAnchor constant:14],[content.trailingAnchor constraintEqualToAnchor:b.contentView.trailingAnchor constant:-14],[content.topAnchor constraintEqualToAnchor:b.contentView.topAnchor constant:14],[content.bottomAnchor constraintEqualToAnchor:b.contentView.bottomAnchor constant:-14]]]; return b; }
-static NSString *Mode(NSInteger m) { return @{@1:@"LSB",@2:@"USB",@3:@"CW",@4:@"FM",@5:@"AM",@6:@"DIG",@7:@"CW-R",@9:@"DIG-L"}[@(m)] ?: @"—"; }
+static NSString *Mode(NSInteger m) { return @{@1:@"LSB",@2:@"USB",@3:@"CW",@4:@"FM",@5:@"AM",@6:@"DIG",@7:@"CW-R"}[@(m)] ?: (m == 8 || m == 9 ? TX500UndocumentedModeLabel(m) : @"—"); }
 // Static official IARU documents; never build a URL from profile text.
 NSURL *TX500BandPlanURLForRegion(NSString *region) {
     NSDictionary<NSString *, NSString *> *urls = @{
@@ -93,7 +94,7 @@ NSURL *TX500BandPlanURLForRegion(NSString *region) {
     _search=[NSSearchField new]; _search.placeholderString=@"Search names, frequencies or tags"; _search.delegate=self; _search.translatesAutoresizingMaskIntoConstraints=NO;
     NSView *table=[self table:&_table columns:@[@[@"favorite",@"★",@30],@[@"name",@"Name",@220],@[@"hz",@"MHz",@105],@[@"mode",@"Mode",@65],@[@"tags",@"Tags",@110]] height:225];
     _frequency=[self field:@"MHz"]; _frequency.stringValue=@"14.285000"; _frequency.font=[NSFont monospacedDigitSystemFontOfSize:16 weight:NSFontWeightMedium];
-    _mode=[self menu:@[@"LSB",@"USB",@"CW",@"FM",@"AM",@"DIG",@"CW-R",@"DIG-L"]]; [_mode selectItemAtIndex:1];
+    _mode=[self menu:@[@"LSB",@"USB",@"CW",@"FM",@"AM",@"DIG",@"CW-R",TX500UndocumentedModeLabel(9)]]; [_mode selectItemAtIndex:1];
     _entryName=[self field:@"Frequency name"]; _tags=[self field:@"Tags, e.g. portable, evening"]; _favorite=[NSButton checkboxWithTitle:@"Favorite" target:nil action:nil];
     NSStackView *editor=Stack(@[Stack(@[_entryName,_tags],NO,10),Stack(@[_frequency,Label(@"MHz",11,NSFontWeightRegular),_mode,_favorite,Spacer(),[self button:@"Apply to radio" symbol:@"arrow.right" action:@selector(tune:) ]],NO,8),Stack(@[[self button:@"Save frequency" symbol:@"star" action:@selector(saveFrequency:)],[self button:@"New" symbol:@"plus" action:@selector(newFrequency:)],[self button:@"Remove" symbol:@"trash" action:@selector(removeFrequency:)]],NO,8)],YES,12);
     [_entryName.widthAnchor constraintEqualToAnchor:_tags.widthAnchor].active=YES;

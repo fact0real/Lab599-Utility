@@ -10,3 +10,5 @@ This update clarifies the audio and CAT connections and improves FT8 audio-devic
 **Validation:** The complete local test suite passed, including FT8 tests for two same-named USB interfaces and a bidirectional interface. The universal `arm64`/`x86_64` app built and passed code-signature verification. The connected Mac enumerated the AD-508 audio device and the stock FTDI CAT adapter. The installed older app held the CAT serial port during this check, so v2.272 was not used to query the physical radio or transmit RF. Keep this release marked as a pre-release until the rebuilt app is validated with the radio.
 
 **Download:** `Lab599-Utility-v2.272-macOS-universal.zip` contains the macOS 12+ app, offline illustrated Help, English and Persian guides, and license notices. Compare its SHA-256 with `SHA256SUMS.txt`. The app is locally signed, not Apple notarized. Manufacturer firmware is not included.
+
+Historical source note (2026-10-02): This tag was not moved during the repository history cleanup. Its source archive still contains older review documents, and the attached app retains the former About-window repository URL. The ZIP and its checksum have not changed.

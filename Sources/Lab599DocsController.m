@@ -1,4 +1,5 @@
 #import "Lab599DocsController.h"
+#import "Lab599NetworkIdentity.h"
 
 @implementation Lab599DocItem
 - (NSString *)filename {
@@ -65,6 +66,7 @@ static NSTextField *Label(NSString *text, BOOL bold, CGFloat size, NSColor *colo
     NSURLSessionConfiguration *config = [NSURLSessionConfiguration defaultSessionConfiguration];
     config.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
     config.timeoutIntervalForRequest = 25.0;
+    config.HTTPAdditionalHeaders = @{@"User-Agent": Lab599HTTPUserAgent()};
     self.session = [NSURLSession sessionWithConfiguration:config delegate:self delegateQueue:[NSOperationQueue mainQueue]];
 
     self.allItems = [self builtInDocumentationCatalog];
@@ -285,12 +287,11 @@ static NSTextField *Label(NSString *text, BOOL bold, CGFloat size, NSColor *colo
 - (void)checkLocalCopiesForItems:(NSArray<Lab599DocItem *> *)items {
     NSFileManager *fm = [NSFileManager defaultManager];
     NSString *home = NSHomeDirectory();
+    NSString *downloads = [home stringByAppendingPathComponent:@"Downloads"];
     NSArray<NSString *> *searchDirs = @[
-        @"/Users/factoreal/Downloads/TX-500",
-        @"/Users/factoreal/Downloads/TX-500/Manual",
-        [home stringByAppendingPathComponent:@"Downloads"],
-        @"Manual",
-        @".."
+        downloads,
+        [downloads stringByAppendingPathComponent:@"TX-500"],
+        [downloads stringByAppendingPathComponent:@"TX-500/Manual"]
     ];
 
     for (Lab599DocItem *item in items) {
@@ -575,7 +576,7 @@ static NSTextField *Label(NSString *text, BOOL bold, CGFloat size, NSColor *colo
     for (NSString *urlString in endpoints) {
         dispatch_group_enter(group);
         NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:urlString]];
-        [req setValue:@"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)" forHTTPHeaderField:@"User-Agent"];
+        [req setValue:Lab599HTTPUserAgent() forHTTPHeaderField:@"User-Agent"];
 
         NSURLSessionDataTask *task = [self.session dataTaskWithRequest:req completionHandler:^(NSData * _Nullable data, NSURLResponse * _Nullable response, NSError * _Nullable error) {
             (void)response;

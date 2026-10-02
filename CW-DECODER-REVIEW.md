@@ -67,7 +67,7 @@
 sh tests/run-cw-decoder-tests.sh
 
 # آزمون بالا به‌اضافهٔ شش فایل واقعی؛ نیازمند FFmpeg
-sh tests/run-cw-decoder-tests.sh /Users/factoreal/Downloads
+sh tests/run-cw-decoder-tests.sh /path/to/your/recordings
 
 # ۲۰۰ کلمهٔ نویزی با سرعت و فرکانس اولیهٔ نامعلوم
 sh tests/run-cw-decoder-tests.sh --benchmark
@@ -81,8 +81,8 @@ sh tests/run-cw-decoder-tests.sh --benchmark
 
 ```sh
 './Lab599 Utility.app/Contents/MacOS/Lab599 Utility' --cw-system-audio-check \
-  /Users/factoreal/Downloads \
-  /Users/factoreal/Downloads/TX-500/Updater/validation/cw-system-audio-recheck.json
+  /path/to/your/recordings \
+  validation/cw-system-audio-recheck.json
 ```
 
 برای بازخوانی دو ضبط واقعیِ شکست‌خوردهٔ پیش از اصلاح در آزمون رگرسیون، متغیرهای `TX500_CW_CAPTURE_FIXTURE` و `TX500_CW_FULL_CAPTURE_FIXTURE` را به‌ترتیب به `validation/cw-live-capture-7-9.f32` و `validation/cw-system-audio-original-m4a.f32` بدهید. این دو فایل Float32 تک‌کانال با نرخ ۴۸ کیلوهرتز هستند. بدون آن‌ها، دو بررسیِ ضبط اختیاری اجرا نمی‌شوند.

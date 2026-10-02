@@ -120,7 +120,7 @@ The updater accepts only firmware whose complete SHA-256 matches a reviewed offi
 | Telemetry | Live arc-gauge dashboard: RF power, SWR (RM1 dots), supply/battery voltage, S-meter, frequency, mode, TX/RX state; rolling averages at 5 m / 15 m / 30 m / 60 m; over-voltage, low-voltage and high-SWR alert guards; selectable poll rate (250 ms / 500 ms / 1 s); Demo Mode | Normal operation, CAT 9600 |
 | Radio Screen | Real-time 256×128 LCD mirror via CAT; four display themes (Amber, Cool White / Daylight, Green phosphor, OLED); panadapter spectrum and calibrated meter bars; save screenshot to PNG or copy to clipboard; Demo Mode | Normal operation, CAT 9600 |
 | CAT Studio | Verified live controls and band presets; named quick-launch CAT macros with safe command validation and read-back; full 1024-byte settings snapshots with model check and pre-restore backup; app-owned CAT protocol monitor with TX/RX/error filters and response timeline; the separate system console starts collapsed | Normal operation, CAT 9600 |
-| Settings | Read, save, open and restore the full 1024-byte `.set` backup; read-back comparison after every write | Normal operation, CAT 9600 |
+| Settings | Read, save, compare and restore 1024-byte `.set` backups; edit described fields and import/export their JSON representation; read-back comparison after every write | Normal operation, CAT 9600 |
 | Memory | Read, edit, save, open and write 100 channels using the original 600-byte `.mem` format; built-in operating profiles (SOTA/POTA, FT8/JS8Call, Contest); CSV import/export; read-back comparison after every write; file editing without a connected radio | Normal operation, CAT 9600 |
 | CAT Connection | Lists possible macOS serial ports and gives CAT setup and VCP troubleshooting guidance; radio identity is checked in CAT Studio | CAT adapter for live checks |
 | Help | Offline illustrated guide to setup, operation, safety checks and troubleshooting | None |
@@ -131,7 +131,7 @@ For operating details, see the [Station](STATION.md), [DX Cluster](DX-CLUSTER.md
 
 Only one radio operation runs at a time. Telemetry and Radio Screen stop automatically when switching to another view. CAT Studio, Settings and Memory have a cooperative Stop button; partial writes are reported explicitly. File editing and Demo Mode work without a connected radio. Unsaved memory banks are protected by replacement and exit prompts.
 
-Settings backs up and restores the complete 1024-byte settings block; it does not identify individual setting fields. Memory exposes frequency, mode and preamplifier/attenuator. DIG uses the same stored code as USB. Writing memory replaces all 100 slots, including empty ones.
+Settings backs up and restores the complete 1024-byte settings block. The origin of the named-field offset mapping is unknown, and this project has no documented validation from Lab599; preserve an unedited raw `.set` backup before editing or importing JSON. JSON is a description and edit format, not a full replacement for the binary backup. Memory exposes frequency, mode and preamplifier/attenuator. DIG uses the same stored code as USB. Writing memory replaces all 100 slots, including empty ones.
 
 ## Voice Keyer
 
@@ -181,7 +181,11 @@ The Xcode project is `Lab599-Utility.xcodeproj`; its target and scheme are **Lab
 
 ## Validation
 
-The [2.0 validation record](validation/RELEASE-2.0.md) documents simulated serial tests, build checks and their limits. Current source and tests are available in this repository. Manufacturer executables, disassemblies and extracted code are not distributed here.
+The [2.0 validation record](validation/RELEASE-2.0.md) documents simulated serial tests, build checks and their limits. Current source and tests are available in this repository. The [protocol scope and validation limits](docs/PROTOCOL-SCOPE.md) separate documented commands from features that still need manufacturer or hardware confirmation. Manufacturer executables and firmware files are not distributed in the current checkout or release package. Historical Git commits and tag archives have separate limitations described below.
+
+### Historical source archives
+
+The 15 release tags published through `2.273` still contain older review documents in their automatically generated source archives; tag `1.2` contains one, the others contain several. The tags have not been rewritten to remove them. GitHub may also retain objects from before the current cleanup commit, even when they are no longer on `main`. Removing those hosted objects is a matter for GitHub Support; the current checkout cannot guarantee their deletion. The release assets are separate app ZIPs.
 
 **Physical-radio result:** EP2AES used the macOS updater on his own TX-500 Discovery to update its firmware from 1.26.10 to 1.30.00. The transfer took about 20 seconds, and the radio restarted on 1.30.00. This is one successful real-radio update; it is separate from the v2.263 automated test run described above, which did not access a physical radio. Compatibility across other hardware revisions, firmware versions, USB adapters and radio models remains unconfirmed. Test firmware updates and transmit control carefully on the target hardware before relying on them. Settings acknowledgement contents and some reply framing remain undocumented. Memory modem-control signals cannot be verified with pseudo-terminals.
 

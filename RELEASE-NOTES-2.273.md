@@ -11,3 +11,5 @@ This build addresses the reported digital-mode, audio, layout, Help, and firmwar
 **Validation:** The complete automated test suite passed, including simulated CAT and firmware-transfer checks. A universal `arm64`/`x86_64` app built and passed code-signature verification. A compact FT8 layout screenshot was checked in Simulation mode. Physical-radio operation and the firmware screen's final visual check remain unverified because the Mac locked during the preview attempt. No firmware was sent to the connected radio.
 
 This build is locally signed and is not Apple notarized. Keep a public release marked as a pre-release until the fixes are confirmed on the physical radio.
+
+Historical source note (2026-10-02): This tag was not moved during the repository history cleanup. Its source archive still contains older review documents, and the attached app retains the former About-window repository URL. The ZIP and its checksum have not changed.

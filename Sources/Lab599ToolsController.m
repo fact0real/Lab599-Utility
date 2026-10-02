@@ -1263,7 +1263,7 @@ static NSString *StudioTimestamp(NSDate *date) {
     NSView *cat = [self buildCATStudioView];
 
     // Settings Panel
-    self.settingsInfo = Label(@"No settings backup loaded. Read the radio or open an existing .set file.");
+    self.settingsInfo = Label(@"No settings backup loaded. Read the radio or open an existing .set file.\nNamed field offsets have unknown provenance; keep an unedited raw .set backup before changing settings.");
     self.settingsRead = [self button:@"Read Radio" action:@selector(readRadio:) tag:1];
     self.settingsWrite = [self button:@"Restore to Radio…" action:@selector(writeRadio:) tag:1];
     self.settingsSave = [self button:@"Save .set…" action:@selector(saveBackup:) tag:1];
@@ -2256,7 +2256,7 @@ static NSString *StudioTimestamp(NSDate *date) {
 #pragma mark - Descriptions
 
 - (void)settingsDescription {
-    self.settingsInfo.stringValue = [NSString stringWithFormat:@"%@\n1024 bytes • %@\nSHA-256: %@",
+    self.settingsInfo.stringValue = [NSString stringWithFormat:@"%@\n1024 bytes • %@\nSHA-256: %@\nNamed field offsets have unknown provenance; keep an unedited raw .set backup before changing settings.",
         self.settingsSource ?: @"Settings Backup",
         self.settingsDirty ? @"Not saved to a file" : @"Saved backup",
         TXFirmwareSHA256(self.settingsData)];
@@ -2727,7 +2727,7 @@ static NSString *StudioTimestamp(NSDate *date) {
     NSString *port = self.selectedPort ? self.selectedPort() : nil;
     if (!port) return;
     NSString *detail = (sender.tag == 1 ?
-        [NSString stringWithFormat:@"Restore all 1024 settings bytes from %@.\nSHA-256: %@", self.settingsSource ?: @"loaded settings", TXFirmwareSHA256(self.settingsData)] :
+        [NSString stringWithFormat:@"Restore all 1024 settings bytes from %@.\nSHA-256: %@\n\nNamed field offsets have unknown provenance. Keep an unedited raw .set backup before writing edited settings. Read-back checks bytes, not what the fields mean.", self.settingsSource ?: @"loaded settings", TXFirmwareSHA256(self.settingsData)] :
         [NSString stringWithFormat:@"%@\nAll 100 radio memory channels will be replaced, including empty rows. Other memory command fields use fixed values.", self.memoryInfo.stringValue]);
     if (![self confirm:@"Write this backup to the radio?"
                message:[NSString stringWithFormat:@"%@\n\nPort: %@\nKeep the radio powered on normally and the cable connected. The app will read back and check the result.", detail, port]

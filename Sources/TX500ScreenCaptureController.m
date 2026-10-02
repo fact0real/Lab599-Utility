@@ -1,6 +1,7 @@
 #import "TX500ScreenCaptureController.h"
 #import "Lab599SerialPort.h"
 #import "TX500CATTest.h"
+#import "TX500ModeLabels.h"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 #pragma mark - Custom Display View
@@ -945,9 +946,9 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
             [self sendCATCommandAsync:@"RC;" description:@"Clear RIT/XIT"];
             break;
         case TX500ControlVM:
-            // VFO ↔ Memory toggle
-            [self showTemporaryFeedback:@"⚡ [V/M] VFO↔Memory toggle"];
-            [self sendCATCommandAsync:@"VR0;" description:@"VFO/Memory toggle"];
+            // VR0; is not in the published TX-500 CAT revision. Do not send an
+            // unverified radio command from a button that implies a known action.
+            [self showTemporaryFeedback:@"[V/M] CAT command unverified; use the radio key"];
             break;
 
         case TX500ControlLock:
@@ -1702,8 +1703,9 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
                 case '5': modeStr = @"AM";  break;
                 case '6': modeStr = @"DIG"; break;  // TX-500 DIG/FSK = MD6
                 case '7': modeStr = @"CWR"; break;
-                case '9': modeStr = @"FSK"; break;
-                default:  modeStr = @"USB"; break;
+                case '8': modeStr = TX500UndocumentedModeLabel(8); break;
+                case '9': modeStr = TX500UndocumentedModeLabel(9); break;
+                default:  modeStr = @"Unknown"; break;
             }
         }
 

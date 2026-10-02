@@ -5,6 +5,7 @@
 #import "TX500TimeSync.h"
 #import "TX500TimeDiscipline.h"
 #import "Lab599FirmwareCatalog.h"
+#import "TX500ModeLabels.h"
 #import "Lab599TelemetryController.h"
 #import "Lab599ToolsController.h"
 #import "Lab599DriverController.h"
@@ -2283,7 +2284,8 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
                     else if (mCode == '5') modeStr = @"AM";
                     else if (mCode == '6') modeStr = @"DIG";
                     else if (mCode == '7') modeStr = @"CW-R";
-                    else if (mCode == '8') modeStr = @"DIG-R";
+                    else if (mCode == '8') modeStr = TX500UndocumentedModeLabel(8);
+                    else if (mCode == '9') modeStr = TX500UndocumentedModeLabel(9);
                 }
                 dispatch_async(dispatch_get_main_queue(), ^{
                     [weakSelf.logbookController updateFrequencyHz:freqHz mode:modeStr];
@@ -3169,7 +3171,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         disclaimer.alignment = NSTextAlignmentCenter;
 
         // GitHub button
-        NSButton *gitBtn = [NSButton buttonWithTitle:@"View on GitHub: https://github.com/fact0real/Lab599-Firmware-Updater"
+        NSButton *gitBtn = [NSButton buttonWithTitle:@"View on GitHub: https://github.com/fact0real/Lab599-Utility"
                                               target:self
                                               action:@selector(openGitHubRepo:)];
         gitBtn.bezelStyle = NSBezelStyleInline;
@@ -3219,7 +3221,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 
 - (void)openGitHubRepo:(id)sender {
     (void)sender;
-    NSURL *url = [NSURL URLWithString:@"https://github.com/fact0real/Lab599-Firmware-Updater"];
+    NSURL *url = [NSURL URLWithString:@"https://github.com/fact0real/Lab599-Utility"];
     [[NSWorkspace sharedWorkspace] openURL:url];
 }
 

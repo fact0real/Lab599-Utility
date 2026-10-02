@@ -4,9 +4,11 @@ import math
 import struct
 import wave
 import random
+from pathlib import Path
+import sys
 
 SAMPLE_RATE = 48000
-OUTPUT_DIR = "/Users/factoreal/Downloads/TX-500/Updater/test_cw_audio"
+OUTPUT_DIR = str(Path(sys.argv[1]).expanduser() if len(sys.argv) > 1 else Path(__file__).resolve().parent)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 MORSE_CODE = {

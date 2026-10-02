@@ -34,7 +34,7 @@ int main(int argc, const char * argv[]) {
             @{@"file": @"cw_test_20_7chars_FLVQZND_36wpm_650hz.wav",@"word": @"FLVQZND", @"wpm": @36.0, @"pitch": @650.0},
         ];
 
-        NSString *dir = @"/Users/factoreal/Downloads/TX-500/Updater/test_cw_audio";
+        NSString *dir = [NSFileManager.defaultManager.currentDirectoryPath stringByAppendingPathComponent:@"test_cw_audio"];
         int passed = 0;
         int failed = 0;
 

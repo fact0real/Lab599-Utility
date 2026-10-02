@@ -1,4 +1,5 @@
 #import "Lab599FirmwareCatalog.h"
+#import "Lab599NetworkIdentity.h"
 #import "TX500Transfer.h"
 #import <CommonCrypto/CommonDigest.h>
 #import <string.h>
@@ -130,6 +131,7 @@ static BOOL OfficialFirmwareURL(NSURL *url) {
         config.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
         config.timeoutIntervalForRequest = 20.0;
         config.timeoutIntervalForResource = 60.0;
+        config.HTTPAdditionalHeaders = @{@"User-Agent": Lab599HTTPUserAgent()};
         self.session = [NSURLSession sessionWithConfiguration:config delegate:self delegateQueue:nil];
         self.catalogSession = [NSURLSession sessionWithConfiguration:config];
     }
@@ -213,7 +215,7 @@ static BOOL OfficialFirmwareURL(NSURL *url) {
 
     for (NSUInteger i = 0; i < pages.count; i++) {
         NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:[NSURL URLWithString:pages[i]]];
-        [request setValue:@"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)" forHTTPHeaderField:@"User-Agent"];
+        [request setValue:Lab599HTTPUserAgent() forHTTPHeaderField:@"User-Agent"];
         dispatch_group_enter(group);
         NSURLSessionDataTask *task = [self.catalogSession dataTaskWithRequest:request completionHandler:^(NSData * _Nullable data, NSURLResponse * _Nullable response, NSError * _Nullable error) {
             NSString *html = nil;
@@ -378,7 +380,7 @@ static BOOL OfficialFirmwareURL(NSURL *url) {
     self.currentDestinationURL = [NSURL fileURLWithPath:[cacheDir stringByAppendingPathComponent:item.downloadURL.lastPathComponent]];
 
     NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:item.downloadURL];
-    [request setValue:@"Mozilla/5.0" forHTTPHeaderField:@"User-Agent"];
+    [request setValue:Lab599HTTPUserAgent() forHTTPHeaderField:@"User-Agent"];
 
     NSURLSessionDownloadTask *task = [self.session downloadTaskWithRequest:request];
     self.currentDownloadTask = task;

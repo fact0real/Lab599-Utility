@@ -113,6 +113,8 @@
 		20000310 /* Lab599HelpController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = Lab599HelpController.m; sourceTree = "<group>"; };
 		20000311 /* Lab599HelpController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Lab599HelpController.h; sourceTree = "<group>"; };
 		20000312 /* Help */ = {isa = PBXFileReference; lastKnownFileType = folder; path = Help; sourceTree = "<group>"; };
+		20000313 /* TX500ModeLabels.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TX500ModeLabels.h; sourceTree = "<group>"; };
+		20000314 /* Lab599NetworkIdentity.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Lab599NetworkIdentity.h; sourceTree = "<group>"; };
 		20000036 /* TX500ProfilesAndBackup.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TX500ProfilesAndBackup.m; sourceTree = "<group>"; };
 		20000037 /* TXGaugeView.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TXGaugeView.m; sourceTree = "<group>"; };
 		20000038 /* TX500TelemetryEngine.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TX500TelemetryEngine.m; sourceTree = "<group>"; };
@@ -335,6 +337,8 @@
 				20000013 /* TX500TimeSync.h */,
 				20000040 /* Lab599SerialPort.h */,
 				20000041 /* TX500CATTest.h */,
+				20000313 /* TX500ModeLabels.h */,
+				20000314 /* Lab599NetworkIdentity.h */,
 				20000042 /* TX500Configuration.h */,
 				20000046 /* TX500ProfilesAndBackup.h */,
 				20000043 /* Lab599ToolsController.h */,

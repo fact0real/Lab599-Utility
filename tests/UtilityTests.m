@@ -5,8 +5,10 @@
 #import <unistd.h>
 #import <fcntl.h>
 #import "../Headers/TX500CATTest.h"
+#import "../Headers/TX500ModeLabels.h"
 #import "../Headers/TX500Configuration.h"
 #import "../Headers/TX500ProfilesAndBackup.h"
+#import "../Headers/TX500SettingsModel.h"
 
 static void Check(BOOL ok, NSString *label) { if(!ok) { fprintf(stderr,"FAIL: %s\n",label.UTF8String); exit(1); } }
 static NSData *ASCII(NSString *s) { return [s dataUsingEncoding:NSASCIIStringEncoding]; }
@@ -194,8 +196,12 @@ int main(void) { @autoreleasepool {
     NSMutableData *corrupt=[encoded mutableCopy];((uint8_t *)corrupt.mutableBytes)[4]='9';Check(!TXDecodeMemory(corrupt,NULL),@"Unknown active mode rejected");
     channel.frequency=99999;Check(TXValidateChannel(channel)!=nil,@"Frequency low bound");channel.frequency=56000001;Check(TXValidateChannel(channel)!=nil,@"Frequency high bound");
     printf("PASS: Binary formats, command fixtures, input validation\n");
-    for(NSString *s in @[@"ID019;",@"ID500;",@"ID501;",@"ID502;",@"ID505;"]) Check(TXClassifyCATReply(ASCII(s))==TXCATOK,@"Original ID accepted");
-    Check(TXClassifyCATReply(ASCII(@"ID503;"))==TXCATUnexpectedID && TXClassifyCATReply(ASCII(@"ID;"))==TXCATWrongLength,@"Original CAT error distinctions");
+    for(NSString *s in @[@"ID019;",@"ID500;",@"ID501;",@"ID502;",@"ID505;"]) Check(TXClassifyCATReply(ASCII(s))==TXCATOK,@"ID reply accepted");
+    Check([TX500UndocumentedModeLabel(8) isEqualToString:@"MD8 (undocumented)"] && [TX500UndocumentedModeLabel(9) isEqualToString:@"MD9 (undocumented)"], @"Unspecified CAT modes retain their numeric labels");
+    NSString *settingsJSON = [TX500SettingsModel exportJSONFromSettingsData:[NSMutableData dataWithLength:1024] error:nil];
+    NSDictionary *settingsRoot = [NSJSONSerialization JSONObjectWithData:[settingsJSON dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
+    Check([settingsRoot[@"sha256"] isEqualToString:@"5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"], @"Settings JSON contains the real SHA-256 of its source block");
+    Check(TXClassifyCATReply(ASCII(@"ID503;"))==TXCATUnexpectedID && TXClassifyCATReply(ASCII(@"ID;"))==TXCATWrongLength,@"CAT error distinctions");
     for(NSString *s in @[@"ID019;",@"ID500;",@"ID501;",@"ID502;",@"ID505;"]) Check([TXModelNameForIDReply(s) hasPrefix:@"Lab599 "],@"Accepted IDs retain the Lab599 prefix used by CAT controls");
     Check([TXModelNameForIDReply(@"ID505;") containsString:@"TX-500MP"] && ![TXModelNameForIDReply(@"ID505;") containsString:@"ALTAI"],@"ID505 identifies TX-500MP");
     Check(![TXModelNameForIDReply(@"ID500;") containsString:@"Discovery"] && ![TXModelNameForIDReply(@"ID501;") containsString:@"MP"],@"Undocumented model details are not inferred");

@@ -1,7 +1,7 @@
 #import <Foundation/Foundation.h>
 #import "Lab599SerialPort.h"
 
-// Compatible with Settings 1.0 (.set) and TRXMem 1.03 (.mem).
+// Handles 1024-byte .set backups and 600-byte, 100-channel .mem files.
 @interface TXMemoryChannel : NSObject <NSCopying>
 @property(nonatomic) uint32_t frequency;
 @property(nonatomic) uint8_t mode; // ASCII 1=LSB, 2=USB/DIG, 3=CW, 4=FM, 5=AM, 7=CWR

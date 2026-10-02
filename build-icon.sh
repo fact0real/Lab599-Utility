@@ -2,7 +2,7 @@
 set -eu
 cd -- "$(dirname -- "$0")"
 
-# Regenerate the approved Obsidian Signal icon. The former firmware-updater
+# Regenerate the current Obsidian Signal icon. The former firmware-updater
 # artwork remains in assets/branding/legacy-firmware-updater-2.173/.
 SOURCE_PNG="assets/branding/obsidian-signal/Lab599-Utility-Obsidian-Final.png"
 test -s "$SOURCE_PNG" || { echo "Missing icon master: $SOURCE_PNG" >&2; exit 1; }

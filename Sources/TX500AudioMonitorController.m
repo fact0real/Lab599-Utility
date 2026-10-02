@@ -7,6 +7,7 @@
 //
 
 #import "TX500AudioMonitorController.h"
+#import "TX500ModeLabels.h"
 
 #define TX500_BOOKMARKS_KEY @"TX500AudioMonitorBookmarks_v2"
 
@@ -1749,8 +1750,9 @@
                 case '5': parsedMode = @"AM";  break;
                 case '6': parsedMode = @"DIG"; break;
                 case '7': parsedMode = @"CWR"; break;
-                case '9': parsedMode = @"FSK"; break;
-                default:  parsedMode = @"USB"; break;
+                case '8': parsedMode = TX500UndocumentedModeLabel(8); break;
+                case '9': parsedMode = TX500UndocumentedModeLabel(9); break;
+                default:  parsedMode = @"Unknown"; break;
             }
         }
 

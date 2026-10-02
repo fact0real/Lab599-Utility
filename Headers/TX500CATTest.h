@@ -18,7 +18,7 @@ FOUNDATION_EXPORT TXCATCode TXClassifyCATReply(NSData *reply);
 // family, while ID501/ID502 are legacy accepted replies without a known model.
 static inline NSString *TXModelNameForIDReply(NSString *reply) {
     // Lab599 CAT Protocol rev. 3 documents 019 (TS2000), 500 (TX-500
-    // family) and 505 (TX-500MP). The original TestCAT also accepts 501/502.
+    // family) and 505 (TX-500MP). ID501/ID502 are accepted without a model name.
     if ([reply isEqualToString:@"ID019;"]) return @"Lab599 radio, TS2000 protocol (ID019)";
     if ([reply isEqualToString:@"ID500;"]) return @"Lab599 TX-500 family (ID500)";
     if ([reply isEqualToString:@"ID501;"]) return @"Lab599 radio (ID501)";
@@ -64,7 +64,7 @@ static inline NSString *TXModelNameForIDReply(NSString *reply) {
 @property(nonatomic, copy) NSString *rawPCReply;
 @end
 
-// Sends only ID; and accepts exactly the five replies in official TestCAT 1.1.
+// Sends only ID; and accepts ID019, ID500, ID501, ID502 and ID505.
 // update receives independent snapshots, safe to hand to the main queue.
 FOUNDATION_EXPORT TXCATSummary *TXRunCATTest(NSString *path, TXCATOptions options,
     Lab599Cancellation *token, void (^update)(TXCATSummary *), void (^log)(NSString *));

@@ -1,4 +1,5 @@
 #import "TX500SettingsModel.h"
+#import <CommonCrypto/CommonDigest.h>
 
 static NSString * const kModeNames[] = {
     @"LSB", @"LSB", @"USB", @"CW", @"FM", @"AM", @"DIG", @"CWR"
@@ -354,10 +355,17 @@ static NSArray<NSString *> *kBandNames(void) {
         }];
     }
 
+    unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256(data.bytes, (CC_LONG)data.length, digest);
+    NSMutableString *sha256 = [NSMutableString stringWithCapacity:CC_SHA256_DIGEST_LENGTH * 2];
+    for (NSUInteger i = 0; i < CC_SHA256_DIGEST_LENGTH; i++) {
+        [sha256 appendFormat:@"%02x", digest[i]];
+    }
+
     NSDictionary *root = @{
         @"format": @"Lab599 TX-500 Settings Description",
         @"version": @"1.0",
-        @"sha256": data.description ?: @"",
+        @"sha256": sha256,
         @"settings": arr
     };
 

@@ -147,7 +147,7 @@
 
   <section id="radio-view">
     <h2>10. Radio Screen and Telemetry</h2>
-    <p><strong>Radio Screen</strong> reads the radio's display over CAT, can refresh it continuously, and saves or copies a screenshot. <strong>Telemetry</strong> shows live CAT measurements and warnings such as high SWR or voltage. Use Demo Mode to learn the panels without hardware. Do not treat demo values as readings from a connected radio.</p>
+    <p><strong>Radio Screen</strong> reads the radio's display over CAT, can refresh it continuously, and saves or copies a screenshot. Its V/M on-screen control does not send a CAT command because the proposed mapping has not been verified on the TX-500; use the physical radio key. <strong>Telemetry</strong> shows live CAT measurements and warnings such as high SWR or voltage. Use Demo Mode to learn the panels without hardware. Do not treat demo values as readings from a connected radio.</p>
     <figure><img src="images/radio-screen-preview.png" alt="Radio Screen page with Live CAT and Demo Sim controls visible"><figcaption>Radio Screen preview while disconnected. Click Demo Sim for simulated motion; Live CAT requires a verified radio connection.</figcaption></figure>
     <figure><img src="images/telemetry-demo.png" alt="Telemetry gauges shown in Demo Mode"><figcaption>Telemetry in Demo Mode; readings are simulated.</figcaption></figure>
     <a class="back" href="#top">Back to contents ↑</a>
@@ -155,7 +155,7 @@
 
   <section id="config">
     <h2>11. Settings and Memory</h2>
-    <p><strong>Settings</strong> can read and save the radio's 1024-byte configuration block. <strong>Memory</strong> manages a 100-channel bank, including local file edits and CSV import/export. Save a backup before writing either one. After a write, the app reads back and compares data; an interrupted or failed write may still have changed part of the radio's state.</p>
+    <p><strong>Settings</strong> can read and save the radio's 1024-byte configuration block, compare two .set files, edit described fields and import/export a JSON description. Keep an unedited raw .set backup: JSON does not preserve the entire block, the origin of the named field offset mapping is unknown, and this project has no documented validation from Lab599. <strong>Memory</strong> manages a 100-channel bank, including local file edits and CSV import/export. Save a backup before writing either one. After a write, the app reads back and compares data; an interrupted or failed write may still have changed part of the radio's state.</p>
     <p>Memory's built-in profiles are starting points. Check the frequencies, modes and all 100 slots before replacing a bank. Local file editing works without a radio; writing to hardware requires a verified CAT connection.</p>
     <figure><img src="images/settings.png" alt="Settings backup and restore controls"><figcaption>Settings view. Save a backup before restoring or writing.</figcaption></figure>
     <figure><img src="images/memory.png" alt="Memory bank editor and channel controls"><figcaption>Memory view before loading a bank. Local file edits do not require a radio.</figcaption></figure>

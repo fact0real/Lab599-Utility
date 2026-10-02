@@ -81,7 +81,7 @@ TXCATSummary *TXRunCATTest(NSString *path, TXCATOptions options, Lab599Cancellat
             double deadline = started + options.responseTimeout;
             while (!token.cancelled && Lab599MonotonicTime() < deadline) {
                 double now = Lab599MonotonicTime();
-                // Keep the original 100 ms observation window but allow slow,
+                // Keep a 100 ms observation window but allow slow,
                 // fragmented replies up to the longer bounded deadline.
                 BOOL terminated = received.length && memchr(received.bytes, ';', received.length) != NULL;
                 if (now - started >= options.cycleInterval && (received.length >= 6 || terminated)) break;

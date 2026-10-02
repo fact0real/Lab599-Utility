@@ -1431,7 +1431,7 @@ static NSString *StudioTimestamp(NSDate *date) {
         scroll,
         editor,
         self.memoryInfo,
-        Label(@"Edits stay in this bank until Write is clicked. DIG uses the USB code, as in the original utility.")
+        Label(@"Edits stay in this bank until Write is clicked. DIG and USB share the stored memory code.")
     ], YES);
 
     [scroll.widthAnchor constraintEqualToAnchor:memory.widthAnchor].active = YES;
@@ -2728,7 +2728,7 @@ static NSString *StudioTimestamp(NSDate *date) {
     if (!port) return;
     NSString *detail = (sender.tag == 1 ?
         [NSString stringWithFormat:@"Restore all 1024 settings bytes from %@.\nSHA-256: %@", self.settingsSource ?: @"loaded settings", TXFirmwareSHA256(self.settingsData)] :
-        [NSString stringWithFormat:@"%@\nAll 100 radio memory channels will be replaced, including empty rows. The original utility's fixed memory fields are used.", self.memoryInfo.stringValue]);
+        [NSString stringWithFormat:@"%@\nAll 100 radio memory channels will be replaced, including empty rows. Other memory command fields use fixed values.", self.memoryInfo.stringValue]);
     if (![self confirm:@"Write this backup to the radio?"
                message:[NSString stringWithFormat:@"%@\n\nPort: %@\nKeep the radio powered on normally and the cable connected. The app will read back and check the result.", detail, port]
                 button:@"Write and Verify"]) return;

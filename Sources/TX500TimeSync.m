@@ -8,9 +8,8 @@
 #import <time.h>
 #import <unistd.h>
 
-// Recovered independently from both supplied TimeSync binaries.
 // Set: TMhh:mm:ss;  -> 100 ms -> query: TM; -> reply: TMhh:mm:ss;
-// See TIMESYNC-REVIEW.md for addresses, original behavior and deliberate changes.
+// Verify the returned time before reporting synchronization.
 @implementation TXTimeSyncResult
 @end
 

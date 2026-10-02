@@ -131,7 +131,7 @@ For operating details, see the [Station](STATION.md), [DX Cluster](DX-CLUSTER.md
 
 Only one radio operation runs at a time. Telemetry and Radio Screen stop automatically when switching to another view. CAT Studio, Settings and Memory have a cooperative Stop button; partial writes are reported explicitly. File editing and Demo Mode work without a connected radio. Unsaved memory banks are protected by replacement and exit prompts.
 
-Settings is a complete-block backup/restore tool matching the original utility; it does not identify individual setting fields. Memory exposes frequency, mode and preamplifier/attenuator. DIG uses the same stored code as USB. Writing memory replaces all 100 slots, including empty ones.
+Settings backs up and restores the complete 1024-byte settings block; it does not identify individual setting fields. Memory exposes frequency, mode and preamplifier/attenuator. DIG uses the same stored code as USB. Writing memory replaces all 100 slots, including empty ones.
 
 ## Voice Keyer
 
@@ -179,17 +179,15 @@ For v2.263, the full local suite, 60 real FT8 recordings under AddressSanitizer/
 
 The Xcode project is `Lab599-Utility.xcodeproj`; its target and scheme are **Lab599 Utility**.
 
-## Reconstruction and validation
+## Validation
 
-- [Firmware protocol review](PROTOCOL-REVIEW.md)
-- [TimeSync review](TIMESYNC-REVIEW.md)
-- [CAT review](CAT-REVIEW.md)
-- [Settings and Memory review](CONFIGURATION-REVIEW.md)
-- [Validation record](validation/RELEASE-2.0.md)
+The [2.0 validation record](validation/RELEASE-2.0.md) documents simulated serial tests, build checks and their limits. Current source and tests are available in this repository. Manufacturer executables, disassemblies and extracted code are not distributed here.
 
-Reports distinguish observed binary behaviour, deliberate improvements, and unresolved details. Disassembly, binary hashes, extraction scripts and tests are included. This is a behavioural reconstruction, not recovery of the manufacturer's original source code.
+**Physical-radio result:** EP2AES used the macOS updater on his own TX-500 Discovery to update its firmware from 1.26.10 to 1.30.00. The transfer took about 20 seconds, and the radio restarted on 1.30.00. This is one successful real-radio update; it is separate from the v2.263 automated test run described above, which did not access a physical radio. Compatibility across other hardware revisions, firmware versions, USB adapters and radio models remains unconfirmed. Test firmware updates and transmit control carefully on the target hardware before relying on them. Settings acknowledgement contents and some reply framing remain undocumented. Memory modem-control signals cannot be verified with pseudo-terminals.
 
-**Physical-radio result:** EP2AES used the macOS updater on his own TX-500 Discovery to update its firmware from 1.26.10 to 1.30.00. The transfer took about 20 seconds, and the radio restarted on 1.30.00. This is one successful real-radio update; it is separate from the v2.263 automated test run described above, which did not access a physical radio. Compatibility across other hardware revisions, firmware versions, USB adapters and radio models remains unconfirmed. Test firmware updates and transmit control carefully on the target hardware before relying on them. Settings acknowledgement contents and some reply framing remain unspecified by the original programs. Memory modem-control signals cannot be verified with pseudo-terminals.
+## Branding and release status
+
+This is an independent community project, not an official Lab599 application. The existing app uses Lab599-branded images and radio photographs whose redistribution permission is being clarified. No new app release will be published until written permission or suitable replacement artwork is in place. See [asset provenance and status](assets/README.md).
 
 ## Project
 

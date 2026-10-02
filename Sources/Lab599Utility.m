@@ -3163,7 +3163,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         ]];
 
         NSTextField *disclaimer = [NSTextField wrappingLabelWithString:
-            @"Independent software created for the amateur radio community. Protocols and file formats reverse-engineered from original tools."];
+            @"Independent software created for the amateur radio community. Not affiliated with or endorsed by Lab599."];
         disclaimer.textColor = NSColor.tertiaryLabelColor;
         disclaimer.font = [NSFont systemFontOfSize:10];
         disclaimer.alignment = NSTextAlignmentCenter;

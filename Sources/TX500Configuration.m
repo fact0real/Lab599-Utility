@@ -69,8 +69,8 @@ static long long Decimal(const uint8_t *p, NSUInteger n) {
 }
 NSInteger TXSettingsReplyValue(NSData *reply) {
     if (reply.length!=6) return -1;
-    // Original client reads decimal bytes at offsets 2..4. It does not inspect
-    // the framing bytes; do not invent undocumented ACK/header values.
+    // Read decimal bytes at offsets 2..4; do not assume undocumented
+    // acknowledgement or header values in the remaining framing bytes.
     long long n=Decimal((const uint8_t *)reply.bytes+2,3);
     return n>=0 && n<=255 ? (NSInteger)n : -1;
 }
@@ -173,7 +173,6 @@ TXConfigurationResult *TXMemoryTransfer(NSString *path, NSArray<TXMemoryChannel 
         if (channels) for (NSUInteger i=0; i<100 && !token.cancelled; i++) {
             r.attemptedWrites=i+1;
             if (![port writeData:TXMemoryWriteCommand(i,channels[i]) timeout:o.replyTimeout cancellation:token error:&error]) break;
-            // Original waits for the output queue to drain, not a radio ACK.
             // Pace writes, then verify with MR reads on the same connection.
             if (!Lab599Pause(o.memoryWriteDelay,token)) break;
             r.completed=i+1; progress(@"Writing memory",i+1,100);

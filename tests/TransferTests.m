@@ -9,7 +9,7 @@
 #import "../Headers/TX500Transfer.h"
 
 // A radio-side emulator using a real macOS pseudo-terminal. It implements the
-// two-ACK protocol recovered from the official binaries, not per-byte ACKs.
+// two-ACK transfer protocol, with no per-byte acknowledgements.
 // It never opens a USB serial device and cannot transmit to a real radio.
 
 static void Check(BOOL passed, NSString *message) {

@@ -76,10 +76,10 @@ static void ConfigurationScenario(BOOL memory, BOOL writing, NSString *fault) {
                 Reply(master,response,[fault isEqual:@"fragmented"]);
             } else if([cmd hasPrefix:@"MW"]) {
                 Check(cmd.length==50 && [[cmd substringWithRange:NSMakeRange(4,2)] integerValue]==(NSInteger)writes,@"50-byte memory writes in order");
-                Check([[cmd substringFromIndex:19] isEqual:@"0000000000000000000000        ;"],@"Exact original memory suffix");
+                Check([[cmd substringFromIndex:19] isEqual:@"0000000000000000000000        ;"],@"Exact memory command suffix");
                 TXMemoryChannel *c=[TXMemoryChannel new]; c.frequency=(uint32_t)[[cmd substringWithRange:NSMakeRange(6,11)] longLongValue];
                 c.mode=[cmd characterAtIndex:17];c.preAtt=[cmd characterAtIndex:18];bank[writes++]=c;
-                // No ACK: original Memory utility only drains its output queue.
+                // Memory writes do not have an individual radio ACK.
             } else if([cmd hasPrefix:@"MR"]) {
                 Check([cmd isEqual:[NSString stringWithFormat:@"MR00%02lu;",(unsigned long)reads]],@"Ordered memory read query");
                 TXMemoryChannel *c=[bank[reads] copy];

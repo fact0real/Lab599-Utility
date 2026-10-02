@@ -24,7 +24,7 @@ Final executable SHA-256: `bab5bd5430c3d87760321c0dfee983f3fa43333f81ea68c538bd0
 
 ## Limits
 
-No physical radio or physical serial device was accessed. Manufacturer binaries were analyzed statically. Original Settings ACK contents and ignored reply framing are not established; emulated reply prefixes are fixtures, not hardware captures. See [configuration analysis](../CONFIGURATION-REVIEW.md).
+No physical radio or physical serial device was accessed. Settings acknowledgement contents and some reply framing are not documented; emulated reply prefixes are fixtures, not hardware captures. The results below describe the automated checks performed for this release, not a physical-radio compatibility test.
 
 This host's PTY driver accepts TIOCEXCL but does not prevent a second non-root open. A separate minimal PTY probe reproduced this behavior. The test reports it explicitly; physical-driver exclusivity is unverified. Production code requests exclusive access and the UI permits only one operation at a time.
 

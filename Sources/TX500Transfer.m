@@ -8,11 +8,10 @@
 #import <time.h>
 #import <unistd.h>
 
-// Verified against the supplied Linux 1.0.1 and Windows x64 1.0.2 binaries.
 // 57600 baud, 8N1, no flow control:
 //   send file[0:16] -> receive "OK" -> send file[16:end] -> receive "OK".
-// The Linux payload loop checks TIOCOUTQ (the host output queue), NOT RX.
-// No payload byte is individually acknowledged. See PROTOCOL-REVIEW.md.
+// Wait for the host output queue to drain during the payload transfer.
+// No payload byte is individually acknowledged.
 
 @implementation TXTransferResult
 @end
@@ -24,7 +23,7 @@ TXTransferOptions TXDefaultTransferOptions(void) {
 
 NSString *TXFirmwareValidationError(NSData *firmware) {
     if (firmware.length <= 16) return @"The firmware must contain a 16-byte header and a non-empty payload.";
-    // BL20 is the container signature of the supplied Discovery firmware.
+    // BL20 identifies the firmware container format.
     // This is a format check, not an authenticity or radio-model check.
     if (memcmp(firmware.bytes, "BL20", 4) != 0)
         return @"Unsupported firmware header. Select an official BL20-format .fw file for your radio.";
@@ -209,8 +208,8 @@ TXTransferResult *TXFlashFirmware(NSData *firmware, NSString *port, TXTransferOp
     log(@"Header accepted. Sending the remaining file; no per-byte acknowledgements are expected.");
     double lastProgress = MonotonicTime();
     progress(result.bytesSubmitted, firmware.length);
-    // Preserve the Linux updater's byte-write/output-queue pacing. The queue
-    // check is local to the host; it does not read or wait for any radio bytes.
+    // Write one byte at a time and wait for the host output queue to drain.
+    // This check does not read or wait for any radio bytes.
     for (NSUInteger offset = 16; offset < firmware.length; offset++) {
         if (!WriteBytes(fd, bytes + offset, 1, options, result) || !WaitForOutputQueue(fd, options, result)) goto finish;
         if (MonotonicTime() - lastProgress >= 0.2 || offset + 1 == firmware.length) {

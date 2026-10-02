@@ -187,7 +187,7 @@ The [2.0 validation record](validation/RELEASE-2.0.md) documents simulated seria
 
 ## Branding and release status
 
-This is an independent community project, not an official Lab599 application. The existing app uses Lab599-branded images and radio photographs whose redistribution permission is being clarified. No new app release will be published until written permission or suitable replacement artwork is in place. See [asset provenance and status](assets/README.md).
+This is an independent community project, not an official Lab599 application. The existing app uses Lab599-branded images and radio photographs whose redistribution permission is being clarified. No new app release will be published until written permission is in place. See [asset provenance and status](assets/README.md).
 
 ## Project
 

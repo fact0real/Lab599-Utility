@@ -15,6 +15,6 @@ The source logo was supplied by the user as `/Users/factoreal/Downloads/header_l
 This adaptation does not establish permission to redistribute Lab599 branding
 or imply Lab599 endorsement. The app also bundles radio photographs in
 `Resources/`. Written permission for the icon, logo and photographs is pending;
-keep existing releases intact and do not publish a new app build until permission
-or suitable replacement artwork is in place. The radio images are used in the
+keep the attached files of existing releases intact and do not publish a new app
+build until written permission is in place. The radio images are used in the
 firmware target confirmation and must remain model-accurate.

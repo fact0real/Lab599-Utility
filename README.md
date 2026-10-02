@@ -2,25 +2,25 @@
 
 A native macOS application for the Lab599 TX-500 family of transceivers. It includes a Station workspace, DX Cluster, FT8/FT4 and CW operation, Voice Keyer, contact logbook, firmware updates, live telemetry, radio screen capture, time sync, CAT diagnostics, settings and memory management. Developed by **EP2AES (factoreal)**.
 
-**Latest published release: v2.272 (Build 278) · macOS 12+ · Apple Silicon and Intel · English interface · Persian guide included**
+**Latest published release: v2.273 (Build 279) · macOS 12+ · Apple Silicon and Intel · English interface · Persian guide included**
 
-[Download v2.272](https://github.com/fact0real/Lab599-Utility/releases/tag/2.272) · [In-app Help guide](Resources/Help/index.html) · [راهنمای فارسی](QUICKSTART-FA.md) · [Build instructions](UPDATER-README.md) · [Report an issue](https://github.com/fact0real/Lab599-Utility/issues/new)
+[Download v2.273](https://github.com/fact0real/Lab599-Utility/releases/tag/2.273) · [In-app Help guide](Resources/Help/index.html) · [راهنمای فارسی](QUICKSTART-FA.md) · [Build instructions](UPDATER-README.md) · [Report an issue](https://github.com/fact0real/Lab599-Utility/issues/new)
 
 ## Download and install
 
-Download `Lab599-Utility-v2.272-macOS-universal.zip` from the [v2.272 release](https://github.com/fact0real/Lab599-Utility/releases/tag/2.272). Extract the ZIP and move `Lab599 Utility.app` to `/Applications`. The ZIP contains the app, offline illustrated Help, English and Persian guides, and license notices; manufacturer firmware is not included.
+Download `Lab599-Utility-v2.273-macOS-universal.zip` from the [v2.273 release](https://github.com/fact0real/Lab599-Utility/releases/tag/2.273). Extract the ZIP and move `Lab599 Utility.app` to `/Applications`. The ZIP contains the app, offline illustrated Help, English and Persian guides, and license notices; manufacturer firmware is not included.
 
 Verify the download before opening the app:
 
 ```sh
-shasum -a 256 Lab599-Utility-v2.272-macOS-universal.zip
+shasum -a 256 Lab599-Utility-v2.273-macOS-universal.zip
 ```
 
 Compare the result with the `SHA256SUMS.txt` asset on the release page. The app is ad-hoc signed, **not Apple notarized**. If macOS blocks the first launch, select this app in **System Settings → Privacy & Security → Open Anyway** after verifying the checksum.
 
-## Local build v2.273
+## What's new in v2.273
 
-The installed local build, v2.273, contains fixes for DIG mode confirmation on FT8 start, custom digital frequency entry, Live Audio continuity between sections, compact-window layout, Help sizing, and a pictured-model confirmation before firmware updates. See [v2.273 notes](RELEASE-NOTES-2.273.md). The latest published download above remains v2.272 until v2.273 is released.
+FT8 start now confirms DIG mode and the unchanged radio dial by CAT; the Digital tab exposes custom MHz entry. Live Audio continues across sections. Compact windows and Help resize more reliably, and firmware updates require confirmation that the pictured target matches the connected radio's printed model. See [v2.273 notes](RELEASE-NOTES-2.273.md) for validation and remaining physical-radio checks.
 
 ## What's new in v2.272
 

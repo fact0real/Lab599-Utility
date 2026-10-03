@@ -123,19 +123,30 @@ static void CATScenario(NSArray<NSString *> *replies, BOOL cancel, BOOL fragment
     int master,slave;char path[256];Check(openpty(&master,&slave,path,NULL,NULL)==0,@"CAT pty");
     Lab599Cancellation *token=[Lab599Cancellation new],*stop=[Lab599Cancellation new];
     __block NSUInteger queries=0;
+    __block double cancelledAt=0;
     dispatch_semaphore_t done=dispatch_semaphore_create(0);
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{ @autoreleasepool {
         for(NSString *reply in replies) {
             NSString *cmd=Command(master,stop); if(!cmd) break; Check([cmd isEqual:@"ID;"],@"CAT sends only ID;"); queries++;
             if(reply.length) Reply(master,reply,fragmented);
-            if(cancel) { usleep(20000);token.cancelled=YES;break; }
+            if(cancel) { usleep(20000);cancelledAt=Lab599MonotonicTime();token.cancelled=YES;break; }
         }
         dispatch_semaphore_signal(done);
     }});
-    TXCATOptions o=TXDefaultCATOptions(); o.maximumChecks=replies.count;o.responseTimeout=.15;o.cycleInterval=.03;o.settleDelay=.001;
-    double started=Lab599MonotonicTime();TXCATSummary *r=TXRunCATTest(@(path),o,token,nil,nil);
+    // Leave enough time for the emulator to request cancellation on a busy CI host;
+    // the assertion below measures the response after that request, not setup time.
+    TXCATOptions o=TXDefaultCATOptions(); o.maximumChecks=replies.count;o.responseTimeout=cancel ? 5 : .15;o.cycleInterval=.03;o.settleDelay=.001;
+    TXCATSummary *r=TXRunCATTest(@(path),o,token,nil,nil);
+    double finishedAt=Lab599MonotonicTime();
     stop.cancelled=YES;Check(dispatch_semaphore_wait(done,dispatch_time(DISPATCH_TIME_NOW,2*NSEC_PER_SEC))==0,@"CAT emulator stops");
-    if(cancel) Check(r.cancelled && Lab599MonotonicTime()-started<.25 && queries==1,@"Bounded CAT cancellation");
+    if(cancel) {
+        double cancellationLatency=finishedAt-cancelledAt;
+        if(!r.cancelled || cancelledAt<=0 || cancellationLatency<0 || cancellationLatency>=1 || queries!=1 || r.checks!=0)
+            fprintf(stderr,"CAT cancellation diagnostics: cancelled=%d, requested=%d, latency=%.3f s, queries=%lu, checks=%lu\n",
+                r.cancelled, cancelledAt>0, cancellationLatency, (unsigned long)queries, (unsigned long)r.checks);
+        Check(r.cancelled && cancelledAt>0 && cancellationLatency>=0 && cancellationLatency<1 && queries==1 && r.checks==0,
+              @"Bounded CAT cancellation");
+    }
     else {
         NSUInteger passed=0;for(NSString *reply in replies) if([@[@"ID019;",@"ID500;",@"ID501;",@"ID502;",@"ID505;"] containsObject:reply]) passed++;
         Check(r.checks==replies.count && r.passed==passed && r.failed==replies.count-passed && !r.connectionFailed,@"CAT counts and recovery");

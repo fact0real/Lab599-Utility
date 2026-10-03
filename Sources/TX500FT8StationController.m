@@ -2942,7 +2942,7 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
         }
     } else {
         [self refreshRadioFrequency];
-        [self appendToQSOConsole:@"✓ [Live Radio Mode] Monitoring live audio. Hardware RTS & CAT PTT are ACTIVE for connected TX-500."];
+        [self appendToQSOConsole:@"✓ [Live Radio Mode] Monitoring live audio. CAT PTT is used only when transmit is armed and radio checks pass; RTS/DTR PTT is not used."];
         [self.allDecodes removeAllObjects];
         [self applyTableFilters];
     }

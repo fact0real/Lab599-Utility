@@ -198,6 +198,10 @@ int main(void) { @autoreleasepool {
     printf("PASS: Binary formats, command fixtures, input validation\n");
     for(NSString *s in @[@"ID019;",@"ID500;",@"ID501;",@"ID502;",@"ID505;"]) Check(TXClassifyCATReply(ASCII(s))==TXCATOK,@"ID reply accepted");
     Check([TX500UndocumentedModeLabel(8) isEqualToString:@"MD8 (undocumented)"] && [TX500UndocumentedModeLabel(9) isEqualToString:@"MD9 (undocumented)"], @"Unspecified CAT modes retain their numeric labels");
+    Check([TX500CATModeLabel(6) isEqualToString:@"DIG"] &&
+          [TX500CATModeLabel(8) isEqualToString:@"MD8 (undocumented)"] &&
+          [TX500CATModeLabel(9) isEqualToString:@"MD9 (undocumented)"] &&
+          ![TX500CATModeLabel(0) isEqualToString:@"USB"], @"CAT mode labels do not guess undocumented or invalid modes");
     NSString *settingsJSON = [TX500SettingsModel exportJSONFromSettingsData:[NSMutableData dataWithLength:1024] error:nil];
     NSDictionary *settingsRoot = [NSJSONSerialization JSONObjectWithData:[settingsJSON dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil];
     Check([settingsRoot[@"sha256"] isEqualToString:@"5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"], @"Settings JSON contains the real SHA-256 of its source block");

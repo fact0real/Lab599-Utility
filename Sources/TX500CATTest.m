@@ -1,4 +1,5 @@
 #import "TX500CATTest.h"
+#import "TX500ModeLabels.h"
 #import <math.h>
 
 @implementation TXCATSummary
@@ -167,16 +168,7 @@ static NSString *FormatFrequency(uint64_t hz) {
 }
 
 static NSString *ModeNameFromCode(NSInteger code) {
-    switch (code) {
-        case 1: return @"LSB";
-        case 2: return @"USB";
-        case 3: return @"CW";
-        case 4: return @"FM";
-        case 5: return @"AM";
-        case 6: return @"DIG";
-        case 7: return @"CWR";
-        default: return @"USB";
-    }
+    return TX500CATModeLabel(code);
 }
 
 static NSString *SendOverPort(Lab599SerialPort *port, NSString *cmd, NSTimeInterval timeout, double *roundtripMs, NSError **error) {

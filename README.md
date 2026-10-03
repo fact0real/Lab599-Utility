@@ -2,7 +2,7 @@
 
 A native macOS application for the Lab599 TX-500 family of transceivers. It includes a Station workspace, DX Cluster, FT8/FT4 and CW operation, Voice Keyer, contact logbook, firmware updates, live telemetry, radio screen capture, time sync, CAT diagnostics, settings and memory management. Developed by **EP2AES (factoreal)**.
 
-**Latest published release: v2.273 (Build 279) · macOS 12+ · Apple Silicon and Intel · English interface · Persian guide included**
+**Newest published pre-release: v2.273 (Build 279) · macOS 12+ · Apple Silicon and Intel · English interface · Persian guide included**
 
 [Download v2.273](https://github.com/fact0real/Lab599-Utility/releases/tag/2.273) · [In-app Help guide](Resources/Help/index.html) · [راهنمای فارسی](QUICKSTART-FA.md) · [Build instructions](UPDATER-README.md) · [Report an issue](https://github.com/fact0real/Lab599-Utility/issues/new)
 

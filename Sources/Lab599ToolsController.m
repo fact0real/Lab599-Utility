@@ -4,6 +4,7 @@
 #import "TX500Transfer.h"
 #import "TX500ProfilesAndBackup.h"
 #import "TX500SettingsModel.h"
+#import "TX500ModeLabels.h"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 @interface TXCATLatencyView : NSView
@@ -418,16 +419,7 @@ static NSInteger ToolsBandIndexForFrequency(uint64_t hz) {
 }
 
 static NSString *ToolsModeNameFromCode(NSInteger code) {
-    switch (code) {
-        case 1: return @"LSB";
-        case 2: return @"USB";
-        case 3: return @"CW";
-        case 4: return @"FM";
-        case 5: return @"AM";
-        case 6: return @"DIG (FSK)";
-        case 7: return @"CWR";
-        default: return @"USB";
-    }
+    return TX500CATModeLabel(code);
 }
 
 static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
@@ -637,7 +629,7 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
 
     // Mode & RF Power Row
     self.catModePopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
-    [self.catModePopup addItemsWithTitles:@[@"LSB", @"USB", @"CW", @"FM", @"AM", @"DIG (FSK)", @"CWR"]];
+    [self.catModePopup addItemsWithTitles:@[@"LSB", @"USB", @"CW", @"FM", @"AM", @"DIG", @"CWR"]];
     [self.catModePopup selectItemWithTitle:@"USB"];
     self.catModePopup.controlSize = NSControlSizeSmall;
     self.catModePopup.font = [NSFont systemFontOfSize:11];
@@ -1750,7 +1742,11 @@ static NSString *StudioTimestamp(NSDate *date) {
 
     // Sync input controls with read values
     if (state.operatingMode.length) {
-        [self.catModePopup selectItemWithTitle:state.operatingMode];
+        if ([self.catModePopup indexOfItemWithTitle:state.operatingMode] >= 0) {
+            [self.catModePopup selectItemWithTitle:state.operatingMode];
+        } else {
+            [self.catModePopup selectItem:nil];
+        }
     }
     if (state.rfPowerWatts > 0) {
         NSString *pTitle = [NSString stringWithFormat:@"%ld W", (long)round(state.rfPowerWatts)];
@@ -1813,7 +1809,11 @@ static NSString *StudioTimestamp(NSDate *date) {
         int m = [[reply substringWithRange:NSMakeRange(2, 1)] intValue];
         NSString *mName = ToolsModeNameFromCode(m);
         self.catModeBadge.stringValue = [NSString stringWithFormat:@"MODE: %@", mName];
-        [self.catModePopup selectItemWithTitle:mName];
+        if ([self.catModePopup indexOfItemWithTitle:mName] >= 0) {
+            [self.catModePopup selectItemWithTitle:mName];
+        } else {
+            [self.catModePopup selectItem:nil];
+        }
     } else if ([cmd hasPrefix:@"PC"] && reply && [reply hasPrefix:@"PC"] && reply.length >= 5) {
         int p = [[reply substringWithRange:NSMakeRange(2, 3)] intValue];
         double watts = (p > 10) ? (p / 10.0) : (double)p;
@@ -2044,6 +2044,10 @@ static NSString *StudioTimestamp(NSDate *date) {
     if (!port) return;
 
     NSInteger idx = self.catModePopup.indexOfSelectedItem;
+    if (idx < 0 || idx >= 7) {
+        if (self.statusChanged) self.statusChanged(@"Choose a documented CAT mode before sending a mode command.", 0);
+        return;
+    }
     NSInteger code = idx + 1;
     NSString *modeName = self.catModePopup.titleOfSelectedItem;
 

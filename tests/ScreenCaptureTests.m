@@ -10,6 +10,7 @@
 // every command it receives.
 static NSMutableArray<NSString *> *fakeRadioCommands;
 static NSString *fakePTReply;
+static NSMutableDictionary<NSString *, NSString *> *fakeReplies; // other exact answers
 static void StartFakeRadio(int master) {
     fakeRadioCommands = [NSMutableArray array];
     [NSThread detachNewThreadWithBlock:^{
@@ -28,6 +29,7 @@ static void StartFakeRadio(int master) {
                 @synchronized (fakeRadioCommands) { [fakeRadioCommands addObject:cmd]; }
                 NSString *reply = nil;
                 if ([cmd isEqualToString:@"PT;"]) reply = fakePTReply;
+                else if (fakeReplies[cmd]) reply = fakeReplies[cmd];
                 else if (![cmd isEqualToString:@"TX;"] && ![cmd isEqualToString:@"RX;"]) reply = @"?;";
                 if (reply.length) write(master, reply.UTF8String, reply.length);
             }
@@ -47,11 +49,25 @@ static BOOL SpinUntil(BOOL (^done)(void), NSTimeInterval timeout) {
         [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.02]];
     return done();
 }
+// These checks reach the Live CAT state and the PO bar rule through the
+// runtime, so the test also builds on code without them, and fails there.
+static void SetStateValue(TX500ScreenState *s, NSString *key, NSInteger value) {
+    if ([s respondsToSelector:NSSelectorFromString(key)]) [s setValue:@(value) forKey:key];
+}
+static NSInteger StateValue(TX500ScreenState *s, NSString *key) {
+    return [s respondsToSelector:NSSelectorFromString(key)] ? [[s valueForKey:key] integerValue] : NSIntegerMin;
+}
+static NSInteger LitPODots(TX500ScreenState *s) {
+    SEL sel = NSSelectorFromString(@"powerOutBarDotsForState:");
+    if (![TX500ScreenRenderer respondsToSelector:sel]) return NSIntegerMin;
+    NSInteger (*call)(id, SEL, TX500ScreenState *) = (NSInteger (*)(id, SEL, TX500ScreenState *))[TX500ScreenRenderer methodForSelector:sel];
+    return call([TX500ScreenRenderer class], sel, s);
+}
 static void RefreshFromFakeRadio(TX500ScreenCaptureController *c) {
     @synchronized (fakeRadioCommands) { [fakeRadioCommands removeAllObjects]; }
     [c refreshSnapshotFromRadio];
     SpinUntil(^BOOL{ @synchronized (fakeRadioCommands) { return [fakeRadioCommands containsObject:@"NT;"]; } }, 10.0);
-    [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.3]];
+    SpinUntil(^BOOL{ return ![[c valueForKey:@"isPolling"] boolValue]; }, 10.0); // the poll has been applied
 }
 static NSString *PressPTT(TX500ScreenCaptureController *c, TX500ChassisControlTag tag) {
     @synchronized (fakeRadioCommands) { [fakeRadioCommands removeAllObjects]; }
@@ -307,6 +323,53 @@ int main(void) {
         RefreshFromFakeRadio(live);
         Check(live.screenState.isTransmitting, @"A refresh without a PT; answer keeps the last state (TX)");
         printf("PASS: Live CAT PTT keys follow the radio's PT; answer.\n");
+
+        // 11. Live CAT shows only what the radio reported.
+        fakeReplies = [NSMutableDictionary dictionary];
+        TX500ScreenCaptureController *honest = [TX500ScreenCaptureController new];
+        honest.demoModeActive = NO;
+        NSTextField *hud = [honest valueForKey:@"hudTelemetryLabel"];
+        [honest renderAndUpdateDisplay];
+        Check([hud.stringValue hasSuffix:@"[NO CAT PORT]"], @"Without a CAT port the panel does not claim Live CAT");
+        __block NSString *honestPort = ptyPath;
+        honest.selectedPortProvider = ^NSString * { return honestPort; };
+        [honest renderAndUpdateDisplay];
+        Check([hud.stringValue hasSuffix:@"[LIVE CAT · waiting for radio]"], @"Before any radio answer the panel does not claim Live CAT");
+        TX500ScreenState *unread = [honest.screenState copy];
+        unread.isTransmitting = YES;
+        SetStateValue(unread, @"poDots", -1);
+        Check(LitPODots(unread) == 0, @"Live CAT TX without an SM0; reading lights no PO dots");
+        SetStateValue(unread, @"liveCAT", NO);
+        Check(LitPODots(unread) > 0, @"Demo Mode still simulates the PO bar");
+        fakePTReply = @"PT1;";
+        fakeReplies[@"SM0;"] = @"SM00012;";
+        fakeReplies[@"FA;"] = @"FA00014074000;";
+        RefreshFromFakeRadio(honest);
+        [honest renderAndUpdateDisplay];
+        Check([hud.stringValue containsString:@"PO: 12 dots"] && ![hud.stringValue containsString:@" W "],
+              [NSString stringWithFormat:@"TX shows the radio's power-out dots, not invented watts (%@)", hud.stringValue]);
+        Check(LitPODots(honest.screenState) == 12, @"The PO bar lights the radio's 12 dots");
+        Check(honest.screenState.spectrumAmplitudes.count == 0, @"Live CAT draws no invented spectrum");
+        Check([hud.stringValue hasSuffix:@"[LIVE CAT 9600]"], @"After a real answer the panel says Live CAT");
+        honestPort = @"/dev/null-other-port";
+        [honest renderAndUpdateDisplay];
+        Check([hud.stringValue hasSuffix:@"[LIVE CAT · waiting for radio]"], @"Another port is not Live CAT until it answers");
+        honestPort = ptyPath;
+        [fakeReplies removeObjectForKey:@"FA;"]; // the radio stops answering FA;
+        for (int poll = 0; poll < 3; poll++) RefreshFromFakeRadio(honest);
+        [honest renderAndUpdateDisplay];
+        Check([hud.stringValue hasSuffix:@"[LIVE CAT · waiting for radio]"], @"Three polls without FA; go back to waiting");
+        NSSegmentedControl *picker = [honest valueForKey:@"modePicker"];
+        picker.selectedSegment = 1;
+        [honest performSelector:@selector(modePickerChanged:) withObject:picker];
+        Check(honest.demoModeActive && StateValue(honest.screenState, @"poDots") == -1, @"Demo Mode does not keep a Live TX power reading");
+        honest.screenState.isTransmitting = YES; // as in a demo TX frame
+        honest.selectedPortProvider = nil;
+        picker.selectedSegment = 0;
+        [honest performSelector:@selector(modePickerChanged:) withObject:picker];
+        Check([hud.stringValue hasSuffix:@"[NO CAT PORT]"] && !honest.screenState.isTransmitting,
+              @"Back to Live CAT without a port: the panel says so at once, with no demo TX state");
+        printf("PASS: Live CAT shows only values read from the radio.\n");
 
         printf("ALL TX-500 SCREEN CAPTURE AND RENDERING TESTS PASSED SUCCESSFULLY! ✓\n");
     }

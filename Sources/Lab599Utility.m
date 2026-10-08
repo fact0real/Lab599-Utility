@@ -2424,7 +2424,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         self.instructions.stringValue = @"Live diagnostic telemetry monitoring for Lab599 TX-500 Discovery / TX-500MP. Displays real-time RF output power, antenna SWR, supply/battery voltage, current consumption, and PA temperature via Kenwood / LAB599 CAT protocol.";
         self.statusLabel.stringValue = @"Ready. Select CAT serial port or enable Demo Mode to observe live telemetry meters.";
     } else if (isScreen) {
-        self.instructions.stringValue = @"Real-Time LCD Screen Capture & Live Display for Lab599 TX-500 Discovery / TX-500MP. Faithfully simulates the 256×128 monochrome LCD matrix with authentic typography, calibrated S-meter / RF power bars, panadapter spectrum, and milled aluminum chassis bezel. Capture screenshots, copy to clipboard, or choose amber, daylight, green, or OLED themes.";
+        self.instructions.stringValue = @"Real-Time LCD Screen Capture & Live Display for Lab599 TX-500 Discovery / TX-500MP. Faithfully simulates the 256×128 monochrome LCD matrix with authentic typography, S-meter and power-out bars in the radio's own dots, a panadapter spectrum in Demo Mode, and milled aluminum chassis bezel. Capture screenshots, copy to clipboard, or choose amber, daylight, green, or OLED themes.";
         self.statusLabel.stringValue = @"Ready. Click 'Refresh' or toggle 'Live Auto-Sync' to stream the radio screen.";
     } else if (operation == 4) {
         self.instructions.stringValue = @"";

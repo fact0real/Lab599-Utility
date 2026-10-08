@@ -72,6 +72,10 @@ typedef NS_ENUM(NSInteger, TX500ChassisControlTag) {
 + (nullable NSData *)pngDataForImage:(NSImage *)image;
 + (nullable NSData *)jpegDataForImage:(NSImage *)image compression:(CGFloat)compression;
 
+// Dots lit on the TX PO bar (0-30). Live CAT: the radio's SM0; dots, or none
+// when they were not read. Demo Mode: simulated from rfPowerWatts only.
++ (NSInteger)powerOutBarDotsForState:(TX500ScreenState *)state;
+
 // Default theme colors
 + (NSColor *)backgroundColorForTheme:(TX500ScreenTheme)theme;
 + (NSColor *)pixelOnColorForTheme:(TX500ScreenTheme)theme;

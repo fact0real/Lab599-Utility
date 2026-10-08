@@ -15,6 +15,7 @@
         _sMeterDots = 14;              // S7 calibrated reading
         _rfPowerWatts = 10.0;
         _swr = 1.12;
+        _poDots = -1;
         _supplyVoltage = 12.0;         // 12.0V as in real photo
         _batteryPercent = 88;
         _isBatteryPowered = YES;
@@ -83,6 +84,8 @@
     copy.sMeterDots = self.sMeterDots;
     copy.rfPowerWatts = self.rfPowerWatts;
     copy.swr = self.swr;
+    copy.poDots = self.poDots;
+    copy.liveCAT = self.liveCAT;
     copy.supplyVoltage = self.supplyVoltage;
     copy.batteryPercent = self.batteryPercent;
     copy.isBatteryPowered = self.isBatteryPowered;

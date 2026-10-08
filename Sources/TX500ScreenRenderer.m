@@ -382,11 +382,11 @@
             NSFontAttributeName: [NSFont monospacedSystemFontOfSize:6.5 weight:NSFontWeightBold],
             NSForegroundColorAttributeName: fg
         };
-        [@"PO   0 . 2 . 4 . 6 . 8 . 10W" drawAtPoint:NSMakePoint(22.0, 54.5) withAttributes:txScaleAttrs];
+        // Live CAT has no watts scale: SM0; gives power-out dots (0-30).
+        [(state.liveCAT ? @"PO   0 . . . . 15 . . . . 30" : @"PO   0 . 2 . 4 . 6 . 8 . 10W")
+            drawAtPoint:NSMakePoint(22.0, 54.5) withAttributes:txScaleAttrs];
 
-        NSInteger pwrDots = (NSInteger)((state.rfPowerWatts / 10.0) * 28.0);
-        if (pwrDots < 1) pwrDots = 1;
-        if (pwrDots > 30) pwrDots = 30;
+        NSInteger pwrDots = [TX500ScreenRenderer powerOutBarDotsForState:state];
 
         CGFloat barX = 22.0;
         CGFloat barY = 49.0;
@@ -400,6 +400,17 @@
             NSRectFill(dot);
         }
     }
+}
+
++ (NSInteger)powerOutBarDotsForState:(TX500ScreenState *)state {
+    NSInteger dots;
+    if (state.liveCAT) {
+        dots = state.poDots >= 0 ? state.poDots : 0;
+    } else {
+        dots = (NSInteger)((state.rfPowerWatts / 10.0) * 28.0);
+        if (dots < 1) dots = 1;
+    }
+    return dots > 30 ? 30 : dots;
 }
 
 // 6. Panadapter Spectrum: Solid Filled Bars + Passband Brackets (y: 16 to 46)
@@ -437,8 +448,9 @@
     CGContextAddLineToPoint(ctx, pbRight, baselineY - 2.0);
     CGContextStrokePath(ctx);
 
-    // Draw spectrum as solid filled columns (authentic Lab599 look)
-    NSArray<NSNumber *> *amps = state.spectrumAmplitudes;
+    // Draw spectrum as solid filled columns (authentic Lab599 look).
+    // Live CAT reads no spectrum data, so none is drawn.
+    NSArray<NSNumber *> *amps = state.liveCAT ? @[] : state.spectrumAmplitudes;
     NSUInteger count = amps.count;
     if (count == 0) return;
 

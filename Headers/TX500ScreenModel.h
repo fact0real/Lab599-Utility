@@ -24,6 +24,8 @@ typedef NS_ENUM(NSInteger, TX500ScreenTheme) {
 @property (nonatomic, assign) NSInteger sMeterDots; // 0 to 30 dots
 @property (nonatomic, assign) double rfPowerWatts;  // 0.0 to 10.0 W
 @property (nonatomic, assign) double swr;           // 1.0 to 5.0
+@property (nonatomic, assign) NSInteger poDots;     // Live CAT power out, SM0; in TX (0-30); -1 when not read
+@property (nonatomic, assign) BOOL liveCAT;         // YES under Live CAT: draw only values read from the radio
 
 // Supply & Battery
 @property (nonatomic, assign) double supplyVoltage; // Volts (9.0 - 15.0V)

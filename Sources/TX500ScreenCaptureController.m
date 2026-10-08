@@ -555,6 +555,9 @@ static NSString *TX500ScreenQuery(Lab599SerialPort *port, NSString *cmd) {
     NSTimer *_demoTimer;
     NSTimer *_livePollTimer;
     BOOL _isPolling;
+    BOOL _liveSnapshotReceived; // a real FA; answer since entering Live CAT
+    NSString *_liveSnapshotPortPath; // the port that gave that answer
+    NSUInteger _liveMissedPolls; // polls in a row without an FA; answer
     double _demoPhase;
     NSUInteger _demoCycleCount;
 }
@@ -788,6 +791,7 @@ static NSString *TX500ScreenQuery(Lab599SerialPort *port, NSString *cmd) {
 #pragma mark - Display Rendering & HUD Update
 
 - (void)renderAndUpdateDisplay {
+    self.screenState.liveCAT = !self.demoModeActive;
     NSImage *image = nil;
     if (self.showChassisBezel) {
         image = [TX500ScreenRenderer renderChassisImageWithState:self.screenState
@@ -1331,7 +1335,11 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
     NSString *mode = self.screenState.operatingMode ?: @"USB";
     
     NSString *meterText = @"";
-    if (self.screenState.isTransmitting) {
+    if (self.screenState.isTransmitting && !self.demoModeActive) {
+        // Only what the radio reported: power-out dots; SWR is not read here.
+        meterText = self.screenState.poDots >= 0 ?
+            [NSString stringWithFormat:@"TX PO: %ld dots  SWR: —", (long)self.screenState.poDots] : @"TX PO: —  SWR: —";
+    } else if (self.screenState.isTransmitting) {
         meterText = [NSString stringWithFormat:@"TX PWR: %.1f W  SWR: %.2f",
                      self.screenState.rfPowerWatts, self.screenState.swr];
     } else {
@@ -1339,7 +1347,10 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
     }
 
     NSString *voltText = [NSString stringWithFormat:@"%.1fV", self.screenState.supplyVoltage];
-    NSString *modeText = self.demoModeActive ? @"[DEMO SIMULATION]" : @"[LIVE CAT 9600]";
+    NSString *portPath = self.selectedPortProvider ? self.selectedPortProvider() : nil;
+    NSString *modeText = self.demoModeActive ? @"[DEMO SIMULATION]" :
+        !portPath.length ? @"[NO CAT PORT]" :
+        (!_liveSnapshotReceived || ![portPath isEqualToString:_liveSnapshotPortPath]) ? @"[LIVE CAT · waiting for radio]" : @"[LIVE CAT 9600]";
 
     self.hudTelemetryLabel.stringValue = [NSString stringWithFormat:
         @"%@: %08.4f MHz | %@ (%@) | AF:%ld RF:%ld | %@ | %@ | %@",
@@ -1391,18 +1402,23 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
 
 - (void)modePickerChanged:(id)sender {
     self.demoModeActive = (self.modePicker.selectedSegment == 1);
+    _liveSnapshotReceived = NO;
+    _liveMissedPolls = 0;
+    self.screenState.poDots = -1; // a Live TX reading must not reach Demo Mode
     if (self.demoModeActive) {
         [self stopLiveSync];
         [self startDemoTimer];
         [self showTemporaryFeedback:@"Demo Simulation Active"];
     } else {
         [self stopDemoTimer];
+        self.screenState.isTransmitting = NO; // a demo TX frame is not the radio's state
         if (self.liveSyncActive) {
             [self startLiveSync];
         } else {
             [self refreshSnapshotFromRadio];
         }
     }
+    [self renderAndUpdateDisplay];
 }
 
 - (void)autoSyncToggled:(id)sender {
@@ -1687,7 +1703,8 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
 
     NSString *portPath = self.selectedPortProvider ? self.selectedPortProvider() : nil;
     if (!portPath.length) {
-        // No port selected; do not spam logs
+        // No port selected; do not spam logs, but show it.
+        [self renderAndUpdateDisplay];
         return;
     }
 
@@ -1697,7 +1714,11 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
         NSError *err = nil;
         Lab599SerialPort *port = [Lab599SerialPort openPath:portPath speed:B9600 error:&err];
         if (!port) {
-            self->_isPolling = NO;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                self->_isPolling = NO;
+                if (++self->_liveMissedPolls >= 3) self->_liveSnapshotReceived = NO; // port busy or gone
+                [self renderAndUpdateDisplay];
+            });
             return;
         }
 
@@ -1779,7 +1800,9 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
         // Query S-Meter (SM0;)
         NSString *sm = queryRadio(@"SM0;");
         NSInteger sMeter = 0;
+        BOOL sMeterRead = NO;
         if (sm && [sm hasPrefix:@"SM"] && sm.length >= 4) {
+            sMeterRead = YES;
             NSString *clean = [sm stringByReplacingOccurrencesOfString:@";" withString:@""];
             if (clean.length > 3) {
                 sMeter = [[clean substringFromIndex:3] integerValue];
@@ -1872,23 +1895,26 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
         localDf.timeZone = [NSTimeZone systemTimeZone];
         NSString *timeStr = [localDf stringFromDate:[NSDate date]];
 
-        // Flat gentle noise floor for live spectrum
-        NSMutableArray<NSNumber *> *liveSpec = [NSMutableArray arrayWithCapacity:64];
-        for (NSInteger i = 0; i < 64; i++) {
-            double baseNoise = 0.03 + (((double)arc4random_uniform(100)) / 4000.0);
-            [liveSpec addObject:@(baseNoise)];
-        }
-
         [port close];
 
         // Update state on Main Queue
         dispatch_async(dispatch_get_main_queue(), ^{
+            if (self.demoModeActive) { self->_isPolling = NO; return; } // switched to Demo meanwhile
             if (detectedModel.length > 0) self.screenState.hardwareModelName = detectedModel;
-            if (freqA > 0) self.screenState.frequencyHz = freqA;
+            if (freqA > 0) {
+                self.screenState.frequencyHz = freqA;
+                self->_liveSnapshotReceived = YES;
+                self->_liveSnapshotPortPath = portPath;
+                self->_liveMissedPolls = 0;
+            } else if (++self->_liveMissedPolls >= 3) {
+                self->_liveSnapshotReceived = NO; // the radio stopped answering
+            }
             if (freqB > 0) self.screenState.vfoBFrequencyHz = freqB;
             if (modeStr.length > 0) self.screenState.operatingMode = modeStr;
             if (pttState >= 0) self.screenState.isTransmitting = (pttState == 1);
             self.screenState.sMeterDots = sMeter;
+            // In TX, SM0; returns the power-out value (CAT rev. 3, p. 9).
+            self.screenState.poDots = (self.screenState.isTransmitting && sMeterRead) ? sMeter : -1;
             if (voltage > 0.0) {
                 self.screenState.supplyVoltage = voltage;
                 if (voltage <= 12.8) {
@@ -1941,8 +1967,9 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
                 self.afGainAngle = targetAngle;
             }
 
+            // Live CAT reads no spectrum data, so none is drawn.
             if (!self.demoModeActive) {
-                self.screenState.spectrumAmplitudes = liveSpec;
+                self.screenState.spectrumAmplitudes = @[];
             }
 
             [self renderAndUpdateDisplay];

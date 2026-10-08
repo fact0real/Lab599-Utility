@@ -2,6 +2,64 @@
 #import "../Headers/TX500ScreenModel.h"
 #import "../Headers/TX500ScreenRenderer.h"
 #import "../Headers/TX500ScreenCaptureController.h"
+#include <util.h>
+#include <poll.h>
+
+// A fake TX-500 on a pseudo-terminal. It answers PT; with fakePTReply, IF;
+// with "?;" (the manual: IF cannot read the status in Data mode) and records
+// every command it receives.
+static NSMutableArray<NSString *> *fakeRadioCommands;
+static NSString *fakePTReply;
+static void StartFakeRadio(int master) {
+    fakeRadioCommands = [NSMutableArray array];
+    [NSThread detachNewThreadWithBlock:^{
+        NSMutableString *buffer = [NSMutableString string];
+        for (;;) {
+            struct pollfd pfd = { master, POLLIN, 0 };
+            if (poll(&pfd, 1, 50) <= 0) continue;
+            char bytes[256];
+            ssize_t n = read(master, bytes, sizeof bytes);
+            if (n <= 0) { usleep(10000); continue; }
+            [buffer appendString:[[NSString alloc] initWithBytes:bytes length:(NSUInteger)n encoding:NSASCIIStringEncoding] ?: @""];
+            NSRange end;
+            while ((end = [buffer rangeOfString:@";"]).location != NSNotFound) {
+                NSString *cmd = [buffer substringToIndex:end.location + 1];
+                [buffer deleteCharactersInRange:NSMakeRange(0, end.location + 1)];
+                @synchronized (fakeRadioCommands) { [fakeRadioCommands addObject:cmd]; }
+                NSString *reply = nil;
+                if ([cmd isEqualToString:@"PT;"]) reply = fakePTReply;
+                else if (![cmd isEqualToString:@"TX;"] && ![cmd isEqualToString:@"RX;"]) reply = @"?;";
+                if (reply.length) write(master, reply.UTF8String, reply.length);
+            }
+        }
+    }];
+}
+static NSString *LastPTTCommand(void) {
+    @synchronized (fakeRadioCommands) {
+        for (NSString *cmd in fakeRadioCommands.reverseObjectEnumerator)
+            if ([cmd isEqualToString:@"TX;"] || [cmd isEqualToString:@"RX;"]) return cmd;
+    }
+    return nil;
+}
+static BOOL SpinUntil(BOOL (^done)(void), NSTimeInterval timeout) {
+    NSDate *limit = [NSDate dateWithTimeIntervalSinceNow:timeout];
+    while (!done() && [limit timeIntervalSinceNow] > 0)
+        [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.02]];
+    return done();
+}
+static void RefreshFromFakeRadio(TX500ScreenCaptureController *c) {
+    @synchronized (fakeRadioCommands) { [fakeRadioCommands removeAllObjects]; }
+    [c refreshSnapshotFromRadio];
+    SpinUntil(^BOOL{ @synchronized (fakeRadioCommands) { return [fakeRadioCommands containsObject:@"NT;"]; } }, 10.0);
+    [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.3]];
+}
+static NSString *PressPTT(TX500ScreenCaptureController *c, TX500ChassisControlTag tag) {
+    @synchronized (fakeRadioCommands) { [fakeRadioCommands removeAllObjects]; }
+    [c handleChassisControlPress:tag atChassisPoint:NSZeroPoint];
+    SpinUntil(^BOOL{ return LastPTTCommand() != nil; }, 3.0);
+    [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
+    return LastPTTCommand();
+}
 
 static void Check(BOOL passed, NSString *message) {
     if (!passed) {
@@ -214,6 +272,41 @@ int main(void) {
 
         [controller handleChassisControlPress:TX500ControlBottomKey2 atChassisPoint:NSMakePoint(250, 25)];
         Check(controller.screenState.split == YES, @"Bottom Key 2 must toggle SPLIT to ON");
+
+        // 10. Live CAT PTT keys follow the radio's PT; answer, also in Data mode.
+        int ptyMaster = -1, ptySlave = -1;
+        char ptyName[128] = {0};
+        Check(openpty(&ptyMaster, &ptySlave, ptyName, NULL, NULL) == 0, @"Pseudo-terminal for the fake radio");
+        close(ptySlave);
+        NSString *ptyPath = [NSString stringWithUTF8String:ptyName];
+        StartFakeRadio(ptyMaster);
+        TX500ScreenCaptureController *live = [TX500ScreenCaptureController new];
+        live.demoModeActive = NO;
+        live.selectedPortProvider = ^NSString * { return ptyPath; };
+
+        fakePTReply = @"PT1;"; // transmitting, in DIG
+        [live refreshSnapshotFromRadio];
+        SpinUntil(^BOOL{ @synchronized (fakeRadioCommands) { return [fakeRadioCommands containsObject:@"VL;"]; } }, 10.0);
+        [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.3]];
+        NSString *stopCmd = PressPTT(live, TX500ControlRX);
+        Check([stopCmd isEqualToString:@"RX;"], [NSString stringWithFormat:@"R/X while the radio transmits in DIG sends RX; (sent %@)", stopCmd]);
+        fakePTReply = @"PT0;";
+        Check([PressPTT(live, TX500ControlRX) isEqualToString:@"TX;"], @"R/X while the radio receives sends TX;");
+        fakePTReply = nil; // no answer
+        Check([PressPTT(live, TX500ControlRX) isEqualToString:@"RX;"], @"R/X sends RX; when the radio does not answer PT;");
+        fakePTReply = @"PT1;";
+        Check([PressPTT(live, TX500ControlBottomKey4) isEqualToString:@"RX;"], @"Bottom key 4 follows the radio as well");
+        live.screenState.isTransmitting = NO;
+        fakePTReply = nil; // the radio does not answer PT;
+        RefreshFromFakeRadio(live);
+        Check(!live.screenState.isTransmitting, @"A refresh without a PT; answer keeps the last state (RX)");
+        fakePTReply = @"PT1;";
+        RefreshFromFakeRadio(live);
+        Check(live.screenState.isTransmitting, @"A refresh with PT1; shows TX");
+        fakePTReply = nil;
+        RefreshFromFakeRadio(live);
+        Check(live.screenState.isTransmitting, @"A refresh without a PT; answer keeps the last state (TX)");
+        printf("PASS: Live CAT PTT keys follow the radio's PT; answer.\n");
 
         printf("ALL TX-500 SCREEN CAPTURE AND RENDERING TESTS PASSED SUCCESSFULLY! ✓\n");
     }

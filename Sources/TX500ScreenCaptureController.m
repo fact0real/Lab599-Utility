@@ -4,6 +4,33 @@
 #import "TX500ModeLabels.h"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
+// PT; is the documented PTT read (CAT rev. 3, p. 8). IF; cannot read the
+// transceiver status in Data mode (p. 4), so it is not used for PTT here.
+// Returns 1 for TX, 0 for RX and -1 when the radio did not say.
+static NSInteger TX500ScreenPTTStateFromReply(NSString *reply) {
+    if (reply.length == 0) return -1;
+    if ([reply rangeOfString:@"PT1;"].location != NSNotFound) return 1;
+    if ([reply rangeOfString:@"PT0;"].location != NSNotFound) return 0;
+    return -1;
+}
+
+static NSString *TX500ScreenQuery(Lab599SerialPort *port, NSString *cmd) {
+    [port discardInput:nil];
+    Lab599Cancellation *tok = [Lab599Cancellation new];
+    if (![port writeData:[cmd dataUsingEncoding:NSASCIIStringEncoding] timeout:0.25 cancellation:tok error:nil]) return nil;
+    NSMutableData *resp = [NSMutableData data];
+    NSData *semi = [@";" dataUsingEncoding:NSASCIIStringEncoding];
+    double deadline = Lab599MonotonicTime() + 0.25;
+    while (Lab599MonotonicTime() < deadline) {
+        NSData *chunk = [port readMaximum:64 timeout:0.04 cancellation:tok error:nil];
+        if (chunk.length > 0) {
+            [resp appendData:chunk];
+            if ([resp rangeOfData:semi options:0 range:NSMakeRange(0, resp.length)].location != NSNotFound) break;
+        }
+    }
+    return resp.length > 0 ? [[NSString alloc] initWithData:resp encoding:NSASCIIStringEncoding] : nil;
+}
+
 #pragma mark - Custom Display View
 
 @interface TX500ScreenDisplayView : NSView
@@ -929,6 +956,7 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
 
         // Far-right panel round buttons
         case TX500ControlRX: {
+            if ([self togglePTTFromRadio]) break;
             // Toggle RX/TX manually (software PTT)
             BOOL nowTX = !self.screenState.isTransmitting;
             self.screenState.isTransmitting = nowTX;
@@ -1247,6 +1275,7 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
 }
 
 - (void)handleBottomKey4 {
+    if ([self togglePTTFromRadio]) return;
     self.screenState.isTransmitting = !self.screenState.isTransmitting;
     if (self.screenState.isTransmitting) {
         self.screenState.rfPowerWatts = 10.0;
@@ -1258,6 +1287,41 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
     [self renderAndUpdateDisplay];
     [self showTemporaryFeedback:[NSString stringWithFormat:@"⚡ [TX / PTT] %@", self.screenState.isTransmitting ? @"TRANSMITTING (10.0W)" : @"RECEIVING"]];
     [self sendCATCommandAsync:self.screenState.isTransmitting ? @"TX;" : @"RX;" description:@"PTT Toggle"];
+}
+
+// In Live CAT the PTT keys ask the radio first instead of trusting this
+// panel's last refresh: PT0 sends TX;, anything else (PT1 or no answer)
+// sends RX;. Returns NO in Demo Mode or without a port, where the local
+// simulation is kept.
+- (BOOL)togglePTTFromRadio {
+    NSString *portPath = self.selectedPortProvider ? self.selectedPortProvider() : nil;
+    if (!portPath.length || self.demoModeActive) return NO;
+    dispatch_async(_serialQueue, ^{
+        Lab599SerialPort *port = [Lab599SerialPort openPath:portPath speed:B9600 error:nil];
+        if (!port) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self showTemporaryFeedback:@"⚡ [PTT] CAT port unavailable"];
+            });
+            return;
+        }
+        BOOL keyRadio = TX500ScreenPTTStateFromReply(TX500ScreenQuery(port, @"PT;")) == 0;
+        NSString *pttCmd = keyRadio ? @"TX;" : @"RX;";
+        Lab599Cancellation *tok = [Lab599Cancellation new];
+        BOOL sent = [port writeData:[pttCmd dataUsingEncoding:NSASCIIStringEncoding] timeout:0.25 cancellation:tok error:nil];
+        [port close];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (!sent) {
+                if (self.logHandler) self.logHandler([NSString stringWithFormat:@"[CAT TX] %@ not sent", pttCmd]);
+                [self showTemporaryFeedback:@"⚡ [PTT] command not sent"];
+                return;
+            }
+            if (self.logHandler) self.logHandler([NSString stringWithFormat:@"[CAT TX] %@ (%@)", pttCmd, keyRadio ? @"PTT On" : @"PTT Off"]);
+            self.screenState.isTransmitting = keyRadio;
+            [self renderAndUpdateDisplay];
+            [self showTemporaryFeedback:keyRadio ? @"⚡ [PTT] → TRANSMIT" : @"⚡ [PTT] → RECEIVE"];
+        });
+    });
+    return YES;
 }
 
 - (void)updateHUDLabel {
@@ -1709,15 +1773,8 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
             }
         }
 
-        // Query Comprehensive Status / PTT (IF;)
-        NSString *ifRep = queryRadio(@"IF;");
-        BOOL isTX = NO;
-        if (ifRep && [ifRep hasPrefix:@"IF"] && ifRep.length >= 28) {
-            NSString *clean = [ifRep stringByReplacingOccurrencesOfString:@";" withString:@""];
-            if (clean.length > 28) {
-                isTX = ([clean characterAtIndex:28] == '1');
-            }
-        }
+        // Query PTT state (PT;). IF; cannot read the status in Data mode.
+        NSInteger pttState = TX500ScreenPTTStateFromReply(queryRadio(@"PT;"));
 
         // Query S-Meter (SM0;)
         NSString *sm = queryRadio(@"SM0;");
@@ -1830,7 +1887,7 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
             if (freqA > 0) self.screenState.frequencyHz = freqA;
             if (freqB > 0) self.screenState.vfoBFrequencyHz = freqB;
             if (modeStr.length > 0) self.screenState.operatingMode = modeStr;
-            self.screenState.isTransmitting = isTX;
+            if (pttState >= 0) self.screenState.isTransmitting = (pttState == 1);
             self.screenState.sMeterDots = sMeter;
             if (voltage > 0.0) {
                 self.screenState.supplyVoltage = voltage;

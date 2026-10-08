@@ -1303,10 +1303,10 @@ static NSString *StudioTimestamp(NSDate *date) {
     NSArray *settingCols = @[
         @{@"id": @"category", @"title": @"Category", @"width": @120},
         @{@"id": @"name", @"title": @"Parameter / Setting", @"width": @180},
-        @{@"id": @"offset", @"title": @"Addr", @"width": @60},
+        @{@"id": @"address", @"title": @"Addr", @"width": @60},
         @{@"id": @"value", @"title": @"Value", @"width": @60},
-        @{@"id": @"range", @"title": @"Range / Unit", @"width": @120},
-        @{@"id": @"desc", @"title": @"Details", @"width": @260}
+        @{@"id": @"unit", @"title": @"Range / Unit", @"width": @120},
+        @{@"id": @"details", @"title": @"Details", @"width": @260}
     ];
     for (NSDictionary *col in settingCols) {
         NSTableColumn *c = [[NSTableColumn alloc] initWithIdentifier:col[@"id"]];

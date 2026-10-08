@@ -12,6 +12,21 @@
 
 NSString * const TX500LogbookDidChangeNotification = @"TX500LogbookDidChangeNotification";
 
+// adifRecordString writes the n in <TAG:n> as UTF-8 bytes. Read n that way when
+// those bytes end the value (only spaces follow); otherwise read n UTF-16 units,
+// as before, which is also how the CW and FT8 writers count.
+static NSString *TX500ADIFFieldValue(NSString *captured, NSInteger length) {
+    NSCharacterSet *spaces = [NSCharacterSet whitespaceAndNewlineCharacterSet];
+    NSData *bytes = [captured dataUsingEncoding:NSUTF8StringEncoding];
+    if ((NSUInteger)length <= bytes.length) {
+        NSUInteger n = (NSUInteger)length;
+        NSString *head = [[NSString alloc] initWithData:[bytes subdataWithRange:NSMakeRange(0, n)] encoding:NSUTF8StringEncoding];
+        NSString *tail = [[NSString alloc] initWithData:[bytes subdataWithRange:NSMakeRange(n, bytes.length - n)] encoding:NSUTF8StringEncoding];
+        if (head && tail && [tail stringByTrimmingCharactersInSet:spaces].length == 0) return head;
+    }
+    return length <= (NSInteger)captured.length ? [captured substringToIndex:(NSUInteger)length] : nil;
+}
+
 @implementation TX500LogRecord
 
 - (instancetype)init {
@@ -254,8 +269,8 @@ NSString * const TX500LogbookDidChangeNotification = @"TX500LogbookDidChangeNoti
             NSInteger len = [[adifText substringWithRange:[m rangeAtIndex:2]] integerValue];
             NSRange valRange = [m rangeAtIndex:3];
             NSString *fullVal = [adifText substringWithRange:valRange];
-            if (len <= (NSInteger)fullVal.length) {
-                NSString *val = [fullVal substringToIndex:len];
+            NSString *val = TX500ADIFFieldValue(fullVal, len);
+            if (val) {
                 fields[tag] = [val stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
             }
         }

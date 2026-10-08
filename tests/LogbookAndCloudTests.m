@@ -359,6 +359,28 @@ int main(int argc, const char * argv[]) {
         AssertTrue([parsedRec.myCall isEqual:@"EP2AES"], @"ADIF preserves station callsign");
         NSLog(@"PASS: ADIF Record parsed correctly from raw text.");
 
+        // 4b. Names outside ASCII come back whole from the app's own ADIF.
+        for (NSString *name in @[@"Núria", @"José María", @"رضا"]) {
+            TX500LogRecord *named = [[TX500LogRecord alloc] init];
+            named.callsign = @"EP2AES";
+            named.name = name;
+            named.qth = @"Boston";
+            TX500LogRecord *named2 = [TX500LogRecord recordFromADIFRecordText:[named adifRecordString]];
+            AssertTrue([named2.name isEqualToString:name] && [named2.qth isEqualToString:@"Boston"],
+                       [NSString stringWithFormat:@"The name %@ comes back whole from the app's own ADIF", name]);
+        }
+        // A length counted in characters, as the CW assistant writes it, still reads the whole name.
+        TX500QSOContact *cwNamed = [TX500QSOContact new];
+        cwNamed.callsign = @"EP2AES";
+        cwNamed.name = @"Núria";
+        TX500LogRecord *cwNamed2 = [TX500LogRecord recordFromADIFRecordText:[cwNamed adifRecordString]];
+        AssertTrue([cwNamed2.name isEqualToString:@"Núria"], @"A length counted in characters still reads the whole name");
+        TX500LogRecord *padded = [TX500LogRecord recordFromADIFRecordText:@"<CALL:6>EP2AES <NAME:6>Núria  <EOR>"];
+        AssertTrue([padded.name isEqualToString:@"Núria"], @"A character count that includes a space still reads the whole name");
+        TX500LogRecord *tooLong = [TX500LogRecord recordFromADIFRecordText:@"<CALL:6>EP2AES <NAME:40>Bob <EOR>"];
+        AssertTrue(tooLong != nil && tooLong.name.length == 0, @"A length longer than the value still skips the field, as before");
+        NSLog(@"PASS: Names outside ASCII come back whole from the app's own ADIF.");
+
         // 5. Cloud Status Updating
         BOOL statusUpdated = [mgr updateCloudStatusForUUID:rec1.uuid service:@"LoTW" status:@"UPLOADED" error:&err];
         AssertTrue(statusUpdated, @"LoTW status updated");

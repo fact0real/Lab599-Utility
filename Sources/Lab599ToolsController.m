@@ -1283,7 +1283,7 @@ static NSString *StudioTimestamp(NSDate *date) {
         @"Panadapter & Display"
     ]];
     self.settingsCategoryFilter.target = self;
-    self.settingsCategoryFilter.action = @selector(settingsCategoryChanged:);
+    self.settingsCategoryFilter.action = @selector(settingsCategoryFilterChanged:);
     [self.controls addObject:self.settingsCategoryFilter];
 
     NSView *settingsRow2 = Stack(@[

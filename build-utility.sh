@@ -39,6 +39,12 @@ if [ "${1:-}" = "--test" ] || [ "${1:-}" = "--test-only" ]; then
     UTILITY_TEST_HOME=$(mktemp -d /tmp/Lab599UtilityTests.XXXXXX)
     (trap 'rm -rf "$UTILITY_TEST_HOME"' EXIT; CFFIXED_USER_HOME="$UTILITY_TEST_HOME" ./build/UtilityTests)
     clang -O2 -Wall -Wextra -Wno-unused-parameter -Werror -fobjc-arc \
+        -mmacosx-version-min=12.0 -framework Cocoa -framework UniformTypeIdentifiers \
+        -IHeaders -ISources \
+        tests/SettingsEditorTests.m Sources/Lab599ToolsController.m Sources/TX500CATTest.m Sources/TX500Configuration.m Sources/TX500Transfer.m Sources/TX500ProfilesAndBackup.m Sources/TX500SettingsModel.m Sources/Lab599SerialPort.m -o build/SettingsEditorTests
+    SETTINGS_TEST_HOME=$(mktemp -d /tmp/Lab599SettingsEditorTests.XXXXXX)
+    (trap 'rm -rf "$SETTINGS_TEST_HOME"' EXIT; CFFIXED_USER_HOME="$SETTINGS_TEST_HOME" ./build/SettingsEditorTests)
+    clang -O2 -Wall -Wextra -Wno-unused-parameter -Werror -fobjc-arc \
         -mmacosx-version-min=12.0 -framework Cocoa \
         -IHeaders -ISources \
         tests/DriverAndDocsTests.m Sources/Lab599DriverController.m Sources/Lab599DocsController.m Sources/Lab599FirmwareCatalog.m Sources/TX500Transfer.m -o build/DriverAndDocsTests

@@ -820,10 +820,16 @@
     qso.timestamp = [NSDate date];
     qso.mode = (self.audioEngine.protocol == TX500_FT8_PROTOCOL_FT4) ? @"FT4" : @"FT8";
 
+    // Simulation Mode makes up the band activity and the other station's replies, so a QSO
+    // finished there never happened. It stays in this session's list, where the practice is
+    // seen, but it is not logged, uploaded or added to the worked-station history.
+    BOOL simulated = self.audioEngine.isSimulationMode;
     [_internalSessionLog insertObject:qso atIndex:0];
-    [_internalWorkedCalls addObject:qso.callsign];
-    if (qso.grid.length >= 4) {
-        [_internalWorkedGrids addObject:qso.grid];
+    if (!simulated) {
+        [_internalWorkedCalls addObject:qso.callsign];
+        if (qso.grid.length >= 4) {
+            [_internalWorkedGrids addObject:qso.grid];
+        }
     }
 
     self.qsoPhase = TX500FT8QSOPhaseComplete;
@@ -832,16 +838,22 @@
     self.activeDXGrid = @"";
     _pendingCompletionText = nil;
 
-    id autoLogValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"TX500_AutoLogQSO"];
-    BOOL autoLogEnabled = (autoLogValue == nil || [autoLogValue boolValue]);
-    if (autoLogEnabled) [self logCompletedQSOToADIF:qso];
+    if (simulated) {
+        if (self.logHandler) {
+            self.logHandler([NSString stringWithFormat:@"[Simulation] QSO with %@ completed. Simulation Mode logs and uploads nothing.", qso.callsign]);
+        }
+    } else {
+        id autoLogValue = [[NSUserDefaults standardUserDefaults] objectForKey:@"TX500_AutoLogQSO"];
+        BOOL autoLogEnabled = (autoLogValue == nil || [autoLogValue boolValue]);
+        if (autoLogEnabled) [self logCompletedQSOToADIF:qso];
 
-    if (self.logHandler) {
-        self.logHandler([NSString stringWithFormat:@"[QSO LOGGED] ★ Contact with %@ successfully completed and logged to session & ADIF logbook!", qso.callsign]);
-    }
+        if (self.logHandler) {
+            self.logHandler([NSString stringWithFormat:@"[QSO LOGGED] ★ Contact with %@ successfully completed and logged to session & ADIF logbook!", qso.callsign]);
+        }
 
-    if (self.onQSOLogged) {
-        self.onQSOLogged(qso);
+        if (self.onQSOLogged) {
+            self.onQSOLogged(qso);
+        }
     }
     [self notifyStatus];
 
@@ -962,6 +974,14 @@
 
 - (void)logCompletedQSOToADIF:(TX500FT8LoggedQSO *)qso {
     if (!qso || qso.callsign.length == 0) return;
+    // The one place an FT8 QSO is written and uploaded, for the automatic logging and for the
+    // "Log QSO" dialog alike: nothing from Simulation Mode gets past it.
+    if (self.audioEngine.isSimulationMode) {
+        if (self.logHandler) {
+            self.logHandler([NSString stringWithFormat:@"[Simulation] %@ not logged: Simulation Mode logs and uploads nothing.", qso.callsign]);
+        }
+        return;
+    }
     dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_LOW, 0), ^{
         NSString *filePath = [TX500FT8AutoEngine qsoLogbookADIFPath];
         if (![[NSFileManager defaultManager] fileExistsAtPath:filePath]) {

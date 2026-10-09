@@ -11,6 +11,32 @@
 #import "TX500CWQSOAssistant.h"
 #import "TX500CWSpectrumView.h"
 #import "TX500CWStationController.h"
+#import "TX500LogbookManager.h"
+#import "TX500CloudSyncEngine.h"
+#import <objc/runtime.h>
+
+// Counts calls to the cloud upload while a test runs, and uploads nothing. Installed only
+// around the checks that need it, and restored afterwards.
+static NSUInteger CloudUploadCalls = 0;
+static IMP CloudUploadOriginal = NULL;
+static void StartCountingCloudUploads(void) {
+    Method m = class_getInstanceMethod([TX500CloudSyncEngine class], @selector(uploadContactImmediately:completion:));
+    IMP counted = imp_implementationWithBlock(^(id engine, TX500LogRecord *record, void (^completion)(BOOL, NSString *)) {
+        (void)engine; (void)record;
+        @synchronized ([TX500CloudSyncEngine class]) { CloudUploadCalls++; }
+        if (completion) completion(YES, @"Counted by the test; nothing uploaded.");
+    });
+    CloudUploadOriginal = method_setImplementation(m, counted);
+}
+static void StopCountingCloudUploads(void) {
+    if (!CloudUploadOriginal) return;
+    Method m = class_getInstanceMethod([TX500CloudSyncEngine class], @selector(uploadContactImmediately:completion:));
+    method_setImplementation(m, CloudUploadOriginal);
+    CloudUploadOriginal = NULL;
+}
+static NSUInteger CloudUploadCount(void) {
+    @synchronized ([TX500CloudSyncEngine class]) { return CloudUploadCalls; }
+}
 
 static void AssertTrue(BOOL condition, NSString *message) {
     if (!condition) {
@@ -167,6 +193,37 @@ int main(int argc, const char * argv[]) {
         AssertTrue([assistant.loggedContacts[0].callsign isEqualToString:@"G4XYZ"], @"Logged contact callsign");
         AssertTrue([assistant.loggedContacts[0].mode isEqualToString:@"CW"], @"Logged mode CW");
         NSLog(@"PASS: Semi-automated QSO state machine flow and automatic logging verified.");
+
+        // 8c. Practice / Sim makes up the Morse and transmits nothing. Even with a frequency
+        // read from the radio, a QSO done in practice stays in the session list only: it is
+        // not saved to the Logbook and not uploaded. A real QSO is not touched.
+        TX500CWStationController *practiceStation = [TX500CWStationController new];
+        TX500CWQSOAssistant *practice = practiceStation.assistant;
+        practice.myCallsign = @"EA3JIC";
+        practice.currentFrequencyHz = 7030000;
+        practice.currentBand = @"40m";
+        practiceStation.decoder.isSimulationActive = YES; // the station's Practice / Sim switch
+        NSUInteger practiceLogbookBefore = [[TX500LogbookManager sharedManager] allContacts].count;
+        StartCountingCloudUploads();
+        NSUInteger practiceUploadsBefore = CloudUploadCount();
+        [practice processDecodedTextStream:@"CQ CQ DE EP2AES EP2AES K" currentWPM:22.0 snrDb:14.5];
+        AssertTrue(practice.heardStations.count >= 1, @"Practice assistant heard the CQ");
+        [practice selectAndAnswerStation:practice.heardStations[0]];
+        for (int step = 0; step < 3 && practice.qsoState != TX500QSOStateCompleted; step++)
+            [practice advanceQSOStepWithAction:^(NSString * _Nonnull macroToTransmit) { (void)macroToTransmit; }];
+        [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.2]];
+        AssertTrue(practice.qsoState == TX500QSOStateCompleted && practice.loggedContacts.count == 1, @"Practice QSO completes in the session list");
+        AssertTrue([[TX500LogbookManager sharedManager] allContacts].count == practiceLogbookBefore, @"Practice QSO is not saved to the central Logbook");
+        AssertTrue(CloudUploadCount() == practiceUploadsBefore, @"Practice QSO is not uploaded");
+        AssertTrue([practice.loggedContacts[0].notes hasPrefix:@"Practice / Sim"], @"Practice QSO says it is practice");
+        StopCountingCloudUploads();
+        practiceStation.decoder.isSimulationActive = NO;
+        __block NSString *practiceLine = @"";
+        practiceStation.logHandler = ^(NSString *line) { practiceLine = line; };
+        practiceStation.assistant.onContactLogged(practice.loggedContacts[0]);
+        AssertTrue([practiceLine containsString:@"Practice / Sim"] && ![practiceLine containsString:@"Logged QSO"],
+                   @"The console says a practice QSO was not saved");
+        NSLog(@"PASS: CW Practice / Sim never logs or uploads.");
 
         // 9. Test ADIF 3.1 Record Generation & File Export
         NSString *adifFull = [assistant generateFullADIFString];

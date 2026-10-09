@@ -464,8 +464,24 @@
     contact.frequencyMHz = (double)self.currentFrequencyHz / 1000000.0;
     contact.band = self.currentBand.length > 0 ? self.currentBand : @"20m";
 
+    // Without a frequency read from the radio, or in Practice / Sim (the Morse is made up and
+    // nothing was transmitted), the QSO stays in this session list only: it is not saved to
+    // the Logbook or uploaded.
+    BOOL practice = self.practiceModeActive && self.practiceModeActive();
+    if (practice)
+        contact.notes = @"Practice / Sim: not saved to the Logbook or uploaded.";
+    else if (self.currentFrequencyHz == 0)
+        contact.notes = @"Frequency not read from the radio: not saved to the Logbook or uploaded.";
+
     @synchronized (self.internalLoggedContacts) {
         [self.internalLoggedContacts insertObject:contact atIndex:0];
+    }
+
+    if (practice || self.currentFrequencyHz == 0) {
+        if (self.onContactLogged) {
+            dispatch_async(dispatch_get_main_queue(), ^{ self.onContactLogged(contact); });
+        }
+        return;
     }
 
     // Also persist to central SQLite logbook and trigger zero-click cloud uploads

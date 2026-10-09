@@ -13,6 +13,33 @@
 #import "TX500FT8AudioEngine.h"
 #import "TX500FT8AutoEngine.h"
 #import "TX500FT8Frequency.h"
+#import "TX500LogbookManager.h"
+#import "TX500CloudSyncEngine.h"
+#import <objc/runtime.h>
+#import <objc/message.h>
+
+// Counts calls to the cloud upload while a test runs, and uploads nothing. Installed only
+// around the checks that need it, and restored afterwards.
+static NSUInteger CloudUploadCalls = 0;
+static IMP CloudUploadOriginal = NULL;
+static void StartCountingCloudUploads(void) {
+    Method m = class_getInstanceMethod([TX500CloudSyncEngine class], @selector(uploadContactImmediately:completion:));
+    IMP counted = imp_implementationWithBlock(^(id engine, TX500LogRecord *record, void (^completion)(BOOL, NSString *)) {
+        (void)engine; (void)record;
+        @synchronized ([TX500CloudSyncEngine class]) { CloudUploadCalls++; }
+        if (completion) completion(YES, @"Counted by the test; nothing uploaded.");
+    });
+    CloudUploadOriginal = method_setImplementation(m, counted);
+}
+static void StopCountingCloudUploads(void) {
+    if (!CloudUploadOriginal) return;
+    Method m = class_getInstanceMethod([TX500CloudSyncEngine class], @selector(uploadContactImmediately:completion:));
+    method_setImplementation(m, CloudUploadOriginal);
+    CloudUploadOriginal = NULL;
+}
+static NSUInteger CloudUploadCount(void) {
+    @synchronized ([TX500CloudSyncEngine class]) { return CloudUploadCalls; }
+}
 
 @interface TX500FT8AudioEngine (WaterfallTestAccess)
 - (void)appendIncomingAudioSamples:(const float *)samples count:(NSInteger)count timestamp:(const AudioTimeStamp *)timestamp;
@@ -647,6 +674,7 @@ int main(int argc, const char * argv[]) {
         loggedQSO.rstSent = @"+01";
         loggedQSO.rstRcvd = @"-05";
         loggedQSO.timestamp = [NSDate date];
+        audioEng.isSimulationMode = NO; // a live, CAT-verified contact: it is logged (Simulation Mode is 11b)
         [autoEng logCompletedQSOToADIF:loggedQSO];
         [NSThread sleepForTimeInterval:0.25]; // Wait for async file write to finish
         AssertTrue([[NSFileManager defaultManager] fileExistsAtPath:qsoLogPath], @"TX500_FT8_Logbook.adi file created");
@@ -655,6 +683,42 @@ int main(int argc, const char * argv[]) {
         AssertTrue([qsoContent containsString:@"<CALL:6>BG0FQU"], @"QSO logbook contains BG0FQU");
         AssertTrue([qsoContent containsString:@"<BAND:3>20m"], @"QSO logbook contains band 20m");
         NSLog(@"PASS: Continuous ADIF logging (All-Decodes & QSO Logbook) in UTC verified.");
+
+        // 11b. Simulation Mode makes up the band activity and the other station's replies:
+        // a QSO finished there never happened. Neither the automatic logging nor the
+        // "Log QSO" dialog writes it to the FT8 ADIF logbook or the Logbook, or uploads it.
+        TX500FT8AudioEngine *simEng = [[TX500FT8AudioEngine alloc] init];
+        simEng.myCallsign = @"EA3JIC";
+        simEng.myGrid = @"JN11";
+        simEng.dialFrequencyHz = 14074000;
+        simEng.isSimulationMode = YES;
+        TX500FT8AutoEngine *simAuto = [[TX500FT8AutoEngine alloc] init];
+        simAuto.audioEngine = simEng;
+        __block NSInteger simLoggedCallbacks = 0;
+        __block NSString *simLine = @"";
+        simAuto.onQSOLogged = ^(TX500FT8LoggedQSO *q) { (void)q; simLoggedCallbacks++; };
+        simAuto.logHandler = ^(NSString *line) { simLine = line; };
+        NSString *adifBefore = [NSString stringWithContentsOfFile:qsoLogPath encoding:NSUTF8StringEncoding error:nil] ?: @"";
+        NSUInteger simLogbookBefore = [[TX500LogbookManager sharedManager] allContacts].count;
+        StartCountingCloudUploads();
+        NSUInteger simUploadsBefore = CloudUploadCount();
+        [simAuto setValue:@"EP2AES" forKey:@"activeDXCall"];
+        ((void (*)(id, SEL))objc_msgSend)(simAuto, NSSelectorFromString(@"completeAndLogQSO"));
+        TX500FT8LoggedQSO *simQSO = [[TX500FT8LoggedQSO alloc] init];
+        simQSO.callsign = @"EP2AES";
+        simQSO.band = @"20m";
+        simQSO.freqHz = 14074000;
+        simQSO.timestamp = [NSDate date];
+        [simAuto logCompletedQSOToADIF:simQSO]; // what the "Log QSO" dialog calls
+        [NSThread sleepForTimeInterval:0.3]; // the logging runs on a background queue
+        NSString *adifAfter = [NSString stringWithContentsOfFile:qsoLogPath encoding:NSUTF8StringEncoding error:nil] ?: @"";
+        AssertTrue([adifAfter isEqualToString:adifBefore], @"Simulation Mode writes nothing to the FT8 ADIF logbook");
+        AssertTrue([[TX500LogbookManager sharedManager] allContacts].count == simLogbookBefore, @"Simulation Mode saves nothing to the Logbook");
+        AssertTrue(CloudUploadCount() == simUploadsBefore, @"Simulation Mode uploads nothing");
+        AssertTrue(simLoggedCallbacks == 0, @"A simulated QSO is not reported to the station as logged (no dialog, no worked history)");
+        AssertTrue([simLine containsString:@"Simulation Mode"], @"The console says Simulation Mode logs nothing");
+        StopCountingCloudUploads();
+        NSLog(@"PASS: FT8 Simulation Mode never logs or uploads.");
 
         // 12. Test Arm Transmit with Log Handler (Regression check for ENABLE TX crash)
         __block BOOL logReceived = NO;

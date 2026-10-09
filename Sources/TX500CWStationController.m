@@ -190,12 +190,23 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
         }
     };
 
+    // Practice / Sim is the decoder's simulation: the assistant asks it at sign-off.
+    self.assistant.practiceModeActive = ^BOOL {
+        typeof(self) strongSelf = weakSelf;
+        return strongSelf && strongSelf.decoder.isSimulationActive;
+    };
     self.assistant.onContactLogged = ^(TX500QSOContact *contact) {
         (void)contact;
         typeof(self) strongSelf = weakSelf;
         if (!strongSelf) return;
         [strongSelf.logTableView reloadData];
-        if (strongSelf.logHandler) {
+        if (strongSelf.logHandler && [contact.notes hasPrefix:@"Practice / Sim"]) {
+            strongSelf.logHandler([NSString stringWithFormat:@"Practice / Sim: QSO with %@ kept in this session only; nothing is saved to the Logbook or uploaded.",
+                                   contact.callsign]);
+        } else if (strongSelf.logHandler && contact.frequencyMHz <= 0.0) {
+            strongSelf.logHandler([NSString stringWithFormat:@"QSO with %@ kept in this session only: frequency not read from the radio, so it was not saved to the Logbook or uploaded.",
+                                   contact.callsign]);
+        } else if (strongSelf.logHandler) {
             strongSelf.logHandler([NSString stringWithFormat:@"✔ Logged QSO with %@ (%@, %@)",
                                    contact.callsign, contact.band, contact.mode]);
         }
@@ -979,6 +990,8 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
 
 - (void)toggleSimulation:(NSButton *)sender {
     [self.keyer stopAutoCQ]; [self.keyer abortTransmission];
+    // A QSO never carries over between practice and the air.
+    [self.assistant resetQSOState];
     if (sender.state == NSControlStateValueOn) {
         [self.decoder startSimulation];
         self.startStopDecoderButton.title = @"STOP SIMULATION";

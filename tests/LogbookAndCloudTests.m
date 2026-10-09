@@ -21,6 +21,30 @@
 #import "TX500CloudSettingsController.h"
 #import "TX500LogbookController.h"
 #import "TX500SecretStore.h"
+#import <objc/message.h>
+
+// Counts calls to the cloud upload while a test runs, and uploads nothing. Installed only
+// around the checks that need it, and restored afterwards.
+static NSUInteger CloudUploadCalls = 0;
+static IMP CloudUploadOriginal = NULL;
+static void StartCountingCloudUploads(void) {
+    Method m = class_getInstanceMethod([TX500CloudSyncEngine class], @selector(uploadContactImmediately:completion:));
+    IMP counted = imp_implementationWithBlock(^(id engine, TX500LogRecord *record, void (^completion)(BOOL, NSString *)) {
+        (void)engine; (void)record;
+        @synchronized ([TX500CloudSyncEngine class]) { CloudUploadCalls++; }
+        if (completion) completion(YES, @"Counted by the test; nothing uploaded.");
+    });
+    CloudUploadOriginal = method_setImplementation(m, counted);
+}
+static void StopCountingCloudUploads(void) {
+    if (!CloudUploadOriginal) return;
+    Method m = class_getInstanceMethod([TX500CloudSyncEngine class], @selector(uploadContactImmediately:completion:));
+    method_setImplementation(m, CloudUploadOriginal);
+    CloudUploadOriginal = NULL;
+}
+static NSUInteger CloudUploadCount(void) {
+    @synchronized ([TX500CloudSyncEngine class]) { return CloudUploadCalls; }
+}
 
 @interface TX500CollisionTableView : NSTableView
 @property (nonatomic, strong) NSView *forcedReusableView;
@@ -1361,6 +1385,49 @@ int main(int argc, const char * argv[]) {
         AssertTrue(lotwMsg.length > 0, @"signAndUploadContactsToLoTW returned message");
         NSLog(@"PASS: Direct TQSL LoTW signing invocation tested successfully.");
 
+        // 19. Without the radio there is no frequency to fill in: the form starts with no
+        // frequency and no band, the band follows the frequency as it is typed, and a QSO
+        // with no frequency is not saved (the operator is asked for it).
+        TX500LogbookController *blankForm = [TX500LogbookController new];
+        NSTextField *blankFreq = [blankForm valueForKey:@"freqField"];
+        NSPopUpButton *blankBand = [blankForm valueForKey:@"bandPopup"];
+        NSTextField *blankCall = [blankForm valueForKey:@"callsignField"];
+        NSTextView *blankConsole = [blankForm valueForKey:@"statusConsoleTextView"];
+        AssertTrue(blankFreq.stringValue.length == 0, @"A new form has no frequency");
+        AssertTrue(![blankBand.titleOfSelectedItem isEqualToString:@"20m"], @"A new form has no band");
+        TX500LogbookManager *formMgr = [TX500LogbookManager sharedManager];
+        NSUInteger formBefore = formMgr.allContacts.count;
+        StartCountingCloudUploads();
+        NSUInteger formUploadsBefore = CloudUploadCount();
+        SEL logAction = NSSelectorFromString(@"logContactAction");
+        blankCall.stringValue = @"EP2AES";
+        ((void (*)(id, SEL))objc_msgSend)(blankForm, logAction);
+        AssertTrue(formMgr.allContacts.count == formBefore, @"A QSO with no frequency is not saved");
+        AssertTrue(CloudUploadCount() == formUploadsBefore, @"A QSO with no frequency is not uploaded");
+        AssertTrue([blankConsole.string containsString:@"Enter the frequency"], @"The form asks for the frequency");
+        NSNotification *typed = [NSNotification notificationWithName:NSControlTextDidChangeNotification object:blankFreq];
+        blankFreq.stringValue = @"7.150";
+        [(id<NSTextFieldDelegate>)blankForm controlTextDidChange:typed];
+        AssertTrue([blankBand.titleOfSelectedItem isEqualToString:@"40m"], @"Typing 7.150 MHz selects 40m");
+        blankFreq.stringValue = @"4.5";
+        [(id<NSTextFieldDelegate>)blankForm controlTextDidChange:typed];
+        AssertTrue(![blankBand.titleOfSelectedItem isEqualToString:@"40m"] && ![blankBand.titleOfSelectedItem isEqualToString:@"20m"],
+                   @"A frequency in no band leaves the band unknown");
+        blankFreq.stringValue = @"7.150";
+        [(id<NSTextFieldDelegate>)blankForm controlTextDidChange:typed];
+        [blankBand selectItemWithTitle:@"20m"]; // a band picked by hand that does not match the frequency
+        ((void (*)(id, SEL))objc_msgSend)(blankForm, logAction);
+        AssertTrue(formMgr.allContacts.count == formBefore + 1, @"With a typed frequency the QSO is saved");
+        TX500LogRecord *typedRecord = nil;
+        for (TX500LogRecord *r in formMgr.allContacts) if ([r.callsign isEqualToString:@"EP2AES"] && r.frequencyHz == 7150000) typedRecord = r;
+        AssertTrue(typedRecord && [typedRecord.band isEqualToString:@"40m"], @"Saved with 7.150 MHz and 40m, not a fixed value");
+        StopCountingCloudUploads();
+        [blankForm updateFrequencyHz:14074000 mode:nil];
+        [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.2]];
+        AssertTrue([blankFreq.stringValue isEqualToString:@"14.074000"] && [blankBand.titleOfSelectedItem isEqualToString:@"20m"],
+                   @"A frequency read by CAT fills the frequency, and the band follows it");
+        NSLog(@"PASS: The Logbook form never logs a fixed frequency or band.");
+
         // Cleanup temporary test SQLite database
         [mgr closeDatabase];
         [[NSFileManager defaultManager] removeItemAtURL:dbURL error:nil];
@@ -1370,7 +1437,7 @@ int main(int argc, const char * argv[]) {
         [[NSFileManager defaultManager] removeItemAtPath:shmPath error:nil];
         [[NSFileManager defaultManager] removeItemAtPath:[NSString stringWithUTF8String:testRoot] error:nil];
 
-        NSLog(@"ALL 18 LOGBOOK & CLOUD ECOSYSTEM TESTS PASSED SUCCESSFULLY!");
+        NSLog(@"ALL 19 LOGBOOK & CLOUD ECOSYSTEM TESTS PASSED SUCCESSFULLY!");
     }
     return 0;
 }

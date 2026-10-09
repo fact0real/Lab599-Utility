@@ -96,12 +96,37 @@
 
 @end
 
+// The band pop-up's entry for "no frequency yet" or "a frequency in no band".
+static NSString *const TX500LogbookNoBand = @"—";
+
 @implementation TX500LogbookController
+
+// The band follows the frequency (the Logbook band table); none without a frequency, or for a
+// frequency in no band.
+- (void)selectBandForFrequencyHz:(uint64_t)freqHz {
+    NSString *band = freqHz > 0 ? [TX500LogRecord bandForFrequencyHz:freqHz] : nil;
+    if (band.length == 0 || [self.bandPopup indexOfItemWithTitle:band] < 0) band = TX500LogbookNoBand;
+    [self.bandPopup selectItemWithTitle:band];
+}
+
+// The band as it will be saved: empty when there is none.
+- (NSString *)selectedBand {
+    NSString *band = self.bandPopup.titleOfSelectedItem ?: @"";
+    return [band isEqualToString:TX500LogbookNoBand] ? @"" : band;
+}
+
+// The frequency typed in the form, in Hz; 0 when it is empty or not a number.
+- (uint64_t)typedFrequencyHz {
+    NSString *text = [self.freqField.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    text = [text stringByReplacingOccurrencesOfString:@"," withString:@"."];
+    double mhz = text.doubleValue;
+    return mhz > 0.0 ? (uint64_t)llround(mhz * 1e6) : 0;
+}
 
 - (instancetype)init {
     self = [super init];
     if (self) {
-        _currentFrequencyHz = 14200000;
+        _currentFrequencyHz = 0; // no frequency until the radio gives one or the operator types it
         _currentMode = @"USB";
         _displayedContacts = [NSMutableArray array];
 
@@ -380,14 +405,17 @@
 
     self.freqField = [[NSTextField alloc] initWithFrame:NSZeroRect];
     self.freqField.translatesAutoresizingMaskIntoConstraints = NO;
-    self.freqField.stringValue = [NSString stringWithFormat:@"%.3f", (double)self.currentFrequencyHz / 1e6];
+    self.freqField.stringValue = self.currentFrequencyHz > 0 ? [NSString stringWithFormat:@"%.3f", (double)self.currentFrequencyHz / 1e6] : @"";
+    self.freqField.placeholderString = @"MHz";
+    self.freqField.toolTip = @"Frequency in MHz. Filled in from the radio by CAT; type it when the radio is not connected. The band follows it.";
     self.freqField.font = [NSFont monospacedSystemFontOfSize:11.5 weight:NSFontWeightMedium];
+    self.freqField.delegate = self;
     [self.voiceLoggerCard addSubview:self.freqField];
 
     self.bandPopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
     self.bandPopup.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.bandPopup addItemsWithTitles:@[@"160m", @"80m", @"60m", @"40m", @"30m", @"20m", @"17m", @"15m", @"12m", @"10m", @"6m", @"2m", @"70cm"]];
-    [self.bandPopup selectItemWithTitle:[TX500LogRecord bandForFrequencyHz:self.currentFrequencyHz]];
+    [self.bandPopup addItemsWithTitles:@[TX500LogbookNoBand, @"160m", @"80m", @"60m", @"40m", @"30m", @"20m", @"17m", @"15m", @"12m", @"10m", @"6m", @"2m", @"70cm"]];
+    [self selectBandForFrequencyHz:self.currentFrequencyHz];
     self.bandPopup.target = self;
     self.bandPopup.action = @selector(voiceLoggerBandOrModeChanged:);
     [self.voiceLoggerCard addSubview:self.bandPopup];
@@ -1128,6 +1156,9 @@
                                                                   selector:@selector(triggerCallsignLookup)
                                                                   userInfo:nil
                                                                    repeats:NO];
+    } else if (obj.object == self.freqField) {
+        [self selectBandForFrequencyHz:[self typedFrequencyHz]];
+        [self updateDupeStatusForCallsign:self.callsignField.stringValue];
     } else if (obj.object == self.gridField) {
         [self updateBearingAndDistanceDisplay];
     } else if (obj.object == self.searchField) {
@@ -1164,7 +1195,7 @@
         return;
     }
 
-    NSString *band = self.bandPopup.selectedItem.title ?: [TX500LogRecord bandForFrequencyHz:self.currentFrequencyHz];
+    NSString *band = [self selectedBand];
     NSString *mode = self.modePopup.selectedItem.title ?: @"USB";
 
     NSDictionary<NSString *, id> *dupeInfo = [[TX500LogbookManager sharedManager] dupeStatusForCallsign:call band:band mode:mode];
@@ -1320,10 +1351,17 @@
     TX500LogRecord *rec = updating ? [[TX500LogbookManager sharedManager] contactWithUUID:self.editingRecordUUID] : nil;
     if (!rec) rec = [[TX500LogRecord alloc] init];
     rec.callsign = call;
-
-    double freqVal = [self.freqField.stringValue doubleValue];
-    rec.frequencyHz = (freqVal > 0) ? (uint64_t)(freqVal * 1e6) : self.currentFrequencyHz;
-    rec.band = self.bandPopup.selectedItem.title ?: [TX500LogRecord bandForFrequencyHz:rec.frequencyHz];
+    // The frequency is the one in the form: read by CAT, or typed. With none, nothing is saved.
+    uint64_t freqHz = [self typedFrequencyHz];
+    if (freqHz == 0) {
+        NSBeep();
+        [self appendConsoleMessage:@"Enter the frequency before logging: there is no reading from the radio."];
+        [self.view.window makeFirstResponder:self.freqField];
+        return;
+    }
+    rec.frequencyHz = freqHz;
+    [self selectBandForFrequencyHz:freqHz];
+    rec.band = [self selectedBand];
     rec.mode = self.modePopup.selectedItem.title ?: @"USB";
     rec.rstSent = [TX500LogbookController reportFromField:self.rstSentField.stringValue mode:rec.mode];
     rec.rstRcvd = [TX500LogbookController reportFromField:self.rstRcvdField.stringValue mode:rec.mode];
@@ -1418,7 +1456,7 @@
         [self.lookupDebounceTimer invalidate]; [self clearVoiceLoggerFields]; self.clusterDraft=YES;
         self.callsignField.stringValue=callsign; self.currentFrequencyHz=frequency; self.currentMode=mode;
         self.freqField.stringValue=[NSString stringWithFormat:@"%.6f",frequency/1e6];
-        [self.bandPopup selectItemWithTitle:[TX500LogRecord bandForFrequencyHz:frequency]]; [self.modePopup selectItemWithTitle:mode];
+        [self selectBandForFrequencyHz:frequency]; [self.modePopup selectItemWithTitle:mode];
         self.rstSentField.stringValue=@""; self.rstRcvdField.stringValue=@"";
         [self appendConsoleMessage:@"Draft from DX Cluster. Enter the actual reports after making contact, then Log QSO."];
         [self updateDupeStatusForCallsign:callsign]; [self.view.window makeFirstResponder:self.rstSentField];
@@ -1437,7 +1475,14 @@
 
 #pragma mark - Radio CAT Sync
 
-- (void)updateFrequencyHz:(uint64_t)freqHz mode:(NSString *)mode {
+- (void)updateFrequencyHz:(uint64_t)freqHz mode:(nullable NSString *)mode {
+    if (freqHz == 0) {
+        // The radio did not answer: never fill the form with a guessed frequency.
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self appendConsoleMessage:@"Radio frequency unavailable: the form keeps its current frequency and mode. Type the frequency if it is empty, and check both before logging."];
+        });
+        return;
+    }
     if(self.callsignField.stringValue.length) return;
     self.currentFrequencyHz = freqHz;
     self.currentMode = mode ?: @"USB";
@@ -1445,9 +1490,8 @@
     dispatch_async(dispatch_get_main_queue(), ^{
         if(self.callsignField.stringValue.length) return;
         self.freqField.stringValue = [NSString stringWithFormat:@"%.6f", (double)freqHz / 1e6];
-        NSString *band = [TX500LogRecord bandForFrequencyHz:freqHz];
-        [self.bandPopup selectItemWithTitle:band];
-        [self.modePopup selectItemWithTitle:self.currentMode];
+        [self selectBandForFrequencyHz:freqHz];
+        if (mode.length) [self.modePopup selectItemWithTitle:mode];
         [self updateDupeStatusForCallsign:self.callsignField.stringValue];
     });
 }
@@ -1737,7 +1781,8 @@
     self.editingRecordUUID = record.uuid;
     self.callsignField.stringValue = record.callsign ?: @"";
     self.freqField.stringValue = [NSString stringWithFormat:@"%.6f", record.frequencyMHz];
-    [self.bandPopup selectItemWithTitle:record.band ?: @""];
+    if (record.band.length && [self.bandPopup indexOfItemWithTitle:record.band] >= 0) [self.bandPopup selectItemWithTitle:record.band];
+    else [self selectBandForFrequencyHz:record.frequencyHz];
     // a mode the list does not have (SSTV) is added, so that saving keeps it instead of the first one (USB)
     if (record.mode.length && ![self.modePopup itemWithTitle:record.mode]) [self.modePopup addItemWithTitle:record.mode];
     [self.modePopup selectItemWithTitle:record.mode ?: @""];

@@ -25,7 +25,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy, nullable) void (^openSettingsHandler)(NSString * _Nullable service);
 
 // Radio CAT Sync
-- (void)updateFrequencyHz:(uint64_t)freqHz mode:(NSString *)mode;
+- (void)updateFrequencyHz:(uint64_t)freqHz mode:(nullable NSString *)mode;
 
 // User Actions
 - (void)openCloudSettingsSheet;

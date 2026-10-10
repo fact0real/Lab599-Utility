@@ -108,7 +108,7 @@ extern NSString * const TX500LogbookDidChangeNotification;
 + (NSString *)compassCardinalForDegrees:(double)degrees;
 + (NSString *)formattedBearingAndDistanceFromGrid:(NSString *)fromGrid toGrid:(NSString *)toGrid;
 
-// Cloud Status Updates
+// Cloud Status Updates (an upload never lowers one: UPLOADED does not replace CONFIRMED)
 - (BOOL)updateCloudStatusForUUID:(NSString *)uuid
                          service:(NSString *)service
                           status:(NSString *)status
@@ -117,12 +117,21 @@ extern NSString * const TX500LogbookDidChangeNotification;
 // Adapters for FT8 and CW existing models
 - (BOOL)addContactFromFT8:(TX500FT8LoggedQSO *)ft8QSO myCall:(nullable NSString *)myCall myGrid:(nullable NSString *)myGrid;
 - (BOOL)addContactFromCW:(TX500QSOContact *)cwContact myCall:(nullable NSString *)myCall myGrid:(nullable NSString *)myGrid;
+// The same, giving back the row saved (nil when it was not), so that its upload marks that row
+- (nullable TX500LogRecord *)savedContactFromFT8:(TX500FT8LoggedQSO *)ft8QSO myCall:(nullable NSString *)myCall myGrid:(nullable NSString *)myGrid;
+- (nullable TX500LogRecord *)savedContactFromCW:(TX500QSOContact *)cwContact myCall:(nullable NSString *)myCall myGrid:(nullable NSString *)myGrid;
 
 // ADIF 3.1 File Operations
 - (NSString *)exportFullADIFStringWithProgramId:(NSString *)programId;
 - (BOOL)exportADIFToFileURL:(NSURL *)fileURL error:(NSError **)error;
 - (NSInteger)importADIFFromFileURL:(NSURL *)fileURL
                    duplicatesCount:(NSInteger * _Nullable)outDuplicates
+                             error:(NSError **)error;
+// The same, and how many upload statuses of QSOs already in the logbook the file brought up to date
+// (raised only, pending to UPLOADED to CONFIRMED; nothing else of those QSOs changes)
+- (NSInteger)importADIFFromFileURL:(NSURL *)fileURL
+                   duplicatesCount:(NSInteger * _Nullable)outDuplicates
+                statusUpdatesCount:(NSInteger * _Nullable)outUpdates
                              error:(NSError **)error;
 
 // Convenience

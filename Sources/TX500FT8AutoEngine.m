@@ -987,10 +987,12 @@
         }
 
         // Also persist to central SQLite logbook and trigger zero-click cloud uploads
-        [[TX500LogbookManager sharedManager] addContactFromFT8:qso
+        TX500LogRecord *saved = [[TX500LogbookManager sharedManager] savedContactFromFT8:qso
                                                         myCall:self.audioEngine.myCallsign
                                                         myGrid:self.audioEngine.myGrid];
-        TX500LogRecord *cloudRec = [[TX500LogRecord alloc] init];
+        // the row saved itself goes up, so that each service's status lands on it (the lines below give
+        // it the values it already has; its grid goes up in capitals all the same)
+        TX500LogRecord *cloudRec = saved ?: [[TX500LogRecord alloc] init];
         cloudRec.callsign = [qso.callsign uppercaseString];
         cloudRec.band = [qso.band lowercaseString];
         cloudRec.frequencyHz = qso.freqHz;

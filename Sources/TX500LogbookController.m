@@ -83,6 +83,7 @@
 @property (nonatomic, strong) NSLayoutConstraint *consoleHeightConstraint;
 @property (nonatomic, assign) BOOL isConsoleCollapsed;
 @property (nonatomic, copy, nullable) NSString *editingRecordUUID;
+@property (nonatomic) BOOL syncBusy;   // from a Sync All's or Sync Selected's start to its end, the LoTW download included
 @property (nonatomic, strong, nullable) TX500LookupResult *lastLookupResult;
 
 // Radio State
@@ -234,6 +235,7 @@
     NSButton *btnSync = [NSButton buttonWithTitle:@"Sync All" target:self action:@selector(syncAllPending)];
     btnSync.bezelStyle = NSBezelStyleRounded;
     btnSync.translatesAutoresizingMaskIntoConstraints = NO;
+    btnSync.toolTip = @"Uploads every QSO still pending on each enabled and configured service (not yet UPLOADED or CONFIRMED there), then downloads the LoTW confirmations, as Confirmations does. QRZ, Club Log and eQSL confirmations are not downloaded.";
 
     NSButton *btnLoTW = [NSButton buttonWithTitle:@"LoTW Upload…" target:self action:@selector(uploadToLoTWViaTQSL)];
     btnLoTW.bezelStyle = NSBezelStyleRounded;
@@ -847,6 +849,15 @@
     btnDelete.bezelStyle = NSBezelStyleRounded;
     [box addSubview:btnDelete];
 
+    NSButton *btnSyncSelected = [NSButton buttonWithTitle:@"Sync Selected" target:self action:@selector(syncSelectedContacts)];
+    btnSyncSelected.translatesAutoresizingMaskIntoConstraints = NO;
+    btnSyncSelected.bezelStyle = NSBezelStyleRounded;
+    btnSyncSelected.toolTip = @"Uploads the selected rows only, to each enabled and configured service where they are still pending. Downloads nothing.";
+    [box addSubview:btnSyncSelected];
+    // when the row is short of room, the search field gives way (down to 110), not the buttons
+    NSLayoutConstraint *searchPreferredWidth = [self.searchField.widthAnchor constraintEqualToConstant:170.0];
+    searchPreferredWidth.priority = NSLayoutPriorityDefaultLow;
+
     // Scroll & TableView
     NSScrollView *scrollView = [[NSScrollView alloc] initWithFrame:NSZeroRect];
     scrollView.translatesAutoresizingMaskIntoConstraints = NO;
@@ -1010,7 +1021,9 @@
 
         [self.searchField.leadingAnchor constraintEqualToAnchor:box.leadingAnchor constant:8.0],
         [self.searchField.topAnchor constraintEqualToAnchor:self.awardTrackerCard.bottomAnchor constant:6.0],
-        [self.searchField.widthAnchor constraintEqualToConstant:170.0],
+        searchPreferredWidth,
+        [self.searchField.widthAnchor constraintLessThanOrEqualToConstant:170.0],
+        [self.searchField.widthAnchor constraintGreaterThanOrEqualToConstant:110.0],
 
         [self.filterBandPopup.leadingAnchor constraintEqualToAnchor:self.searchField.trailingAnchor constant:8.0],
         [self.filterBandPopup.centerYAnchor constraintEqualToAnchor:self.searchField.centerYAnchor],
@@ -1026,7 +1039,9 @@
 
         [btnDelete.trailingAnchor constraintEqualToAnchor:box.trailingAnchor constant:-8.0],
         [btnDelete.centerYAnchor constraintEqualToAnchor:self.searchField.centerYAnchor],
-        [btnDelete.leadingAnchor constraintGreaterThanOrEqualToAnchor:self.timeDisplayControl.trailingAnchor constant:8.0],
+        [btnSyncSelected.trailingAnchor constraintEqualToAnchor:btnDelete.leadingAnchor constant:-8.0],
+        [btnSyncSelected.centerYAnchor constraintEqualToAnchor:self.searchField.centerYAnchor],
+        [btnSyncSelected.leadingAnchor constraintGreaterThanOrEqualToAnchor:self.timeDisplayControl.trailingAnchor constant:8.0],
 
         [scrollView.topAnchor constraintEqualToAnchor:self.searchField.bottomAnchor constant:6.0],
         [scrollView.leadingAnchor constraintEqualToAnchor:box.leadingAnchor constant:8.0],
@@ -1531,9 +1546,10 @@
 }
 
 - (void)cloudSyncStatusDidChange:(NSNotification *)note {
-    (void)note;
+    // a notice may carry its own line (a sync's), which another upload's status could replace meanwhile
+    NSString *own = note.userInfo[@"message"];
     dispatch_async(dispatch_get_main_queue(), ^{
-        [self appendConsoleMessage:[TX500CloudSyncEngine sharedEngine].lastStatusMessage];
+        [self appendConsoleMessage:own ?: [TX500CloudSyncEngine sharedEngine].lastStatusMessage];
         [self updateCloudStatusPills];
         [self reloadTableData];
     });
@@ -2055,26 +2071,34 @@
         }
         return;
     }
+    [self appendConsoleMessage:@"Downloading confirmed QSOs from LoTW…"];
+    [self downloadLoTWConfirmationsWithLogin:username secret:password completion:^(BOOL ok, NSString *summary) {
+        (void)ok;
+        [self appendConsoleMessage:summary];
+    }];
+}
+
+// The LoTW report of confirmed QSOs, matched to the logbook (Confirmations, and Sync All after its
+// uploads). The summary is the console's line; on the main queue.
+- (void)downloadLoTWConfirmationsWithLogin:(NSString *)login secret:(NSString *)secret completion:(void (^)(BOOL ok, NSString *summary))completion {
     NSURLComponents *components = [NSURLComponents componentsWithString:@"https://lotw.arrl.org/lotwuser/lotwreport.adi"];
     components.queryItems = @[
-        [NSURLQueryItem queryItemWithName:@"login" value:username],
-        [NSURLQueryItem queryItemWithName:@"password" value:password],
+        [NSURLQueryItem queryItemWithName:@"login" value:login],
+        [NSURLQueryItem queryItemWithName:@"password" value:secret],
         [NSURLQueryItem queryItemWithName:@"qso_query" value:@"1"],
         [NSURLQueryItem queryItemWithName:@"qso_qsl" value:@"yes"],
         [NSURLQueryItem queryItemWithName:@"qso_qsldetail" value:@"yes"],
         [NSURLQueryItem queryItemWithName:@"qso_withown" value:@"yes"]
     ];
-    [self appendConsoleMessage:@"Downloading confirmed QSOs from LoTW…"];
-    NSURLSessionDataTask *task = [NSURLSession.sharedSession dataTaskWithURL:components.URL completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-        (void)response;
+    [self fetchLoTWReport:components.URL completion:^(NSData *data, NSError *error) {
         dispatch_async(dispatch_get_main_queue(), ^{
             if (error || data.length == 0) {
-                [self appendConsoleMessage:error.localizedDescription ?: @"LoTW returned an empty response."];
+                completion(NO, error.localizedDescription ?: @"LoTW returned an empty response.");
                 return;
             }
             NSString *adif = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
             if ([adif rangeOfString:@"<EOH>" options:NSCaseInsensitiveSearch].location == NSNotFound) {
-                [self appendConsoleMessage:@"LoTW did not return ADIF data. Verify the web-account password in Cloud Settings."];
+                completion(NO, @"LoTW did not return ADIF data. Verify the web-account password in Cloud Settings.");
                 return;
             }
             NSMutableArray<TX500LogRecord *> *records = [NSMutableArray array];
@@ -2087,18 +2111,82 @@
                 if (record) [records addObject:record];
             }
             NSInteger matched = [self applyLoTWConfirmationRecords:records];
-            [self appendConsoleMessage:[NSString stringWithFormat:@"LoTW refresh complete: %ld confirmed record(s) downloaded, %ld local QSO(s) matched and updated.", (long)records.count, (long)matched]];
+            completion(YES, [NSString stringWithFormat:@"LoTW refresh complete: %ld confirmed record(s) downloaded, %ld local QSO(s) matched and updated.", (long)records.count, (long)matched]);
             [self reloadTableData];
         });
+    }];
+}
+
+// Only the request to LoTW (the tests stand in for it). Automated tests never contact LoTW.
+- (void)fetchLoTWReport:(NSURL *)url completion:(void (^)(NSData * _Nullable data, NSError * _Nullable error))completion {
+    if (NSProcessInfo.processInfo.environment[@"TX500_TEST_MODE"].boolValue) {
+        completion(nil, [NSError errorWithDomain:@"TX500LogbookErrorDomain" code:20
+                                        userInfo:@{NSLocalizedDescriptionKey: @"LoTW download suppressed in test mode."}]);
+        return;
+    }
+    NSURLSessionDataTask *task = [NSURLSession.sharedSession dataTaskWithURL:url completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        (void)response;
+        completion(data, error);
     }];
     [task resume];
 }
 
+// One sync at a time: a press while one runs (its uploads or its LoTW download) does nothing, and says so
+- (BOOL)refuseSyncWhileOneRuns {
+    TX500CloudSyncEngine *engine = [TX500CloudSyncEngine sharedEngine];
+    if (!self.syncBusy && !engine.syncInProgress) return NO;
+    // TQSL alone (LoTW Upload…, or the upload after a QSO) is said as it is, not as a sync
+    [self appendConsoleMessage:(!self.syncBusy && engine.tqslBusy)
+        ? @"TQSL is running (a LoTW upload): nothing was sent or downloaded; try again when it ends."
+        : @"A sync is already running: nothing was sent or downloaded."];
+    return YES;
+}
+
 - (void)syncAllPending {
+    if ([self refuseSyncWhileOneRuns]) return;
+    self.syncBusy = YES;
     [self appendConsoleMessage:@"Synchronizing pending contacts with cloud services..."];
-    [[TX500CloudSyncEngine sharedEngine] uploadPendingContactsWithCompletion:^(NSInteger uploadedCount, NSInteger failedCount, NSString *summary) {
+    [[TX500CloudSyncEngine sharedEngine] syncContacts:nil completion:^(NSInteger uploadedCount, NSInteger failedCount, NSString *summary) {
         (void)uploadedCount; (void)failedCount;
         [self appendConsoleMessage:summary];
+        // then the confirmations: LoTW's, the only ones the app can download. Uploads first, so that a
+        // download, slow or failing, never holds an upload back
+        NSString *login = [NSUserDefaults.standardUserDefaults stringForKey:@"TX500_LoTW_Username"] ?: @"";
+        if (login.length == 0 || TX500SecretValue(@"TX500_LoTW_Password").length == 0) {
+            [self appendConsoleMessage:@"Sync All: the LoTW confirmations were not downloaded (no LoTW username and password in Settings)."];
+            self.syncBusy = NO;
+            [self refreshAwardStatistics];
+            return;
+        }
+        [self appendConsoleMessage:@"Downloading confirmed QSOs from LoTW…"];
+        [self downloadLoTWConfirmationsWithLogin:login secret:TX500SecretValue(@"TX500_LoTW_Password") completion:^(BOOL ok, NSString *downloaded) {
+            // a download that failed is said as a problem of this sync, never as done
+            [self appendConsoleMessage:ok ? downloaded : [NSString stringWithFormat:@"Sync All: the LoTW download failed, so no confirmation was marked (%@).", downloaded]];
+            self.syncBusy = NO;
+            [self refreshAwardStatistics];
+        }];
+    }];
+}
+
+- (void)syncSelectedContacts {
+    NSMutableArray<TX500LogRecord *> *selected = [NSMutableArray array];
+    [self.tableView.selectedRowIndexes enumerateIndexesUsingBlock:^(NSUInteger idx, BOOL *stop) {
+        (void)stop;
+        if (idx < self.displayedContacts.count) {
+            [selected addObject:self.displayedContacts[idx]];
+        }
+    }];
+    if (selected.count == 0) {
+        [self appendConsoleMessage:@"Select the contacts to sync in the table first."];
+        return;
+    }
+    if ([self refuseSyncWhileOneRuns]) return;
+    self.syncBusy = YES;
+    [self appendConsoleMessage:[NSString stringWithFormat:@"Synchronizing %lu selected contact(s) with cloud services...", (unsigned long)selected.count]];
+    [[TX500CloudSyncEngine sharedEngine] syncContacts:selected completion:^(NSInteger uploadedCount, NSInteger failedCount, NSString *summary) {
+        (void)uploadedCount; (void)failedCount;
+        [self appendConsoleMessage:summary];
+        self.syncBusy = NO;
         [self refreshAwardStatistics];
     }];
 }
@@ -2179,15 +2267,18 @@
     [panel beginWithCompletionHandler:^(NSModalResponse result) {
         if (result == NSModalResponseOK && panel.URL) {
             NSInteger duplicates = 0;
+            NSInteger updates = 0;
             NSError *err = nil;
             NSInteger imported = [[TX500LogbookManager sharedManager] importADIFFromFileURL:panel.URL
                                                                             duplicatesCount:&duplicates
+                                                                         statusUpdatesCount:&updates
                                                                                       error:&err];
             if (err) {
                 NSAlert *a = [NSAlert alertWithError:err];
                 [a runModal];
             } else {
-                NSString *msg = [NSString stringWithFormat:@"Import Complete: %ld contact(s) imported, %ld duplicate(s) skipped.", (long)imported, (long)duplicates];
+                NSString *msg = [NSString stringWithFormat:@"Import Complete: %ld contact(s) imported, %ld duplicate(s) skipped, %ld upload status(es) brought up to date.",
+                                 (long)imported, (long)duplicates, (long)updates];
                 [self appendConsoleMessage:msg];
                 NSAlert *a = [[NSAlert alloc] init];
                 a.messageText = @"ADIF Import Successful";

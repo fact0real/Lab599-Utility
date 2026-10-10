@@ -34,6 +34,12 @@ BOOL TX500ClubLogResponseIsSuccess(NSHTTPURLResponse *response, NSData *data) {
     return NO;
 }
 
+BOOL TX500QRZResponseIsSuccess(NSURLResponse *response, NSString *text) {
+    // a duplicate is an upload QRZ already has: accepted, whatever the case of the word
+    return TX500CloudResponseMatchesEndpoint(response, @"https://logbook.qrz.com/api") &&
+        ([text containsString:@"RESULT=OK"] || [text.uppercaseString containsString:@"DUPLICATE"]);
+}
+
 static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
     NSString *value = NSProcessInfo.processInfo.environment[@"TX500_TEST_MODE"];
     return value.boolValue;
@@ -58,6 +64,9 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
 @property (nonatomic, strong) NSMutableArray<TX500CloudUploadItem *> *uploadHistory;
 @property (nonatomic, strong) NSURLSession *urlSession;
 @property (nonatomic, strong) dispatch_queue_t syncQueue;
+@property (nonatomic, assign) BOOL syncRunning;   // under @synchronized (self)
+@property (nonatomic, assign) NSInteger tqslRuns;   // TQSL processes running now, under @synchronized (self)
+@property (nonatomic, assign) NSInteger lotwTaken;   // LoTW uploads decided on and not ended (their TQSL may not run yet), the same
 
 @end
 
@@ -78,6 +87,7 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
         _uploadHistory = [NSMutableArray array];
         _lastStatusMessage = @"Cloud Ecosystem Ready";
         _syncQueue = dispatch_queue_create("ir.factoreal.tx500.cloudsync", DISPATCH_QUEUE_SERIAL);
+        _syncUploadWaitSeconds = 60.0;
         
         NSURLSessionConfiguration *config = [NSURLSessionConfiguration ephemeralSessionConfiguration];
         config.timeoutIntervalForRequest = 20.0;
@@ -184,6 +194,12 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
 
 - (void)uploadContactImmediately:(TX500LogRecord *)record
                        completion:(nullable void (^)(BOOL overallSuccess, NSString *summary))completion {
+    [self uploadContact:record toServices:nil completion:completion];
+}
+
+- (void)uploadContact:(TX500LogRecord *)record
+           toServices:(nullable NSArray<NSString *> *)services
+           completion:(nullable void (^)(BOOL overallSuccess, NSString *summary))completion {
     if (!record || record.callsign.length == 0) {
         if (completion) completion(NO, @"Empty record");
         return;
@@ -198,15 +214,22 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
 
     NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
     BOOL autoUpload = [ud objectForKey:@"TX500_Cloud_AutoUploadEnabled"] ? [ud boolForKey:@"TX500_Cloud_AutoUploadEnabled"] : YES;
-    if (!autoUpload) {
+    // the switch is for the upload after a QSO; a sync is asked for by the operator
+    if (!services && !autoUpload) {
         if (completion) completion(YES, @"Auto-upload disabled in settings.");
         return;
     }
 
-    BOOL uploadQRZ = [ud objectForKey:@"TX500_Cloud_UploadQRZ"] ? [ud boolForKey:@"TX500_Cloud_UploadQRZ"] : YES;
-    BOOL uploadClubLog = [ud objectForKey:@"TX500_Cloud_UploadClubLog"] ? [ud boolForKey:@"TX500_Cloud_UploadClubLog"] : YES;
-    BOOL uploadEQSL = [ud objectForKey:@"TX500_Cloud_UploadEQSL"] ? [ud boolForKey:@"TX500_Cloud_UploadEQSL"] : YES;
-    BOOL uploadLoTW = [ud objectForKey:@"TX500_Cloud_UploadLoTW"] ? [ud boolForKey:@"TX500_Cloud_UploadLoTW"] : YES;
+    NSArray<NSString *> *sendTo = [self servicesForUpload:services];
+    BOOL uploadQRZ = [sendTo containsObject:@"QRZ"];
+    BOOL uploadClubLog = [sendTo containsObject:@"ClubLog"];
+    BOOL uploadEQSL = [sendTo containsObject:@"eQSL"];
+    BOOL uploadLoTW = [sendTo containsObject:@"LoTW"];
+    // one TQSL at a time: the upload after a QSO takes LoTW now, or leaves it pending (a sync sends it later);
+    // a sync has taken it already, and here only looks that no other TQSL runs
+    BOOL lotwTakenHere = uploadLoTW && !services && [self takeLoTW];
+    BOOL lotwLeftPending = uploadLoTW && (services ? self.tqslRunning > 0 : !lotwTakenHere);
+    if (lotwLeftPending) uploadLoTW = NO;
 
     NSString *qrzKey = TX500SecretValue(@"TX500_QRZ_APIKey") ?: @"";
     NSString *clubEmail = [ud stringForKey:@"TX500_ClubLog_Email"] ?: @"";
@@ -283,6 +306,8 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
                 dispatch_group_leave(group);
             }];
         }
+        // that TQSL has ended (the LoTW upload waits for it): LoTW is free again
+        if (lotwTakenHere) [self giveBackLoTW];
 
         dispatch_group_wait(group, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(45.0 * NSEC_PER_SEC)));
 
@@ -298,7 +323,11 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
             if (statusSummary.length > 0) [statusSummary appendString:@" | "];
             [statusSummary appendFormat:@"Errors: %@", [failureList componentsJoinedByString:@", "]];
         }
-        if (successList.count == 0 && failureList.count == 0) {
+        if (lotwLeftPending) {
+            if (statusSummary.length > 0) [statusSummary appendString:@" | "];
+            [statusSummary appendFormat:@"LoTW left pending for %@: TQSL is running, or about to start.", record.callsign];
+        }
+        if (successList.count == 0 && failureList.count == 0 && !lotwLeftPending) {
             [statusSummary appendString:@"No cloud services configured or enabled."];
         }
 
@@ -356,8 +385,7 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
             return;
         }
         NSString *respText = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
-        if (TX500CloudResponseMatchesEndpoint(resp, endpoint) &&
-            ([respText containsString:@"RESULT=OK"] || [respText containsString:@"DUPLICATE"])) {
+        if (TX500QRZResponseIsSuccess(resp, respText)) {
             completion(YES, @"OK");
         } else {
             NSString *reason = [self extractQRZReason:respText];
@@ -459,8 +487,15 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
         task.standardOutput = outPipe;
         task.standardError = outPipe;
 
-        [task launch];
+        [self tqslRunStarted];
+        @try {
+            [task launch];
+        } @catch (NSException *launchFailed) {
+            [self tqslRunEnded];
+            @throw;
+        }
         [task waitUntilExit];
+        [self tqslRunEnded];
 
         NSData *outData = [[outPipe fileHandleForReading] readDataToEndOfFile];
         NSString *outStr = [[NSString alloc] initWithData:outData encoding:NSUTF8StringEncoding] ?: @"";
@@ -481,42 +516,302 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
     }
 }
 
-#pragma mark - Batch Uploads
+#pragma mark - Sync
 
-- (void)uploadPendingContactsWithCompletion:(nullable void (^)(NSInteger uploadedCount, NSInteger failedCount, NSString *summary))completion {
-    NSArray<TX500LogRecord *> *all = [[TX500LogbookManager sharedManager] allContacts];
+// Pending: the service does not have the contact yet. NONE, QUEUED, ERROR or no status at all; never
+// UPLOADED or CONFIRMED, as the LoTW batch below already counts it.
++ (BOOL)isPendingStatus:(nullable NSString *)status {
+    return ![status isEqualToString:@"UPLOADED"] && ![status isEqualToString:@"CONFIRMED"];
+}
+
+// What each upload needs (Club Log its email, callsign, password and API key)
+- (NSArray<NSString *> *)enabledConfiguredServices {
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    BOOL (^enabled)(NSString *) = ^BOOL(NSString *key) { return [ud objectForKey:key] ? [ud boolForKey:key] : YES; };
+    NSMutableArray<NSString *> *services = [NSMutableArray array];
+    if (enabled(@"TX500_Cloud_UploadQRZ") && TX500SecretValue(@"TX500_QRZ_APIKey").length > 0) [services addObject:@"QRZ"];
+    if (enabled(@"TX500_Cloud_UploadClubLog") && [ud stringForKey:@"TX500_ClubLog_Email"].length > 0 &&
+        [ud stringForKey:@"TX500_ClubLog_Callsign"].length > 0 && TX500SecretValue(@"TX500_ClubLog_Password").length > 0 &&
+        TX500SecretValue(@"TX500_ClubLog_APIKey").length > 0) [services addObject:@"ClubLog"];
+    if (enabled(@"TX500_Cloud_UploadEQSL") && [ud stringForKey:@"TX500_EQSL_Username"].length > 0 &&
+        TX500SecretValue(@"TX500_EQSL_Password").length > 0) [services addObject:@"eQSL"];
+    if (enabled(@"TX500_Cloud_UploadLoTW") && [TX500CloudSyncEngine discoverTQSLBinaryPath].length > 0 &&
+        [ud stringForKey:@"TX500_LoTW_StationLocation"].length > 0) [services addObject:@"LoTW"];
+    return services;
+}
+
+- (NSArray<NSString *> *)servicesForUpload:(nullable NSArray<NSString *> *)requested {
+    NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+    if (!requested && [ud objectForKey:@"TX500_Cloud_AutoUploadEnabled"] && ![ud boolForKey:@"TX500_Cloud_AutoUploadEnabled"]) return @[];
+    NSMutableArray<NSString *> *sendTo = [NSMutableArray array];
+    for (NSString *service in [self enabledConfiguredServices]) {
+        if (!requested || [requested containsObject:service]) [sendTo addObject:service];
+    }
+    return sendTo;
+}
+
+- (BOOL)syncInProgress {
+    @synchronized (self) {
+        return self.syncRunning || self.tqslRuns > 0 || self.lotwTaken > 0;
+    }
+}
+
+- (BOOL)tqslBusy {
+    @synchronized (self) {
+        return self.tqslRuns > 0 || self.lotwTaken > 0;
+    }
+}
+
+// LoTW for one upload, taken when it is decided on: only while no TQSL runs and none is about to, so that
+// two uploads that decide at the same moment never both start one
+- (BOOL)takeLoTW {
+    @synchronized (self) {
+        if (self.tqslRuns > 0 || self.lotwTaken > 0) return NO;
+        self.lotwTaken++;
+        return YES;
+    }
+}
+
+- (void)giveBackLoTW {
+    @synchronized (self) {
+        if (self.lotwTaken > 0) self.lotwTaken--;
+    }
+}
+
+- (NSInteger)tqslRunning {
+    @synchronized (self) {
+        return self.tqslRuns;
+    }
+}
+
+// around every TQSL process the app starts
+- (void)tqslRunStarted {
+    @synchronized (self) {
+        self.tqslRuns++;
+    }
+}
+
+- (void)tqslRunEnded {
+    @synchronized (self) {
+        if (self.tqslRuns > 0) self.tqslRuns--;
+    }
+}
+
++ (NSArray<NSString *> *)pendingServicesOfContact:(TX500LogRecord *)record among:(NSArray<NSString *> *)services {
+    NSDictionary<NSString *, NSString *> *status = @{@"QRZ": record.qrzStatus ?: @"", @"ClubLog": record.clublogStatus ?: @"",
+                                                     @"eQSL": record.eqslStatus ?: @"", @"LoTW": record.lotwStatus ?: @""};
+    NSMutableArray<NSString *> *pending = [NSMutableArray array];
+    for (NSString *service in services) {
+        if (status[service] && [self isPendingStatus:status[service]]) [pending addObject:service];
+    }
+    return pending;
+}
+
+- (void)syncContacts:(nullable NSArray<TX500LogRecord *> *)records
+          completion:(nullable void (^)(NSInteger uploadedCount, NSInteger failedCount, NSString *summary))completion {
+    if (records && records.count == 0) {
+        if (completion) completion(0, 0, @"No contacts to sync.");
+        return;
+    }
+    NSArray<NSString *> *services = [self enabledConfiguredServices];
+    if (services.count == 0) {
+        if (completion) completion(0, 0, @"No cloud service is enabled and configured (Settings…): nothing was sent.");
+        return;
+    }
+    NSDictionary<NSString *, NSString *> *names = @{@"QRZ": @"QRZ", @"ClubLog": @"Club Log", @"eQSL": @"eQSL", @"LoTW": @"LoTW"};
+    NSMutableArray<NSString *> *notChecked = [NSMutableArray array];
+    for (NSString *service in @[@"QRZ", @"ClubLog", @"eQSL", @"LoTW"]) {
+        if (![services containsObject:service]) [notChecked addObject:names[service]];
+    }
+    NSString *notCheckedNote = notChecked.count ? [NSString stringWithFormat:@" Not checked: %@ (not configured, or turned off by a hidden setting).",
+                                                   [notChecked componentsJoinedByString:@", "]] : @"";
+    TX500LogbookManager *logbook = [TX500LogbookManager sharedManager];
     NSMutableArray<TX500LogRecord *> *pending = [NSMutableArray array];
-    for (TX500LogRecord *r in all) {
-        if ([r.qrzStatus isEqualToString:@"NONE"] || [r.lotwStatus isEqualToString:@"NONE"] || [r.clublogStatus isEqualToString:@"NONE"]) {
-            [pending addObject:r];
+    NSMutableDictionary<NSString *, NSNumber *> *already = [NSMutableDictionary dictionary];
+    for (TX500LogRecord *r in records ?: [logbook allContacts]) {
+        NSArray<NSString *> *missing = [TX500CloudSyncEngine pendingServicesOfContact:r among:services];
+        if (missing.count > 0) [pending addObject:r];
+        for (NSString *service in services) {
+            if (![missing containsObject:service]) already[service] = @(already[service].integerValue + 1);
+        }
+    }
+
+    // for each service, the QSOs never tried there go first, and those that failed there before (ERROR) last:
+    // two that always fail must not stop a service before the others are tried on it
+    NSMutableSet<NSString *> *failedThereBefore = [NSMutableSet set];
+    for (TX500LogRecord *r in pending) {
+        NSDictionary<NSString *, NSString *> *status = @{@"QRZ": r.qrzStatus ?: @"", @"ClubLog": r.clublogStatus ?: @"",
+                                                         @"eQSL": r.eqslStatus ?: @"", @"LoTW": r.lotwStatus ?: @""};
+        for (NSString *service in services) {
+            if ([status[service] isEqualToString:@"ERROR"]) [failedThereBefore addObject:[NSString stringWithFormat:@"%@|%@", r.uuid, service]];
         }
     }
 
     if (pending.count == 0) {
-        if (completion) completion(0, 0, @"All contacts are already synchronized.");
+        NSString *checked = [[names objectsForKeys:services notFoundMarker:@""] componentsJoinedByString:@", "];
+        NSString *msg = records ? [NSString stringWithFormat:@"Nothing pending on %@ for the %lu contact(s) given.%@", checked, (unsigned long)records.count, notCheckedNote]
+                      : notChecked.count ? [NSString stringWithFormat:@"Nothing pending on %@.%@", checked, notCheckedNote]
+                                         : @"All contacts are already synchronized.";
+        if (completion) completion(0, 0, msg);
         return;
     }
 
+    BOOL running = NO;
+    @synchronized (self) {
+        running = self.syncRunning;
+        self.syncRunning = YES;
+    }
+    if (running) {
+        if (completion) completion(0, 0, @"A sync is already running: nothing was sent.");
+        return;
+    }
+
+    NSTimeInterval wait = self.syncUploadWaitSeconds > 0 ? self.syncUploadWaitSeconds : 60.0;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         __block NSInteger successCount = 0;
         __block NSInteger failCount = 0;
+        __block NSInteger inFlight = 0;   // uploads started and not ended yet, under @synchronized (stillRunning)
+        // for each QSO sent, whether every upload of it went well (one QSO can be sent twice, to different services)
+        NSMutableDictionary<NSString *, NSNumber *> *wentWell = [NSMutableDictionary dictionary];
+        NSMutableDictionary<NSString *, NSNumber *> *uploaded = [NSMutableDictionary dictionary], *failed = [NSMutableDictionary dictionary];
+        NSMutableDictionary<NSString *, NSNumber *> *leftStopped = [NSMutableDictionary dictionary], *leftOff = [NSMutableDictionary dictionary];
+        NSMutableDictionary<NSString *, NSNumber *> *leftWaiting = [NSMutableDictionary dictionary];
+        NSMutableDictionary<NSString *, NSNumber *> *inARow = [NSMutableDictionary dictionary];
+        NSMutableSet<NSString *> *stopped = [NSMutableSet set];
+        NSMutableArray<NSArray *> *stillRunning = [NSMutableArray array];   // @[uuid, services]; also the lock of the counts
+        void (^add)(NSMutableDictionary<NSString *, NSNumber *> *, NSString *) = ^(NSMutableDictionary<NSString *, NSNumber *> *d, NSString *k) {
+            d[k] = @(d[k].integerValue + 1);
+        };
+        // a failure in a row for a service (rejected credentials among other errors); two stop it for this sync
+        void (^strike)(NSString *) = ^(NSString *service) {
+            add(inARow, service);
+            if (inARow[service].integerValue >= 2) [stopped addObject:service];
+        };
+        // which of the services asked for have the contact now (its status there is no longer pending)
+        void (^count)(NSString *, NSArray<NSString *> *, BOOL) = ^(NSString *uuid, NSArray<NSString *> *asked, BOOL strikes) {
+            TX500LogRecord *after = [logbook contactWithUUID:uuid];
+            for (NSString *service in asked) {
+                if (after && [TX500CloudSyncEngine pendingServicesOfContact:after among:@[service]].count == 0) {
+                    add(uploaded, service);
+                    inARow[service] = @0;
+                } else {
+                    add(failed, service);
+                    if (strikes) strike(service);
+                    // tried and failed: ERROR, so that the next sync tries it after the others
+                    [logbook updateCloudStatusForUUID:uuid service:service status:@"ERROR" error:nil];
+                }
+            }
+        };
+        dispatch_group_t all = dispatch_group_create();
 
-        for (TX500LogRecord *rec in pending) {
+        // first each QSO to the services it never failed on before, then to those it did (R15)
+        for (NSInteger phase = 0; phase < 2; phase++) for (TX500LogRecord *listed in pending) {
+            // its status now, not when the list was made: a service that has it by now is not sent it again
+            TX500LogRecord *rec = [logbook contactWithUUID:listed.uuid];
+            NSMutableArray<NSString *> *missing = [NSMutableArray array];
+            for (NSString *service in rec ? [TX500CloudSyncEngine pendingServicesOfContact:rec among:services] : @[]) {
+                BOOL failedThere = [failedThereBefore containsObject:[NSString stringWithFormat:@"%@|%@", rec.uuid, service]];
+                if (failedThere == (phase == 1)) [missing addObject:service];
+            }
+            // and only to the services still enabled and configured, and not stopped
+            NSArray<NSString *> *now = missing.count ? [self enabledConfiguredServices] : @[];
+            NSMutableArray<NSString *> *to = [NSMutableArray array];
+            for (NSString *service in missing) {
+                if ([stopped containsObject:service]) add(leftStopped, service);
+                else if (![now containsObject:service]) add(leftOff, service);
+                else [to addObject:service];
+            }
+            // and to LoTW only while no TQSL runs and none is about to (this sync's, or any other the app
+            // started): taken now, and given back once this upload has ended, its TQSL with it
+            BOOL lotwTakenHere = NO;
+            if ([to containsObject:@"LoTW"]) {
+                lotwTakenHere = [self takeLoTW];
+                if (!lotwTakenHere) {
+                    [to removeObject:@"LoTW"];
+                    add(leftWaiting, @"LoTW");
+                }
+            }
+            if (to.count == 0) continue;
             dispatch_semaphore_t sema = dispatch_semaphore_create(0);
-            [self uploadContactImmediately:rec completion:^(BOOL ok, NSString *summary) {
+            dispatch_group_enter(all);
+            @synchronized (stillRunning) {
+                inFlight++;
+            }
+            [self uploadContact:rec toServices:to completion:^(BOOL ok, NSString *summary) {
                 (void)summary;
-                if (ok) successCount++;
-                else failCount++;
+                if (lotwTakenHere) [self giveBackLoTW];
+                @synchronized (stillRunning) {
+                    NSNumber *sofar = wentWell[rec.uuid];
+                    wentWell[rec.uuid] = @((sofar ? sofar.boolValue : YES) && ok);
+                    inFlight--;
+                }
                 dispatch_semaphore_signal(sema);
+                dispatch_group_leave(all);
             }];
-            dispatch_semaphore_wait(sema, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(15.0 * NSEC_PER_SEC)));
+            // an upload to QRZ, Club Log and eQSL takes 45 s at most; one to LoTW waits for TQSL, which
+            // has no time limit: after the wait the next contact goes on (with no LoTW while it runs),
+            // the services not done by then count as a failure in a row, and its outcome is counted at the end
+            if (dispatch_semaphore_wait(sema, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(wait * NSEC_PER_SEC))) == 0) {
+                count(rec.uuid, to, YES);
+            } else {
+                [stillRunning addObject:@[rec.uuid, to]];
+                TX500LogRecord *sofar = [logbook contactWithUUID:rec.uuid];
+                for (NSString *service in to) {
+                    if (!sofar || [TX500CloudSyncEngine pendingServicesOfContact:sofar among:@[service]].count > 0) strike(service);
+                    else inARow[service] = @0;   // that one went through: its failures are no longer in a row
+                }
+            }
+        }
+        // what still runs now (uploads whose wait ran out may have ended since), in a line of its own
+        NSInteger running = 0;
+        @synchronized (stillRunning) {
+            running = inFlight;
+        }
+        if (running > 0) {
+            NSString *line = [NSString stringWithFormat:@"%ld upload(s) still running (a LoTW upload waits for TQSL); no new sync can start until they end.",
+                              (long)running];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [[NSNotificationCenter defaultCenter] postNotificationName:TX500CloudSyncStatusDidChangeNotification object:self userInfo:@{@"message": line}];
+            });
         }
 
-        NSString *msg = [NSString stringWithFormat:@"Batch sync finished: %ld uploaded, %ld failed.", (long)successCount, (long)failCount];
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (completion) completion(successCount, failCount, msg);
+        // the end, once every upload started has really finished
+        dispatch_group_notify(all, dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+            for (NSArray *late in stillRunning) count(late[0], late[1], NO);
+            for (NSNumber *well in wentWell.allValues) {
+                if (well.boolValue) successCount++;
+                else failCount++;
+            }
+            NSMutableString *msg = [NSMutableString stringWithFormat:@"Batch sync finished: %ld QSO(s) sent to every service asked, %ld with a service failing.",
+                                    (long)successCount, (long)failCount];
+            for (NSString *service in services) {
+                NSMutableArray<NSString *> *parts = [NSMutableArray array];
+                if (uploaded[service].integerValue) [parts addObject:[NSString stringWithFormat:@"%ld uploaded", (long)uploaded[service].integerValue]];
+                if (already[service].integerValue) [parts addObject:[NSString stringWithFormat:@"%ld already there", (long)already[service].integerValue]];
+                if (failed[service].integerValue) [parts addObject:[NSString stringWithFormat:@"%ld failed", (long)failed[service].integerValue]];
+                if ([stopped containsObject:service])
+                    [parts addObject:[NSString stringWithFormat:@"stopped after 2 failures in a row, %ld left pending", (long)leftStopped[service].integerValue]];
+                if (leftWaiting[service].integerValue)
+                    [parts addObject:[NSString stringWithFormat:@"waiting for TQSL, %ld left pending", (long)leftWaiting[service].integerValue]];
+                if (leftOff[service].integerValue)
+                    [parts addObject:[NSString stringWithFormat:@"no longer configured (or turned off by a hidden setting) during the sync, %ld left pending", (long)leftOff[service].integerValue]];
+                [msg appendFormat:@" %@: %@.", names[service], parts.count ? [parts componentsJoinedByString:@", "] : @"nothing to do"];
+            }
+            [msg appendString:notCheckedNote];
+            @synchronized (self) {
+                self.syncRunning = NO;
+            }
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (completion) completion(successCount, failCount, msg);
+            });
         });
     });
+}
+
+#pragma mark - Batch Uploads
+
+- (void)uploadPendingContactsWithCompletion:(nullable void (^)(NSInteger uploadedCount, NSInteger failedCount, NSString *summary))completion {
+    [self syncContacts:nil completion:completion];
 }
 
 - (void)uploadFullLogbookToLoTWWithCompletion:(nullable void (^)(BOOL success, NSString *message))completion {
@@ -551,8 +846,15 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
             task.standardOutput = pipe;
             task.standardError = pipe;
 
-            [task launch];
+            [self tqslRunStarted];
+            @try {
+                [task launch];
+            } @catch (NSException *launchFailed) {
+                [self tqslRunEnded];
+                @throw;
+            }
             [task waitUntilExit];
+            [self tqslRunEnded];
 
             NSData *data = [[pipe fileHandleForReading] readDataToEndOfFile];
             NSString *outStr = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
@@ -643,8 +945,15 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
             task.standardOutput = pipe;
             task.standardError = pipe;
 
-            [task launch];
+            [self tqslRunStarted];
+            @try {
+                [task launch];
+            } @catch (NSException *launchFailed) {
+                [self tqslRunEnded];
+                @throw;
+            }
             [task waitUntilExit];
+            [self tqslRunEnded];
 
             NSData *data = [[pipe fileHandleForReading] readDataToEndOfFile];
             NSString *outStr = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
@@ -797,8 +1106,15 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
             task.standardOutput = pipe;
             task.standardError = pipe;
 
-            [task launch];
+            [self tqslRunStarted];
+            @try {
+                [task launch];
+            } @catch (NSException *launchFailed) {
+                [self tqslRunEnded];
+                @throw;
+            }
             [task waitUntilExit];
+            [self tqslRunEnded];
 
             NSData *d = [[pipe fileHandleForReading] readDataToEndOfFile];
             NSString *outStr = [[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding] ?: @"";

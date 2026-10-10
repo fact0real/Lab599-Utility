@@ -30,6 +30,7 @@ NS_ASSUME_NONNULL_BEGIN
 // User Actions
 - (void)openCloudSettingsSheet;
 - (void)syncAllPending;
+- (void)syncSelectedContacts;   // the uploads of Sync All, for the selected rows only; downloads nothing
 - (void)exportADIF;
 - (void)importADIF;
 

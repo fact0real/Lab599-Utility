@@ -199,6 +199,15 @@ NSString * const TX500LogbookDidChangeNotification = @"TX500LogbookDidChangeNoti
     if ([self.qrzStatus isEqualToString:@"UPLOADED"] || [self.qrzStatus isEqualToString:@"CONFIRMED"]) {
         addField(@"APP_QRZLOG_STATUS", self.qrzStatus);
     }
+    // Each service's upload status in ADIF 3.1.7's own fields too, so that another program (and the
+    // import below) reads it: Y once the service has the QSO, LOTW_QSL_RCVD Y once LoTW confirmed it
+    BOOL (^has)(NSString *) = ^BOOL(NSString *status) {
+        return [status isEqualToString:@"UPLOADED"] || [status isEqualToString:@"CONFIRMED"];
+    };
+    if ([self.lotwStatus isEqualToString:@"CONFIRMED"]) addField(@"LOTW_QSL_RCVD", @"Y");
+    if (has(self.qrzStatus)) addField(@"QRZCOM_QSO_UPLOAD_STATUS", @"Y");
+    if (has(self.clublogStatus)) addField(@"CLUBLOG_QSO_UPLOAD_STATUS", @"Y");
+    if (has(self.eqslStatus)) addField(@"EQSL_QSL_SENT", @"Y");
     if (self.myPotaRef.length > 0) {
         addField(@"MY_SIG", @"POTA");
         addField(@"MY_SIG_INFO", self.myPotaRef);
@@ -302,6 +311,24 @@ NSString * const TX500LogbookDidChangeNotification = @"TX500LogbookDidChangeNoti
     if (fields[@"CQZ"]) rec.cqZone = fields[@"CQZ"];
     if (fields[@"ITUZ"]) rec.ituZone = fields[@"ITUZ"];
     if (fields[@"DXCC"]) rec.dxccCode = fields[@"DXCC"];
+
+    // Whether each service has the QSO already, from ADIF 3.1.7's fields (QSL Sent: Y, N, R, Q, I; QSO
+    // Upload Status: Y, N, M). Only Y counts as uploaded; any other value, or none, leaves it pending,
+    // N ("do not upload") too, as the app has no such state, and M (modified since) so that it goes
+    // again. A LoTW confirmation received (Y, or V on import) is CONFIRMED, as the Confirmations
+    // download marks it. QRZ: downloaded from QRZ (QRZCOM_QSO_DOWNLOAD_STATUS Y) means it is there, so
+    // UPLOADED (a download is no confirmation); QRZ's confirmation (APP_QRZLOG_STATUS C or CONFIRMED,
+    // the app's own value, or QRZLOG_QSL_RCVD Y, which is not an ADIF 3.1.7 field) is CONFIRMED.
+    BOOL (^says)(NSString *, NSString *) = ^BOOL(NSString *tag, NSString *value) {
+        return [[fields[tag] uppercaseString] isEqualToString:value];
+    };
+    if (says(@"LOTW_QSL_SENT", @"Y")) rec.lotwStatus = @"UPLOADED";
+    if (says(@"LOTW_QSL_RCVD", @"Y") || says(@"LOTW_QSL_RCVD", @"V")) rec.lotwStatus = @"CONFIRMED";
+    if (says(@"QRZCOM_QSO_UPLOAD_STATUS", @"Y") || says(@"QRZCOM_QSO_DOWNLOAD_STATUS", @"Y")) rec.qrzStatus = @"UPLOADED";
+    if (says(@"APP_QRZLOG_STATUS", @"UPLOADED")) rec.qrzStatus = @"UPLOADED";
+    if (says(@"APP_QRZLOG_STATUS", @"CONFIRMED") || says(@"APP_QRZLOG_STATUS", @"C") || says(@"QRZLOG_QSL_RCVD", @"Y")) rec.qrzStatus = @"CONFIRMED";
+    if (says(@"CLUBLOG_QSO_UPLOAD_STATUS", @"Y")) rec.clublogStatus = @"UPLOADED";
+    if (says(@"EQSL_QSL_SENT", @"Y")) rec.eqslStatus = @"UPLOADED";
 
     return rec;
 }
@@ -1104,7 +1131,10 @@ static const char *kQSOSelectColumns =
             return;
         }
 
-        NSString *sql = [NSString stringWithFormat:@"UPDATE qsos SET %@ = ?1, updated_at = ?2 WHERE uuid = ?3;", col];
+        // an upload never lowers a status: UPLOADED does not replace CONFIRMED, and ERROR (a failed try)
+        // replaces neither of them
+        NSString *sql = [NSString stringWithFormat:@"UPDATE qsos SET %@ = ?1, updated_at = ?2 WHERE uuid = ?3 AND "
+                         "NOT (%@ = 'CONFIRMED' AND ?1 IN ('UPLOADED', 'ERROR')) AND NOT (%@ = 'UPLOADED' AND ?1 = 'ERROR');", col, col, col];
         sqlite3_stmt *stmt = NULL;
         if (sqlite3_prepare_v2(self->_db, [sql UTF8String], -1, &stmt, NULL) == SQLITE_OK) {
             sqlite3_bind_text(stmt, 1, [status UTF8String], -1, SQLITE_TRANSIENT);
@@ -1133,7 +1163,11 @@ static const char *kQSOSelectColumns =
 #pragma mark - Subsystem Adapters
 
 - (BOOL)addContactFromFT8:(TX500FT8LoggedQSO *)ft8QSO myCall:(nullable NSString *)myCall myGrid:(nullable NSString *)myGrid {
-    if (!ft8QSO) return NO;
+    return [self savedContactFromFT8:ft8QSO myCall:myCall myGrid:myGrid] != nil;
+}
+
+- (nullable TX500LogRecord *)savedContactFromFT8:(TX500FT8LoggedQSO *)ft8QSO myCall:(nullable NSString *)myCall myGrid:(nullable NSString *)myGrid {
+    if (!ft8QSO) return nil;
     TX500LogRecord *rec = [[TX500LogRecord alloc] init];
     rec.callsign = [ft8QSO.callsign uppercaseString];
     rec.band = [ft8QSO.band lowercaseString];
@@ -1159,11 +1193,15 @@ static const char *kQSOSelectColumns =
     rec.timeOn = [dfTime stringFromDate:d];
     rec.timeOff = rec.timeOn;
 
-    return [self saveContact:rec error:nil];
+    return [self saveContact:rec error:nil] ? rec : nil;
 }
 
 - (BOOL)addContactFromCW:(TX500QSOContact *)cwContact myCall:(nullable NSString *)myCall myGrid:(nullable NSString *)myGrid {
-    if (!cwContact) return NO;
+    return [self savedContactFromCW:cwContact myCall:myCall myGrid:myGrid] != nil;
+}
+
+- (nullable TX500LogRecord *)savedContactFromCW:(TX500QSOContact *)cwContact myCall:(nullable NSString *)myCall myGrid:(nullable NSString *)myGrid {
+    if (!cwContact) return nil;
     TX500LogRecord *rec = [[TX500LogRecord alloc] init];
     rec.callsign = [cwContact.callsign uppercaseString];
     rec.band = [cwContact.band lowercaseString];
@@ -1181,7 +1219,7 @@ static const char *kQSOSelectColumns =
     if (cwContact.timeOn.length >= 4) rec.timeOn = cwContact.timeOn;
     rec.timeOff = rec.timeOn;
 
-    return [self saveContact:rec error:nil];
+    return [self saveContact:rec error:nil] ? rec : nil;
 }
 
 #pragma mark - ADIF Export & Import
@@ -1206,6 +1244,49 @@ static const char *kQSOSelectColumns =
 - (NSInteger)importADIFFromFileURL:(NSURL *)fileURL
                    duplicatesCount:(NSInteger * _Nullable)outDuplicates
                              error:(NSError **)error {
+    return [self importADIFFromFileURL:fileURL duplicatesCount:outDuplicates statusUpdatesCount:NULL error:error];
+}
+
+static NSInteger TX500CloudStatusRank(NSString *status) {
+    if ([status isEqualToString:@"CONFIRMED"]) return 2;
+    if ([status isEqualToString:@"UPLOADED"]) return 1;
+    return 0;   // pending: NONE, QUEUED, ERROR or none
+}
+
+// The upload statuses given (@[uuid, service, status]) raised in one transaction, each only where it is
+// higher than the one stored (pending, then UPLOADED, then CONFIRMED). Gives how many really changed, and
+// posts nothing: the import posts once.
+- (NSInteger)raiseCloudStatuses:(NSArray<NSArray<NSString *> *> *)raises {
+    __block NSInteger changed = 0;
+    if (raises.count == 0) return 0;
+    NSDictionary<NSString *, NSString *> *columns = @{@"QRZ": @"qrz_status", @"ClubLog": @"clublog_status", @"eQSL": @"eqsl_status", @"LoTW": @"lotw_status"};
+    dispatch_sync(self.dbQueue, ^{
+        if (!self->_db) return;
+        sqlite3_exec(self->_db, "BEGIN;", NULL, NULL, NULL);
+        for (NSArray<NSString *> *raise in raises) {
+            NSString *col = columns[raise[1]];
+            if (!col) continue;
+            NSString *rank = [NSString stringWithFormat:@"(CASE %@ WHEN 'CONFIRMED' THEN 2 WHEN 'UPLOADED' THEN 1 ELSE 0 END)", col];
+            NSString *sql = [NSString stringWithFormat:@"UPDATE qsos SET %@ = ?1, updated_at = ?2 WHERE uuid = ?3 AND %@ < "
+                             "(CASE ?1 WHEN 'CONFIRMED' THEN 2 WHEN 'UPLOADED' THEN 1 ELSE 0 END);", col, rank];
+            sqlite3_stmt *stmt = NULL;
+            if (sqlite3_prepare_v2(self->_db, [sql UTF8String], -1, &stmt, NULL) == SQLITE_OK) {
+                sqlite3_bind_text(stmt, 1, [raise[2] UTF8String], -1, SQLITE_TRANSIENT);
+                sqlite3_bind_double(stmt, 2, [[NSDate date] timeIntervalSince1970]);
+                sqlite3_bind_text(stmt, 3, [raise[0] UTF8String], -1, SQLITE_TRANSIENT);
+                if (sqlite3_step(stmt) == SQLITE_DONE) changed += sqlite3_changes(self->_db);
+                sqlite3_finalize(stmt);
+            }
+        }
+        sqlite3_exec(self->_db, "COMMIT;", NULL, NULL, NULL);
+    });
+    return changed;
+}
+
+- (NSInteger)importADIFFromFileURL:(NSURL *)fileURL
+                   duplicatesCount:(NSInteger * _Nullable)outDuplicates
+                statusUpdatesCount:(NSInteger * _Nullable)outUpdates
+                             error:(NSError **)error {
     NSString *content = [NSString stringWithContentsOfURL:fileURL encoding:NSUTF8StringEncoding error:error];
     if (!content) {
         content = [NSString stringWithContentsOfURL:fileURL encoding:NSISOLatin1StringEncoding error:error];
@@ -1221,15 +1302,19 @@ static const char *kQSOSelectColumns =
     // Load existing for deduplication
     NSArray<TX500LogRecord *> *existing = [self allContacts];
     NSMutableSet<NSString *> *existingKeys = [NSMutableSet set];
+    NSMutableDictionary<NSString *, TX500LogRecord *> *existingByKey = [NSMutableDictionary dictionary];
     for (TX500LogRecord *r in existing) {
         NSString *shortTime = r.timeOn.length >= 4 ? [r.timeOn substringToIndex:4] : @"";
         NSString *k = [NSString stringWithFormat:@"%@_%@_%@_%@_%@",
                        [r.callsign uppercaseString], r.qsoDate, shortTime, [r.band lowercaseString], [r.mode uppercaseString]];
         [existingKeys addObject:k];
+        existingByKey[k] = r;
     }
 
     NSInteger imported = 0;
     NSInteger duplicates = 0;
+    NSInteger updates = 0;
+    NSMutableArray<NSArray<NSString *> *> *raises = [NSMutableArray array];
 
     for (NSString *chunk in rawRecords) {
         if (![chunk localizedCaseInsensitiveContainsString:@"<CALL"]) continue;
@@ -1241,16 +1326,43 @@ static const char *kQSOSelectColumns =
                        [rec.callsign uppercaseString], rec.qsoDate, shortTime, [rec.band lowercaseString], [rec.mode uppercaseString]];
         if ([existingKeys containsObject:k]) {
             duplicates++;
+            // a QSO already here: the file only brings its upload statuses up (pending, then UPLOADED,
+            // then CONFIRMED), never down, and nothing else of it changes
+            TX500LogRecord *here = existingByKey[k];
+            NSDictionary<NSString *, NSArray<NSString *> *> *both = !here ? @{} :
+                @{@"QRZ": @[here.qrzStatus ?: @"", rec.qrzStatus ?: @""], @"ClubLog": @[here.clublogStatus ?: @"", rec.clublogStatus ?: @""],
+                  @"eQSL": @[here.eqslStatus ?: @"", rec.eqslStatus ?: @""], @"LoTW": @[here.lotwStatus ?: @"", rec.lotwStatus ?: @""]};
+            for (NSString *service in both) {
+                // what the file says the service has goes to raiseCloudStatuses:, which only raises
+                NSString *raised = both[service][1];
+                if (TX500CloudStatusRank(raised) == 0) continue;
+                [raises addObject:@[here.uuid, service, raised]];
+                if (TX500CloudStatusRank(raised) <= TX500CloudStatusRank(both[service][0])) continue;
+                // and in the copy kept here, for the same QSO further down the file
+                if ([service isEqualToString:@"QRZ"]) here.qrzStatus = raised;
+                else if ([service isEqualToString:@"ClubLog"]) here.clublogStatus = raised;
+                else if ([service isEqualToString:@"eQSL"]) here.eqslStatus = raised;
+                else here.lotwStatus = raised;
+            }
             continue;
         }
 
         if ([self saveContact:rec error:nil]) {
             [existingKeys addObject:k];
+            existingByKey[k] = rec;
             imported++;
         }
     }
 
+    // the statuses brought up, all at once, and one notice for them
+    updates = [self raiseCloudStatuses:raises];
+    if (updates > 0) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [[NSNotificationCenter defaultCenter] postNotificationName:TX500LogbookDidChangeNotification object:self];
+        });
+    }
     if (outDuplicates) *outDuplicates = duplicates;
+    if (outUpdates) *outUpdates = updates;
     return imported;
 }
 

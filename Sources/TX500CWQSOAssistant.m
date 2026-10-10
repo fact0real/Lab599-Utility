@@ -469,10 +469,12 @@
     }
 
     // Also persist to central SQLite logbook and trigger zero-click cloud uploads
-    [[TX500LogbookManager sharedManager] addContactFromCW:contact
+    TX500LogRecord *saved = [[TX500LogbookManager sharedManager] savedContactFromCW:contact
                                                    myCall:self.myCallsign
                                                    myGrid:nil];
-    TX500LogRecord *cloudRec = [[TX500LogRecord alloc] init];
+    // the row saved itself goes up, so that each service's status lands on it (the lines below give
+    // it the values it already has)
+    TX500LogRecord *cloudRec = saved ?: [[TX500LogRecord alloc] init];
     cloudRec.callsign = [contact.callsign uppercaseString];
     cloudRec.band = [contact.band lowercaseString];
     cloudRec.frequencyHz = (uint64_t)(contact.frequencyMHz * 1e6);

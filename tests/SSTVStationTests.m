@@ -12,6 +12,7 @@
 #import "TX500FaxEngine.h"
 #import "TX500CloudSyncEngine.h"
 #import "TX500LogbookController.h"
+#import "TX500SecretStore.h"
 #import <objc/runtime.h>
 
 // the Logbook's own form, as its buttons reach it (these are the controller's own, not declared in its header)
@@ -801,6 +802,58 @@ int main(int argc, const char *argv[]) {
                       comment.length > 0 && [after.notes isEqualToString:comment] && [after.band isEqualToString:re.band] && uploads == 1,
                       [NSString stringWithFormat:@"Logbook: an SSTV contact with empty reports, edited and saved with another callsign, stays SSTV with its reports empty and its comment, and is uploaded once, as any QSO saved there (mode %@, sent '%@', rcvd '%@', comment kept %d, uploads %ld)",
                        after.mode, after.rstSent, after.rstRcvd, [after.notes isEqualToString:comment], (long)uploads]);
+            }
+            // Sync: an SSTV QSO recorded on the form with the upload unticked is not uploaded then, stays
+            // pending in the Logbook, and Sync All sends it like any other QSO
+            {
+                TX500LogbookManager *shared = [TX500LogbookManager sharedManager];
+                NSURL *gs = [NSURL fileURLWithPath:[root stringByAppendingPathComponent:@"gallery-sync"] isDirectory:YES];
+                TX500SSTVStationController *cs = NewController(defs, gs, nil);   // the app's own logbook, as on the screen
+                cs.catFrequencyProvider = ^NSNumber * { return @(14230000); };
+                cs.radioSourceFactory = ^id<TX500SSTVAudioSource> {
+                    SSTVTestRadio *r = [SSTVTestRadio new];
+                    r.file = [[TX500SSTVFileSource alloc] initWithURL:Fixture(@"M1.wav") error:nil];
+                    return r;
+                };
+                NSMutableSet<NSString *> *known = [NSMutableSet set];
+                for (TX500LogRecord *r in shared.allContacts) [known addObject:r.uuid];
+                __block NSInteger atOnce = 0;
+                Method upNow = class_getInstanceMethod(TX500CloudSyncEngine.class, @selector(uploadContactImmediately:completion:));
+                IMP realNow = method_setImplementation(upNow, imp_implementationWithBlock(^(id engine, TX500LogRecord *r, void (^done)(BOOL, NSString *)) {
+                    (void)engine; (void)r; atOnce++;
+                    if (done) done(YES, @"");
+                }));
+                [cs setEnabled:YES error:nil]; [cs setEnabled:NO error:nil];
+                cs.callField.stringValue = @"EP2AES";
+                BOOL recorded = cs.uploadCheckbox.state == NSControlStateValueOff && [cs recordQSO:nil];
+                TX500LogRecord *fromForm = nil;
+                for (TX500LogRecord *r in shared.allContacts) if (![known containsObject:r.uuid]) fromForm = r;
+                BOOL pendingEverywhere = fromForm && [fromForm.mode isEqualToString:@"SSTV"] &&
+                    [fromForm.qrzStatus isEqualToString:@"NONE"] && [fromForm.clublogStatus isEqualToString:@"NONE"] &&
+                    [fromForm.eqslStatus isEqualToString:@"NONE"] && [fromForm.lotwStatus isEqualToString:@"NONE"];
+                // the cloud stood in for while Sync runs: what it sends is noted, and nothing leaves the Mac
+                NSMutableArray<NSString *> *sent = [NSMutableArray array];
+                Method upTo = class_getInstanceMethod(TX500CloudSyncEngine.class, @selector(uploadContact:toServices:completion:));
+                IMP realTo = method_setImplementation(upTo, imp_implementationWithBlock(^(id engine, TX500LogRecord *r, NSArray<NSString *> *services, void (^done)(BOOL, NSString *)) {
+                    (void)engine;
+                    @synchronized (sent) { [sent addObject:[NSString stringWithFormat:@"%@:%@", r.uuid, [services componentsJoinedByString:@","]]]; }
+                    if (done) done(YES, @"");
+                }));
+                BOOL keyStored = TX500StoreSecret(@"TX500_QRZ_APIKey", @"test-qrz-key");
+                __block BOOL synced = NO;
+                [[TX500CloudSyncEngine sharedEngine] syncContacts:nil completion:^(NSInteger u, NSInteger f, NSString *summary) {
+                    (void)u; (void)f; (void)summary; synced = YES;
+                }];
+                NSDate *limit = [NSDate dateWithTimeIntervalSinceNow:10];
+                while (!synced && limit.timeIntervalSinceNow > 0) [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+                method_setImplementation(upTo, realTo);
+                method_setImplementation(upNow, realNow);
+                TX500RemoveSecret(@"TX500_QRZ_APIKey");
+                BOOL sentBySync = NO;
+                @synchronized (sent) { sentBySync = fromForm && [sent containsObject:[fromForm.uuid stringByAppendingString:@":QRZ"]]; }
+                Check(recorded && atOnce == 0 && pendingEverywhere && keyStored && synced && sentBySync,
+                      [NSString stringWithFormat:@"Sync: an SSTV QSO recorded on the form with the upload unticked is not uploaded then, stays pending on every service, and Sync All sends it (recorded %d, uploaded at once %ld, pending %d, sent by Sync %d)",
+                       recorded, (long)atOnce, pendingEverywhere, sentBySync]);
             }
             // PRO-9 (4): the controls themselves, pressed as the operator presses them
             NSUInteger waitBefore = c3.waitingForms;

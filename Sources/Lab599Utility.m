@@ -19,6 +19,7 @@
 #import "TX500VoiceKeyerController.h"
 #import "TX500StationController.h"
 #import "TX500DXClusterController.h"
+#import "TX500SSTVStationController.h"
 #import "TX500PSKReporter.h"
 #import "TX500FT8AudioEngine.h"
 #import "TX500LogbookController.h"
@@ -274,6 +275,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 @property(nonatomic, strong) TX500StationCore *stationCore;
 @property(nonatomic, strong) TX500StationController *stationController;
 @property(nonatomic, strong) TX500DXClusterController *clusterController;
+@property(nonatomic, strong) TX500SSTVStationController *sstvController;
 @property(nonatomic) BOOL preparingClusterDraft;
 @property(nonatomic, strong) id stationKeyMonitor;
 @property(nonatomic, copy) NSString *stationPort;
@@ -651,7 +653,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 
     // Setup legacy operation picker for CLI arguments and underlying state
     self.operationPicker = [NSSegmentedControl segmentedControlWithLabels:@[
-        @"Firmware Update", @"Time Sync", @"Telemetry", @"Radio Screen", @"CAT Studio", @"Settings", @"Memory", @"CAT Connection", @"Documentation", @"Feedback & Suggestion", @"CW Station", @"Live Audio", @"FT8 / FT4 Digital", @"Logbook & Cloud", @"Voice Keyer", @"Station", @"DX Cluster", @"Help"
+        @"Firmware Update", @"Time Sync", @"Telemetry", @"Radio Screen", @"CAT Studio", @"Settings", @"Memory", @"CAT Connection", @"Documentation", @"Feedback & Suggestion", @"CW Station", @"Live Audio", @"FT8 / FT4 Digital", @"Logbook & Cloud", @"Voice Keyer", @"Station", @"DX Cluster", @"Help", @"SSTV"
     ] trackingMode:NSSegmentSwitchTrackingSelectOne target:self action:@selector(operationChanged:)];
     self.operationPicker.selectedSegment = 0;
     self.operationPicker.hidden = YES;
@@ -760,9 +762,10 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     TX500SidebarButton *btnCluster = [[TX500SidebarButton alloc] initWithTitle:@"DX Cluster" iconName:@"globe" tag:16 target:self action:@selector(sidebarItemClicked:)];
     TX500SidebarButton *btnStation = [[TX500SidebarButton alloc] initWithTitle:@"Station" iconName:@"slider.horizontal.3" tag:15 target:self action:@selector(sidebarItemClicked:)];
     TX500SidebarButton *btnVoice = [[TX500SidebarButton alloc] initWithTitle:@"Voice Keyer" iconName:@"mic.badge.plus" tag:14 target:self action:@selector(sidebarItemClicked:)];
+    TX500SidebarButton *btnSSTV = [[TX500SidebarButton alloc] initWithTitle:@"SSTV" iconName:@"photo.on.rectangle" tag:18 target:self action:@selector(sidebarItemClicked:)];
 
     [self.sidebarItems addObjectsFromArray:@[
-        btnFw, btnTime, btnTelemetry, btnScreen, btnCat, btnSettings, btnMemory, btnDriver, btnDocs, btnHelp, btnFeedback, btnCW, btnAudio, btnFT8, btnLogbook, btnVoice, btnStation, btnCluster
+        btnFw, btnTime, btnTelemetry, btnScreen, btnCat, btnSettings, btnMemory, btnDriver, btnDocs, btnHelp, btnFeedback, btnCW, btnAudio, btnFT8, btnLogbook, btnVoice, btnStation, btnCluster, btnSSTV
     ]];
 
     for (TX500SidebarButton *b in self.sidebarItems) {
@@ -787,7 +790,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     NSStackView *sidebarStack = [NSStackView stackViewWithViews:@[
         brandHeaderStack,
         makeSectionHeader(@"RADIO & LIVE"),
-        btnStation, btnCluster, btnFT8, btnCW, btnVoice, btnAudio, btnLogbook, btnScreen, btnTelemetry, btnCat,
+        btnStation, btnCluster, btnFT8, btnSSTV, btnCW, btnVoice, btnAudio, btnLogbook, btnScreen, btnTelemetry, btnCat,
         makeSectionHeader(@"CONFIGURATION"),
         btnTime, btnSettings, btnMemory,
         makeSectionHeader(@"FIRMWARE & CONNECTION"),
@@ -1305,6 +1308,34 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     };
     self.voiceKeyerController.view.hidden = YES;
 
+    // SSTV: receive only, off by default; it listens to the station's audio input route (shared)
+    self.sstvController = [TX500SSTVStationController new];
+    self.sstvController.radioSourceFactory = ^id<TX500SSTVAudioSource> {
+        // only the radio input the operator chose in the station profile: never a device picked on
+        // its own, nor the system's default input, which may be the Mac's microphone (SEG-2)
+        return [[TX500SSTVRadioSource alloc] initWithDeviceUID:TX500StationStore.sharedStore.activeProfile[@"radioInput"]];
+    };
+    self.sstvController.catFrequencyProvider = ^NSNumber * {
+        // the radio's frequency only when it answers now; never a stored or default value. With no CAT port
+        // there is nothing to ask: no read, so the Station screen is not told the radio failed (LAB-07)
+        if (![weakSelf currentStationPort].length) return nil;
+        NSDictionary *state = [weakSelf.stationCore readState:nil];
+        uint64_t hz = [state[@"frequency"] unsignedLongLongValue];
+        return hz ? @(hz) : nil;
+    };
+    self.sstvController.myCallsignProvider = ^NSString * {
+        // the station profile's own callsign, from the same place as its grid (N2-decisions-registre-6)
+        NSString *call = TX500StationStore.sharedStore.activeProfile[@"call"];
+        return [call isKindOfClass:NSString.class] && call.length ? call : nil;
+    };
+    self.sstvController.myGridProvider = ^NSString * {
+        // the grid of the station profile, only when the operator has one there for the logs (SEG-19)
+        NSString *grid = TX500StationStore.sharedStore.activeProfile[@"grid"];
+        return [grid isKindOfClass:NSString.class] && grid.length ? grid : nil;
+    };
+    self.sstvController.logHandler = ^(NSString *message) { [weakSelf appendLog:message]; };
+    self.sstvController.view.hidden = YES;
+
     // Comprehensive Logbook & Cloud Ecosystem Controller
     self.logbookController = [TX500LogbookController new];
     self.logbookController.selectedPortProvider = ^NSString * { return weakSelf.hasPorts ? weakSelf.portMenu.selectedItem.title : nil; };
@@ -1359,7 +1390,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 
     NSStackView *featureStack = [NSStackView stackViewWithViews:@[
         fileRow, self.radioPreviewBox, self.powerSafetyBox, timeRow,
-        self.audioMonitorController.view, self.cwStationController.view, self.ft8StationController.view, self.voiceKeyerController.view, self.stationController.view, self.clusterController.view, self.logbookController.view, self.telemetryController.view, self.screenController.view,
+        self.audioMonitorController.view, self.cwStationController.view, self.ft8StationController.view, self.sstvController.view, self.voiceKeyerController.view, self.stationController.view, self.clusterController.view, self.logbookController.view, self.telemetryController.view, self.screenController.view,
         self.tools.view,
         self.driverController.view, self.docsController.view, self.helpController.view, self.feedbackController.view,
         self.progressBar, self.statusLabel,
@@ -1386,6 +1417,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         self.audioMonitorController.view,
         self.cwStationController.view,
         self.ft8StationController.view,
+        self.sstvController.view,
         self.voiceKeyerController.view,
         self.stationController.view,
         self.clusterController.view,
@@ -2128,12 +2160,14 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     BOOL isStation=(operation==15);
     BOOL isCluster=(operation==16);
     BOOL isHelp=(operation==17);
+    BOOL isSSTV=(operation==18);
     BOOL leavingVoice=!isVoice && self.voiceOwnsRadio;
     BOOL exclusive=isFW || isSync || isScreen || isTools;
     NSString *desired=isVoice?@"Voice":isCWStation?@"CW":isFT8?@"Digital":isAudio?@"Audio":@"Station";
     // Station / logbook / telemetry may inspect a running digital station, but
     // cannot retune it. Switching operating modes explicitly stops the old one.
-    BOOL passive=isCluster || isStation || isLogbook || isTelemetry || isDocs || isFeedback || isDriver || isHelp;
+    // SSTV only listens (shared audio input; CAT reads of the frequency on Listen, at its notices and when a picture ends): it never retunes
+    BOOL passive=isCluster || isStation || isLogbook || isTelemetry || isDocs || isFeedback || isDriver || isHelp || isSSTV;
     if(leavingVoice && ![self.voiceKeyerController deactivate]) { self.operationPicker.selectedSegment=14; return; }
     if(exclusive || (!passive && ![self.stationCore.owner isEqual:desired])) {
         [self.ft8StationController stopStation]; [self.cwStationController stopStation];
@@ -2150,7 +2184,9 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     self.voiceKeyerController.view.hidden=!isVoice;
     self.stationController.view.hidden=!isStation;
     self.clusterController.view.hidden=!isCluster;
+    self.sstvController.view.hidden=!isSSTV;
     if(isCluster) [self.clusterController activate];
+    if(isSSTV) [self.sstvController activate];
     if(isVoice) [self.voiceKeyerController activate];
     if(isStation) [self.stationController activate];
 
@@ -2179,7 +2215,8 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
             @14: @"Voice Keyer · Auto-CQ & Live Replies",
             @15: @"Station · Frequencies, Profiles & Controls",
             @16: @"DX Cluster · Discovery & Contact History",
-            @17: @"Help · Using Lab599 Utility"
+            @17: @"Help · Using Lab599 Utility",
+            @18: @"SSTV · Receive Pictures (off by default)"
         };
     });
     self.sectionTitleLabel.stringValue = titles[@(operation)] ?: @"Lab599 Utility";
@@ -2205,7 +2242,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     (void)ft8Active;
     [self updateConnectionStatusBar];
 
-    self.cardSpacer.hidden = isCluster || isStation || isVoice || isFT8 || isCWStation || isAudio || isLogbook || isTelemetry || isScreen || isHelp;
+    self.cardSpacer.hidden = isCluster || isStation || isVoice || isFT8 || isSSTV || isCWStation || isAudio || isLogbook || isTelemetry || isScreen || isHelp;
 
     self.telemetryController.view.hidden = !isTelemetry;
     self.screenController.view.hidden = !isScreen;

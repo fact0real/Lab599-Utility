@@ -144,6 +144,8 @@ clang -O2 -Wall -Wextra -Wno-unused-parameter -Werror -fobjc-arc \
     Sources/TX500DXCluster.m Sources/TX500DXClusterController.m \
     Sources/TX500StationCore.m Sources/TX500StationStore.m Sources/TX500PSKReporter.m Sources/TX500StationController.m \
     Sources/TX500VoiceCATRadio.m Sources/TX500VoiceAudio.m Sources/TX500VoiceLibrary.m Sources/TX500VoiceKeyer.m Sources/TX500VoiceKeyerController.m \
+    Sources/TX500SSTVEngine.m Sources/TX500SSTVStationController.m Sources/TX500SSTVOptionNotes.m Sources/TX500SSTVLogDraft.m Sources/TX500SSTVRecordingStore.m Sources/TX500FaxEngine.m Sources/TX500FaxStationController.m \
+    Sources/sstv1/sstv_rx.c Sources/sstv1/wefax_rx.c Sources/sstv1/demod.c Sources/sstv1/modes.c Sources/sstv1/wav.c \
     Sources/cft8/ft8/constants.c Sources/cft8/ft8/crc.c Sources/cft8/ft8/encode.c Sources/cft8/ft8/decode.c Sources/cft8/ft8/ldpc.c Sources/cft8/ft8/message.c Sources/cft8/ft8/text.c Sources/cft8/fft/kiss_fft.c Sources/cft8/fft/kiss_fftr.c Sources/cft8/common/wave.c Sources/cft8/common/monitor.c Sources/cft8/shim/tx500_ft8_shim.c \
     -o "build/$BIN_NAME"
 

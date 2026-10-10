@@ -84,6 +84,18 @@
 		100001D3 /* TX500StationController.m in Sources */ = {isa = PBXBuildFile; fileRef = 200001D3 /* TX500StationController.m */; };
 		100001E0 /* TX500DXCluster.m in Sources */ = {isa = PBXBuildFile; fileRef = 200001E0 /* TX500DXCluster.m */; };
 		100001E1 /* TX500DXClusterController.m in Sources */ = {isa = PBXBuildFile; fileRef = 200001E1 /* TX500DXClusterController.m */; };
+		100004A0 /* TX500SSTVEngine.m in Sources */ = {isa = PBXBuildFile; fileRef = 200004A0 /* TX500SSTVEngine.m */; };
+		100004A1 /* TX500SSTVStationController.m in Sources */ = {isa = PBXBuildFile; fileRef = 200004A1 /* TX500SSTVStationController.m */; };
+		100004A2 /* TX500SSTVOptionNotes.m in Sources */ = {isa = PBXBuildFile; fileRef = 200004A2 /* TX500SSTVOptionNotes.m */; };
+		100004A3 /* TX500SSTVLogDraft.m in Sources */ = {isa = PBXBuildFile; fileRef = 200004A3 /* TX500SSTVLogDraft.m */; };
+		100004A8 /* TX500SSTVRecordingStore.m in Sources */ = {isa = PBXBuildFile; fileRef = 200004A8 /* TX500SSTVRecordingStore.m */; };
+		100004A4 /* sstv_rx.c in Sources */ = {isa = PBXBuildFile; fileRef = 200004A4 /* sstv_rx.c */; };
+		100004D0 /* TX500FaxEngine.m in Sources */ = {isa = PBXBuildFile; fileRef = 200004D0 /* TX500FaxEngine.m */; };
+		100004D1 /* TX500FaxStationController.m in Sources */ = {isa = PBXBuildFile; fileRef = 200004D1 /* TX500FaxStationController.m */; };
+		100004D2 /* wefax_rx.c in Sources */ = {isa = PBXBuildFile; fileRef = 200004D2 /* wefax_rx.c */; };
+		100004A5 /* demod.c in Sources */ = {isa = PBXBuildFile; fileRef = 200004A5 /* demod.c */; };
+		100004A6 /* modes.c in Sources */ = {isa = PBXBuildFile; fileRef = 200004A6 /* modes.c */; };
+		100004A7 /* wav.c in Sources */ = {isa = PBXBuildFile; fileRef = 200004A7 /* wav.c */; };
 		100001E2 /* Network.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 200001E2 /* Network.framework */; };
 /* End PBXBuildFile section */
 
@@ -217,6 +229,28 @@
 		200002E0 /* TX500DXCluster.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TX500DXCluster.h; sourceTree = "<group>"; };
 		200001E1 /* TX500DXClusterController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TX500DXClusterController.m; sourceTree = "<group>"; };
 		200002E1 /* TX500DXClusterController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TX500DXClusterController.h; sourceTree = "<group>"; };
+		200004A0 /* TX500SSTVEngine.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TX500SSTVEngine.m; sourceTree = "<group>"; };
+		200004A1 /* TX500SSTVStationController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TX500SSTVStationController.m; sourceTree = "<group>"; };
+		200004A2 /* TX500SSTVOptionNotes.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TX500SSTVOptionNotes.m; sourceTree = "<group>"; };
+		200004A3 /* TX500SSTVLogDraft.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TX500SSTVLogDraft.m; sourceTree = "<group>"; };
+		200004A8 /* TX500SSTVRecordingStore.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TX500SSTVRecordingStore.m; sourceTree = "<group>"; };
+		200004C4 /* TX500SSTVRecordingStore.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TX500SSTVRecordingStore.h; sourceTree = "<group>"; };
+		200004A4 /* sstv_rx.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = "sstv1/sstv_rx.c"; sourceTree = "<group>"; };
+		200004D0 /* TX500FaxEngine.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TX500FaxEngine.m; sourceTree = "<group>"; };
+		200004D1 /* TX500FaxStationController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TX500FaxStationController.m; sourceTree = "<group>"; };
+		200004D2 /* wefax_rx.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = "sstv1/wefax_rx.c"; sourceTree = "<group>"; };
+		200004D3 /* TX500FaxEngine.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TX500FaxEngine.h; sourceTree = "<group>"; };
+		200004D4 /* TX500FaxStationController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TX500FaxStationController.h; sourceTree = "<group>"; };
+		200004A5 /* demod.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = "sstv1/demod.c"; sourceTree = "<group>"; };
+		200004A6 /* modes.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = "sstv1/modes.c"; sourceTree = "<group>"; };
+		200004A7 /* wav.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = "sstv1/wav.c"; sourceTree = "<group>"; };
+		200004B0 /* sstv1.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "sstv1/sstv1.h"; sourceTree = "<group>"; };
+		200004B1 /* internal.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "sstv1/internal.h"; sourceTree = "<group>"; };
+		200004B2 /* wav.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "sstv1/wav.h"; sourceTree = "<group>"; };
+		200004C0 /* TX500SSTVEngine.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TX500SSTVEngine.h; sourceTree = "<group>"; };
+		200004C1 /* TX500SSTVStationController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TX500SSTVStationController.h; sourceTree = "<group>"; };
+		200004C2 /* TX500SSTVOptionNotes.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TX500SSTVOptionNotes.h; sourceTree = "<group>"; };
+		200004C3 /* TX500SSTVLogDraft.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TX500SSTVLogDraft.h; sourceTree = "<group>"; };
 		200001E2 /* Network.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Network.framework; path = System/Library/Frameworks/Network.framework; sourceTree = SDKROOT; };
 /* End PBXFileReference section */
 
@@ -256,6 +290,21 @@
 			children = (
 				200001D0 /* TX500StationCore.m */,
 				200001E1 /* TX500DXClusterController.m */,
+				200004A0 /* TX500SSTVEngine.m */,
+				200004A1 /* TX500SSTVStationController.m */,
+				200004A2 /* TX500SSTVOptionNotes.m */,
+				200004A3 /* TX500SSTVLogDraft.m */,
+				200004A8 /* TX500SSTVRecordingStore.m */,
+				200004A4 /* sstv_rx.c */,
+				200004D0 /* TX500FaxEngine.m */,
+				200004D1 /* TX500FaxStationController.m */,
+				200004D2 /* wefax_rx.c */,
+				200004A5 /* demod.c */,
+				200004A6 /* modes.c */,
+				200004A7 /* wav.c */,
+				200004B0 /* sstv1.h */,
+				200004B1 /* internal.h */,
+				200004B2 /* wav.h */,
 				200001E0 /* TX500DXCluster.m */,
 				200001D1 /* TX500StationStore.m */,
 				200001D2 /* TX500PSKReporter.m */,
@@ -326,6 +375,13 @@
 			children = (
 				200002D0 /* TX500StationCore.h */,
 				200002E1 /* TX500DXClusterController.h */,
+				200004C0 /* TX500SSTVEngine.h */,
+				200004C1 /* TX500SSTVStationController.h */,
+				200004C2 /* TX500SSTVOptionNotes.h */,
+				200004C3 /* TX500SSTVLogDraft.h */,
+				200004C4 /* TX500SSTVRecordingStore.h */,
+				200004D3 /* TX500FaxEngine.h */,
+				200004D4 /* TX500FaxStationController.h */,
 				200002E0 /* TX500DXCluster.h */,
 				200002D1 /* TX500StationStore.h */,
 				200002D2 /* TX500PSKReporter.h */,
@@ -491,6 +547,18 @@
 			files = (
 				100001D0 /* TX500StationCore.m in Sources */,
 				100001E1 /* TX500DXClusterController.m in Sources */,
+				100004A0 /* TX500SSTVEngine.m in Sources */,
+				100004A1 /* TX500SSTVStationController.m in Sources */,
+				100004A2 /* TX500SSTVOptionNotes.m in Sources */,
+				100004A3 /* TX500SSTVLogDraft.m in Sources */,
+				100004A8 /* TX500SSTVRecordingStore.m in Sources */,
+				100004A4 /* sstv_rx.c in Sources */,
+				100004D0 /* TX500FaxEngine.m in Sources */,
+				100004D1 /* TX500FaxStationController.m in Sources */,
+				100004D2 /* wefax_rx.c in Sources */,
+				100004A5 /* demod.c in Sources */,
+				100004A6 /* modes.c in Sources */,
+				100004A7 /* wav.c in Sources */,
 				100001E0 /* TX500DXCluster.m in Sources */,
 				100001D1 /* TX500StationStore.m in Sources */,
 				100001D2 /* TX500PSKReporter.m in Sources */,

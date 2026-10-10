@@ -2240,6 +2240,9 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
                     unichar mCode = [mdReply characterAtIndex:2];
                     if (mCode == '3') modeStr = @"CW";
                     else if (mCode == '7') modeStr = @"CW-R";
+                    else if (mCode == '2') modeStr = @"USB";
+                    else if (mCode == '1') modeStr = @"LSB";
+                    else if (mCode == '6') modeStr = @"DIG";
                 }
                 dispatch_async(dispatch_get_main_queue(), ^{
                     [weakSelf.cwStationController updateFrequencyHz:freqHz mode:modeStr];

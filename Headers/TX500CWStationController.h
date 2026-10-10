@@ -36,6 +36,10 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)updateFrequencyHz:(uint64_t)freqHz mode:(NSString *)mode;
 /// Supplies a default only until the operator chooses an input in CW Station.
 - (void)applyStationInputDeviceUID:(nullable NSString *)uid;
+/// Switches the transceiver to CW mode (MD3;) via CAT unless the operator chose a custom mode.
+- (void)prepareRadioForCWMode;
+@property (nonatomic, copy) NSString *operatingMode;
+@property (nonatomic) BOOL userHasChosenCustomMode;
 
 @end
 

@@ -53,6 +53,7 @@ typedef NS_ENUM(NSInteger, TX500QSOState) {
 @property (nonatomic, copy) NSString *activeTargetCallsign;
 @property (nonatomic, copy) NSString *activeRstSent;
 @property (nonatomic, copy) NSString *activeRstRcvd;
+@property (nonatomic, copy, nullable) NSString *activeExchangeRcvd;
 @property (nonatomic, copy) NSString *activeName;
 @property (nonatomic, copy) NSString *activeQTH;
 @property (nonatomic, copy) NSString *myCallsign; // default "EP2AES"

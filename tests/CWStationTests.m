@@ -10,6 +10,7 @@
 #import "TX500CWKeyer.h"
 #import "TX500CWQSOAssistant.h"
 #import "TX500CWSpectrumView.h"
+#import "TX500CWStationController.h"
 
 static void AssertTrue(BOOL condition, NSString *message) {
     if (!condition) {
@@ -180,6 +181,66 @@ int main(int argc, const char * argv[]) {
         AssertTrue(exported, @"ADIF file written successfully");
         [[NSFileManager defaultManager] removeItemAtURL:tempADIF error:nil];
         NSLog(@"PASS: ADIF 3.1 generation and file export verified.");
+
+        // 10. Test Contest Stream Ingestion with Glued Tokens (HG8W & YE3AJJ 5NN101)
+        TX500CWQSOAssistant *contestAssistant = [[TX500CWQSOAssistant alloc] init];
+        contestAssistant.myCallsign = @"EP2AES";
+        NSString *userStream = @"U N E H  E IUI D NT TTDW TESTMC TESTHG8W HG8W- TESTHG8W HG8W TESTOC TESTHG8W HG8W TESTOC TESTHG8W HG8W TE ETOC E TESTHG8W HM 8W TESTOC TESTHG8W HG8W THTGF YE3AJJ 5NN101 101  LT21T21L3GLTU QSLAU TESTHG8W HG8 TES T OG TESTHG8W HG8W TESTOC E G8W HG8W THTOC";
+        [contestAssistant processDecodedTextStream:userStream currentWPM:26.0 snrDb:18.0];
+
+        BOOL foundHG8W = NO, foundYE3AJJ = NO;
+        for (TX500CWHeardStation *st in contestAssistant.heardStations) {
+            if ([st.callsign isEqualToString:@"HG8W"]) foundHG8W = YES;
+            if ([st.callsign isEqualToString:@"YE3AJJ"]) foundYE3AJJ = YES;
+        }
+        AssertTrue(foundHG8W, @"Identified HG8W from contest CQ stream");
+        AssertTrue(foundYE3AJJ, @"Identified YE3AJJ from contest stream");
+        AssertTrue([contestAssistant.activeTargetCallsign isEqualToString:@"HG8W"], @"Active target set to HG8W");
+        AssertTrue([contestAssistant.suggestedActionTitle containsString:@"HG8W"], @"Suggested action title targets HG8W");
+        AssertTrue([contestAssistant.suggestedActionMacro isEqualToString:@"HG8W DE EP2AES K"], @"Suggested response macro is 'HG8W DE EP2AES K'");
+        NSLog(@"PASS: Contest CQ stream ingestion, glued token splitting, and contextual auto-response generation verified.");
+
+        // 11. Test Idle State Actionability & Start Calling CQ
+        TX500CWQSOAssistant *idleAssistant = [[TX500CWQSOAssistant alloc] init];
+        idleAssistant.myCallsign = @"EP2AES";
+        AssertTrue(idleAssistant.hasActionableStep == YES, @"Idle state must always be actionable");
+        AssertTrue([idleAssistant.suggestedActionTitle isEqualToString:@"▶ Start Calling CQ (F1)"], @"Title is Start Calling CQ (F1)");
+        __block NSString *idleTransmitted = nil;
+        [idleAssistant advanceQSOStepWithAction:^(NSString * _Nonnull macroToTransmit) {
+            idleTransmitted = macroToTransmit;
+        }];
+        AssertTrue(idleAssistant.qsoState == TX500QSOStateCallingCQ, @"State transitioned to CallingCQ");
+        AssertTrue([idleTransmitted containsString:@"CQ CQ DE EP2AES"], @"Transmitted CQ CQ DE EP2AES");
+        NSLog(@"PASS: Idle state actionability and CQ initiation verified.");
+
+        // 12. Test CW Station Controller Auto Mode Switching
+        TX500CWStationController *stationController = [[TX500CWStationController alloc] init];
+        __block NSMutableArray<NSString *> *controllerSentCmds = [NSMutableArray array];
+        stationController.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) {
+            [controllerSentCmds addObject:catCommand];
+            return YES;
+        };
+        [stationController prepareRadioForCWMode];
+        AssertTrue([controllerSentCmds containsObject:@"MD3;"], @"prepareRadioForCWMode sends MD3; (CW)");
+        AssertTrue([stationController.operatingMode isEqualToString:@"CW"], @"Operating mode is CW");
+
+        // User explicit override test
+        [controllerSentCmds removeAllObjects];
+        stationController.userHasChosenCustomMode = YES;
+        stationController.operatingMode = @"USB";
+        [stationController prepareRadioForCWMode];
+        AssertTrue(![controllerSentCmds containsObject:@"MD3;"], @"User explicit mode choice is preserved, not overwritten");
+        NSLog(@"PASS: Transceiver automatic CW mode switching (MD3;) and user choice preservation verified.");
+
+        // 13. Test TX Release Ownership (KY ;RX;)
+        __block BOOL sentRelease = NO;
+        keyer.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) {
+            if ([catCommand isEqualToString:@"KY ;RX;"]) sentRelease = YES;
+            return YES;
+        };
+        [keyer abortTransmission];
+        AssertTrue(sentRelease, @"Abort transmission releases TX ownership with KY ;RX;");
+        NSLog(@"PASS: CAT transmitter release (KY ;RX;) verified.");
 
         decoder.preserveDeviceSelection=YES; decoder.selectedAudioDeviceUID=@"station-test-missing-input";
         [decoder refreshAudioDevices];

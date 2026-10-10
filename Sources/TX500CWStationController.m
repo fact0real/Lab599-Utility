@@ -22,6 +22,8 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
 @property (nonatomic, strong) NSPopUpButton *audioDevicePopup;
 @property (nonatomic) BOOL hasLocalAudioSelection;
 @property (nonatomic, strong) NSButton *simulationCheckbox;
+@property (nonatomic, strong) NSPopUpButton *modePopup;
+@property (nonatomic, strong, nullable) NSTimer *autoCQMonitorTimer;
 @property (nonatomic, strong) NSSlider *pitchSlider;
 @property (nonatomic, strong) NSTextField *pitchValueLabel;
 @property (nonatomic, strong) NSButton *afcCheckbox;
@@ -75,6 +77,8 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
         } else if (@available(macOS 14.2, *)) {
             _decoder.selectedAudioDeviceUID = TX500CWSystemAudioDeviceUID;
         }
+        _operatingMode = @"CW";
+        _userHasChosenCustomMode = NO;
         _decoder.preserveDeviceSelection = YES;
         _keyer = [[TX500CWKeyer alloc] init];
         _assistant = [[TX500CWQSOAssistant alloc] init];
@@ -179,7 +183,11 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
         if (!strongSelf) return;
         strongSelf.qsoStateLabel.stringValue = desc;
         strongSelf.qsoNextActionButton.title = strongSelf.assistant.suggestedActionTitle;
-        strongSelf.qsoNextActionButton.enabled = strongSelf.assistant.hasActionableStep;
+        strongSelf.qsoNextActionButton.enabled = YES;
+        NSString *macro = strongSelf.assistant.suggestedActionMacro;
+        if (macro.length > 0 && strongSelf.txInputField.stringValue.length == 0) {
+            strongSelf.txInputField.placeholderString = [NSString stringWithFormat:@"Suggested: %@", macro];
+        }
     };
 
     self.assistant.onContactLogged = ^(TX500QSOContact *contact) {
@@ -224,14 +232,50 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
     };
 }
 
-#pragma mark - Lifecycle
+#pragma mark - Radio Mode & Lifecycle
+
+- (void)prepareRadioForCWMode {
+    if (self.userHasChosenCustomMode) {
+        return;
+    }
+    self.operatingMode = @"CW";
+    if (self.modePopup) {
+        [self.modePopup selectItemWithTag:3];
+    }
+    if (self.serialCommandSender) {
+        BOOL sent = self.serialCommandSender(@"MD3;");
+        if (sent && self.logHandler) {
+            self.logHandler(@"[CW Station] Transceiver configured for CW mode (MD3;).");
+        }
+    }
+}
+
+- (void)modePopupChanged:(NSPopUpButton *)sender {
+    NSInteger tag = sender.selectedItem.tag;
+    self.userHasChosenCustomMode = YES;
+    if (tag == 3) self.operatingMode = @"CW";
+    else if (tag == 7) self.operatingMode = @"CW-R";
+    else if (tag == 2) self.operatingMode = @"USB";
+    else if (tag == 1) self.operatingMode = @"LSB";
+    else if (tag == 6) self.operatingMode = @"DIG";
+
+    NSString *cmd = [NSString stringWithFormat:@"MD%ld;", (long)tag];
+    if (self.serialCommandSender) {
+        self.serialCommandSender(cmd);
+    }
+    if (self.logHandler) {
+        self.logHandler([NSString stringWithFormat:@"[CW Station] Mode set to %@ (%@).", sender.selectedItem.title, cmd]);
+    }
+}
 
 - (void)startStation {
+    [self prepareRadioForCWMode];
     [self.decoder refreshAudioDevices];
     [self updateAudioDeviceMenu];
 }
 
 - (void)stopStation {
+    [self stopAutoCQTimer];
     [self.decoder stopListening];
     [self.decoder stopSimulation];
     [self.keyer abortTransmission];
@@ -256,7 +300,20 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
     else if (mhz >= 28.0 && mhz <= 29.7) b = @"10m";
     else if (mhz >= 50.0 && mhz <= 54.0) b = @"6m";
     self.assistant.currentBand = b;
-    (void)mode;
+
+    if (!self.userHasChosenCustomMode) {
+        // Automatically ensure CW mode unless the user explicitly selected another mode
+        if (mode.length > 0 && ![mode isEqualToString:@"CW"] && ![mode isEqualToString:@"CW-R"]) {
+            [self prepareRadioForCWMode];
+        }
+    } else if (mode.length > 0) {
+        self.operatingMode = mode;
+        if ([mode isEqualToString:@"CW"]) [self.modePopup selectItemWithTag:3];
+        else if ([mode isEqualToString:@"CW-R"]) [self.modePopup selectItemWithTag:7];
+        else if ([mode isEqualToString:@"USB"]) [self.modePopup selectItemWithTag:2];
+        else if ([mode isEqualToString:@"LSB"]) [self.modePopup selectItemWithTag:1];
+        else if ([mode isEqualToString:@"DIG"]) [self.modePopup selectItemWithTag:6];
+    }
 }
 
 #pragma mark - UI Building
@@ -324,6 +381,44 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
     self.audioDevicePopup.translatesAutoresizingMaskIntoConstraints = NO;
     [self.audioDevicePopup.widthAnchor constraintEqualToConstant:170].active = YES;
     [self updateAudioDeviceMenu];
+
+    // Radio Mode selector (Auto CW mode switching)
+    NSTextField *modeTitle = [NSTextField labelWithString:@"Mode:"];
+    modeTitle.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
+    modeTitle.textColor = [NSColor secondaryLabelColor];
+    modeTitle.translatesAutoresizingMaskIntoConstraints = NO;
+    modeTitle.toolTip = @"Transceiver operating mode. Switches to CW automatically when decoding unless custom mode selected.";
+
+    self.modePopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+    self.modePopup.controlSize = NSControlSizeSmall;
+    self.modePopup.font = [NSFont systemFontOfSize:11];
+    self.modePopup.target = self;
+    self.modePopup.action = @selector(modePopupChanged:);
+    self.modePopup.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.modePopup.widthAnchor constraintEqualToConstant:100].active = YES;
+    self.modePopup.toolTip = @"Transceiver operating mode. Switches to CW automatically when decoding unless custom mode selected.";
+
+    NSMenuItem *itemCW = [[NSMenuItem alloc] initWithTitle:@"CW (Auto)" action:nil keyEquivalent:@""];
+    itemCW.tag = 3;
+    [self.modePopup.menu addItem:itemCW];
+
+    NSMenuItem *itemCWR = [[NSMenuItem alloc] initWithTitle:@"CW-R" action:nil keyEquivalent:@""];
+    itemCWR.tag = 7;
+    [self.modePopup.menu addItem:itemCWR];
+
+    NSMenuItem *itemUSB = [[NSMenuItem alloc] initWithTitle:@"USB" action:nil keyEquivalent:@""];
+    itemUSB.tag = 2;
+    [self.modePopup.menu addItem:itemUSB];
+
+    NSMenuItem *itemLSB = [[NSMenuItem alloc] initWithTitle:@"LSB" action:nil keyEquivalent:@""];
+    itemLSB.tag = 1;
+    [self.modePopup.menu addItem:itemLSB];
+
+    NSMenuItem *itemDIG = [[NSMenuItem alloc] initWithTitle:@"DIG" action:nil keyEquivalent:@""];
+    itemDIG.tag = 6;
+    [self.modePopup.menu addItem:itemDIG];
+
+    [self.modePopup selectItemWithTag:3];
 
     self.simulationCheckbox = [NSButton checkboxWithTitle:@"Practice / Sim" target:self action:@selector(toggleSimulation:)];
     self.simulationCheckbox.controlSize = NSControlSizeSmall;
@@ -405,6 +500,8 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
     NSStackView *r1 = [NSStackView stackViewWithViews:@[
         self.startStopDecoderButton,
         self.audioDevicePopup,
+        modeTitle,
+        self.modePopup,
         self.simulationCheckbox,
         spacer
     ]];
@@ -658,11 +755,11 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
     self.qsoStateLabel.translatesAutoresizingMaskIntoConstraints = NO;
 
     self.qsoNextActionButton = [NSButton buttonWithTitle:@"▶ Start Calling CQ (F1)" target:self action:@selector(advanceQSOAction:)];
-    self.qsoNextActionButton.bezelStyle = NSBezelStyleRegularSquare;
+    self.qsoNextActionButton.bezelStyle = NSBezelStyleRounded;
     self.qsoNextActionButton.font = [NSFont systemFontOfSize:12 weight:NSFontWeightBold];
     self.qsoNextActionButton.contentTintColor = [NSColor controlAccentColor];
     self.qsoNextActionButton.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.qsoNextActionButton.heightAnchor constraintEqualToConstant:26].active = YES;
+    [self.qsoNextActionButton.heightAnchor constraintEqualToConstant:28].active = YES;
 
     self.autoCQButton = [NSButton buttonWithTitle:@"Auto-CQ Repeater" target:self action:@selector(toggleAutoCQ:)];
     self.autoCQButton.bezelStyle = NSBezelStyleRounded;
@@ -688,10 +785,11 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
         TX500CWMacro *m = self.keyer.macroList[i];
         NSButton *btn = [NSButton buttonWithTitle:m.label target:self action:@selector(macroButtonClicked:)];
         btn.tag = i;
-        btn.bezelStyle = NSBezelStyleInline;
+        btn.bezelStyle = NSBezelStyleRounded;
         btn.controlSize = NSControlSizeSmall;
-        btn.font = [NSFont systemFontOfSize:10];
+        btn.font = [NSFont systemFontOfSize:10.5 weight:NSFontWeightMedium];
         btn.translatesAutoresizingMaskIntoConstraints = NO;
+        [btn.heightAnchor constraintEqualToConstant:22].active = YES;
         [self.macroButtons addObject:btn];
         if (i < 4) [m1 addObject:btn]; else [m2 addObject:btn];
     }
@@ -870,6 +968,7 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
         self.startStopDecoderButton.contentTintColor = [NSColor systemGreenColor];
         if (self.logHandler) self.logHandler(@"CW Audio Decoder stopped.");
     } else {
+        [self prepareRadioForCWMode];
         [self.decoder startListening];
         if (self.decoder.isListening && self.logHandler)
             self.logHandler(@"CW Audio Decoder active: listening on selected audio stream.");
@@ -1004,6 +1103,7 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
     [self.assistant advanceQSOStepWithAction:^(NSString * _Nonnull macroToTransmit) {
         typeof(self) strongSelf = weakSelf;
         if (strongSelf && macroToTransmit.length > 0) {
+            strongSelf.txInputField.stringValue = macroToTransmit;
             [strongSelf.keyer transmitText:macroToTransmit
                                 targetCall:strongSelf.assistant.activeTargetCallsign
                                        rst:strongSelf.assistant.activeRstSent
@@ -1013,20 +1113,58 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
     }];
 }
 
+- (void)startAutoCQTimer {
+    [self.autoCQMonitorTimer invalidate];
+    __weak typeof(self) weakSelf = self;
+    self.autoCQMonitorTimer = [NSTimer scheduledTimerWithTimeInterval:0.4 repeats:YES block:^(NSTimer * _Nonnull timer) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf || !strongSelf.keyer.isAutoCQActive) {
+            [timer invalidate];
+            if (strongSelf) {
+                strongSelf.autoCQCountdownLabel.stringValue = @"";
+                strongSelf.autoCQButton.title = @"Auto-CQ Repeater";
+            }
+            return;
+        }
+        NSInteger cd = strongSelf.keyer.autoCQCountdown;
+        if (cd > 0) {
+            strongSelf.autoCQCountdownLabel.stringValue = [NSString stringWithFormat:@"[%lds]", (long)cd];
+        } else {
+            strongSelf.autoCQCountdownLabel.stringValue = @"[TX]";
+        }
+    }];
+}
+
+- (void)stopAutoCQTimer {
+    [self.autoCQMonitorTimer invalidate];
+    self.autoCQMonitorTimer = nil;
+    self.autoCQCountdownLabel.stringValue = @"";
+}
+
 - (void)toggleAutoCQ:(id)sender {
     (void)sender;
     if (self.keyer.isAutoCQActive) {
         [self.keyer stopAutoCQ];
+        [self stopAutoCQTimer];
         self.autoCQButton.title = @"Auto-CQ Repeater";
         self.autoCQCountdownLabel.stringValue = @"";
     } else {
         [self.keyer startAutoCQWithTemplate:@"CQ CQ DE {MYCALL} {MYCALL} K" targetCall:@""];
         self.autoCQButton.title = @"Stop Auto-CQ";
+        [self startAutoCQTimer];
     }
 }
 
 - (void)macroButtonClicked:(NSButton *)sender {
     NSInteger idx = sender.tag;
+    if (idx < 0 || idx >= (NSInteger)self.keyer.macroList.count) return;
+    TX500CWMacro *m = self.keyer.macroList[idx];
+    NSString *expanded = [self.keyer expandTemplate:m.templateString
+                                          targetCall:self.assistant.activeTargetCallsign
+                                                 rst:self.assistant.activeRstSent
+                                                name:self.assistant.activeName
+                                                 qth:self.assistant.activeQTH];
+    self.txInputField.stringValue = expanded;
     [self.keyer triggerMacroAtIndex:idx
                          targetCall:self.assistant.activeTargetCallsign
                                 rst:self.assistant.activeRstSent
@@ -1048,8 +1186,10 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
 
 - (void)txAbortClicked:(id)sender {
     (void)sender;
+    [self stopAutoCQTimer];
     [self.keyer abortTransmission];
     [self.keyer stopAutoCQ];
+    self.autoCQButton.title = @"Auto-CQ Repeater";
 }
 
 - (void)exportADIFClicked:(id)sender {
@@ -1129,8 +1269,9 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
             if (!btn) {
                 btn = [NSButton buttonWithTitle:@"" target:self action:@selector(rosterAnswerClicked:)];
                 btn.identifier = @"actionCell";
-                btn.bezelStyle = NSBezelStyleInline;
+                btn.bezelStyle = NSBezelStyleRounded;
                 btn.controlSize = NSControlSizeSmall;
+                btn.font = [NSFont systemFontOfSize:10.5 weight:NSFontWeightMedium];
                 btn.contentTintColor = [NSColor systemGreenColor];
             }
             btn.title = [NSString stringWithFormat:@"Answer %@", st.callsign];
@@ -1181,8 +1322,11 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
     self.wpmLabel.stringValue = [NSString stringWithFormat:@"%ld WPM", (long)self.keyer.wpm];
     [self.decoder setNominalWPM:st.wpm];
 
+    NSString *answerText = [NSString stringWithFormat:@"%@ DE %@ K", st.callsign, self.assistant.myCallsign];
+    self.txInputField.stringValue = answerText;
+
     // Trigger immediate transmission of answer
-    [self.keyer transmitText:@"{CALL} DE {MYCALL} {MYCALL} K"
+    [self.keyer transmitText:answerText
                   targetCall:st.callsign
                          rst:@"599"
                         name:@""

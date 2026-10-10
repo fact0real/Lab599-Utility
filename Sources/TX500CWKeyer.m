@@ -190,7 +190,13 @@
     NSInteger clampedWPM = fmax(3, fmin(45, self.wpm));
     NSString *ksCmd = [NSString stringWithFormat:@"KS%03ld;", (long)clampedWPM];
     if (self.serialCommandSender) {
-        if(!self.serialCommandSender(ksCmd)) { [self abortTransmission]; return; }
+        if (!self.serialCommandSender(ksCmd)) {
+            if (self.logHandler) {
+                self.logHandler(@"[CW Keyer] CAT port rejected speed command; canceling transmission.");
+            }
+            [self abortTransmission];
+            return;
+        }
     }
 
     // 2. Chunk text into 24-character Kenwood KY buffers
@@ -207,24 +213,26 @@
     double ditSec = 1.2 / (double)clampedWPM;
     double charEstSec = ditSec * 7.5; // Average char length in CW
 
-    double elapsed=0;
+    double elapsed = 0;
     for (NSUInteger i = 0; i < chunks.count; i++) {
         NSString *chunk = chunks[i];
         NSString *kyCmd = [NSString stringWithFormat:@"KY %@;", chunk];
 
         if (i == 0) {
             if (self.serialCommandSender) {
-                if(!self.serialCommandSender(kyCmd)) { [self abortTransmission]; return; }
+                self.serialCommandSender(kyCmd);
             }
             if (self.logHandler) {
                 self.logHandler([NSString stringWithFormat:@"CW TX: %@", chunk]);
             }
         } else {
             elapsed += (double)chunks[i - 1].length * charEstSec;
-            double delay=elapsed;
+            double delay = elapsed;
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-                if (token==self.transmissionGeneration && self.isTransmitting && self.serialCommandSender) {
-                    if(!self.serialCommandSender(kyCmd)) { [self abortTransmission]; return; }
+                if (token == self.transmissionGeneration && self.isTransmitting) {
+                    if (self.serialCommandSender) {
+                        self.serialCommandSender(kyCmd);
+                    }
                     if (self.logHandler) {
                         self.logHandler([NSString stringWithFormat:@"CW TX (buffer): %@", chunk]);
                     }
@@ -245,10 +253,14 @@
     __weak typeof(self) weakSelf = self;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(totalEstSec * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
         typeof(self) strongSelf = weakSelf;
-        if (strongSelf && token==strongSelf.transmissionGeneration && strongSelf.isTransmitting) {
+        if (strongSelf && token == strongSelf.transmissionGeneration && strongSelf.isTransmitting) {
             strongSelf.isTransmitting = NO;
             strongSelf.activeBufferText = @"";
             strongSelf.currentlyTransmittingChar = @"";
+            // Release TX ownership in stationCore and radio
+            if (strongSelf.serialCommandSender) {
+                strongSelf.serialCommandSender(@"KY ;RX;");
+            }
             if (strongSelf.onTransmitStateChanged) {
                 strongSelf.onTransmitStateChanged(NO, @"");
             }

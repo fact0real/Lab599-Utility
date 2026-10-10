@@ -1310,8 +1310,8 @@
     rec.frequencyHz = (freqVal > 0) ? (uint64_t)(freqVal * 1e6) : self.currentFrequencyHz;
     rec.band = self.bandPopup.selectedItem.title ?: [TX500LogRecord bandForFrequencyHz:rec.frequencyHz];
     rec.mode = self.modePopup.selectedItem.title ?: @"USB";
-    rec.rstSent = self.rstSentField.stringValue.length > 0 ? self.rstSentField.stringValue : @"59";
-    rec.rstRcvd = self.rstRcvdField.stringValue.length > 0 ? self.rstRcvdField.stringValue : @"59";
+    rec.rstSent = [TX500LogbookController reportFromField:self.rstSentField.stringValue mode:rec.mode];
+    rec.rstRcvd = [TX500LogbookController reportFromField:self.rstRcvdField.stringValue mode:rec.mode];
     rec.notes = self.notesField.stringValue;
 
     // Direct entry fields or HUD fallback
@@ -1369,6 +1369,13 @@
     [self clearVoiceLoggerFields];
     [self.callsignField becomeFirstResponder];
     [self refreshAwardStatistics];
+}
+
+// A report left empty: 59 for the voice log, as before; for an SSTV contact it stays empty, as its form
+// left it (a report is never made up)
++ (NSString *)reportFromField:(nullable NSString *)text mode:(nullable NSString *)mode {
+    if (text.length > 0) return text;
+    return (mode && [mode caseInsensitiveCompare:@"SSTV"] == NSOrderedSame) ? @"" : @"59";
 }
 
 - (void)clearVoiceLoggerFields {
@@ -1715,6 +1722,8 @@
     self.callsignField.stringValue = record.callsign ?: @"";
     self.freqField.stringValue = [NSString stringWithFormat:@"%.6f", record.frequencyMHz];
     [self.bandPopup selectItemWithTitle:record.band ?: @""];
+    // a mode the list does not have (SSTV) is added, so that saving keeps it instead of the first one (USB)
+    if (record.mode.length && ![self.modePopup itemWithTitle:record.mode]) [self.modePopup addItemWithTitle:record.mode];
     [self.modePopup selectItemWithTitle:record.mode ?: @""];
     self.rstSentField.stringValue = record.rstSent ?: @"";
     self.rstRcvdField.stringValue = record.rstRcvd ?: @"";

@@ -40,6 +40,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 // Table & Pill Refresh
 - (void)reloadTableData;
+/// A report left empty when saving: 59 for the voice log; empty for an SSTV contact (never made up).
++ (NSString *)reportFromField:(nullable NSString *)text mode:(nullable NSString *)mode;
 - (void)updateCloudStatusPills;
 
 @end

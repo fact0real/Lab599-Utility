@@ -2,21 +2,31 @@
 
 A native macOS application for the Lab599 TX-500 family of transceivers. It includes a Station workspace, DX Cluster, FT8/FT4 and CW operation, Voice Keyer, contact logbook, firmware updates, live telemetry, radio screen capture, time sync, CAT diagnostics, settings and memory management. Developed by **EP2AES (factoreal)**.
 
-**Newest published pre-release: v2.273 (Build 279) · macOS 12+ · Apple Silicon and Intel · English interface · Persian guide included**
+**Newest published pre-release: v2.283 (Build 289) · macOS 12+ · Apple Silicon and Intel · English interface · Persian guide included**
 
-[Download v2.273](https://github.com/fact0real/Lab599-Utility/releases/tag/2.273) · [In-app Help guide](Resources/Help/index.html) · [راهنمای فارسی](QUICKSTART-FA.md) · [Build instructions](UPDATER-README.md) · [Report an issue](https://github.com/fact0real/Lab599-Utility/issues/new)
+[Download v2.283](https://github.com/fact0real/Lab599-Utility/releases/tag/2.283) · [In-app Help guide](Resources/Help/index.html) · [راهنمای فارسی](QUICKSTART-FA.md) · [Build instructions](UPDATER-README.md) · [Report an issue](https://github.com/fact0real/Lab599-Utility/issues/new)
 
 ## Download and install
 
-Download `Lab599-Utility-v2.273-macOS-universal.zip` from the [v2.273 release](https://github.com/fact0real/Lab599-Utility/releases/tag/2.273). Extract the ZIP and move `Lab599 Utility.app` to `/Applications`. The ZIP contains the app, offline illustrated Help, English and Persian guides, and license notices; manufacturer firmware is not included.
+Download `Lab599-Utility-v2.283-macOS-universal.zip` from the [v2.283 release](https://github.com/fact0real/Lab599-Utility/releases/tag/2.283). Extract the ZIP and move `Lab599 Utility.app` to `/Applications`. The ZIP contains the app, offline illustrated Help, English and Persian guides, and license notices; manufacturer firmware is not included.
 
 Verify the download before opening the app:
 
 ```sh
-shasum -a 256 Lab599-Utility-v2.273-macOS-universal.zip
+shasum -a 256 Lab599-Utility-v2.283-macOS-universal.zip
 ```
 
 Compare the result with the `SHA256SUMS.txt` asset on the release page. The app is ad-hoc signed, **not Apple notarized**. If macOS blocks the first launch, select this app in **System Settings → Privacy & Security → Open Anyway** after verifying the checksum.
+
+## What's new in v2.283
+
+- **Full-Power CW Transmission via REM/DATA (`DIG` Mode):** Solved zero RF output when sending Morse over the REM/DATA audio interface by routing audio in `DIG` mode (`MD6;`) with raised-cosine sine shaping at the nominal pitch (650 Hz), delivering full ~10 W RF power.
+- **Automatic Mode Cycling:** When operating in `CW (Paddle Key)` mode, transmissions automatically switch to `MD6;TX;` during transmit and restore `RX;MD3;` on release, keeping hardware keyers and internal CW audio filters fully functional.
+- **Live Transmit Telemetry (⚡ PWR & 📶 SWR):** Real-time CAT polling of transmit power (Watts via `RM0`) and calibrated antenna SWR ratio (via `RM1`) with animated level bars and color-coded alerts during TX and manual antenna tuning.
+- **Safety Watchdog Cutoff:** Manual `TX (Tune)` is protected by an automatic 10-second safety cutoff timer to prevent accidental transmitter lockup.
+- **Interactive Waterfall Click-Tuning:** Clicking signals on the spectrum waterfall immediately retunes the transceiver's VFO dial to center the incoming Morse signal on nominal CW pitch (650 Hz).
+- **DSP Filter Improvements:** Added a dedicated CW narrow bandpass filter (500–800 Hz) to eliminate wideband HF noise and background hiss.
+- **CI Test Suite Stability:** Relaxed simulated pty transfer acknowledgement timeout in `TransferTests.m` from 0.2s to 0.8s to eliminate CI runner thread scheduler jitter failures on GitHub Actions. See [v2.283 release notes](RELEASE-NOTES-2.283.md).
 
 ## What's new in v2.273
 
@@ -112,7 +122,7 @@ The updater accepts only firmware whose complete SHA-256 matches a reviewed offi
 | Station | Local operator profiles, audio routes, saved frequencies, verified CAT tuning and opt-in PSK Reporter uploads | Normal operation, CAT 9600 |
 | DX Cluster | Displays live spots and local contact history; tuning and QSO drafts require explicit actions | Normal operation, CAT 9600 for tuning |
 | FT8 / FT4 Digital | Live decode and waterfall, manual or automatic QSO sequencing, ADIF logging and simulation | Normal operation, CAT 9600 and audio interface |
-| CW Station | Morse keying, live audio decoding, QSO assistant and logging | Normal operation, CAT 9600 and audio interface |
+| CW Station | Soundcard Morse keying with full ~10W power, live PWR/SWR telemetry, audio decoding, QSO assistant and logging | Normal operation, CAT 9600 and audio interface |
 | Voice Keyer | Local voice messages, headphone preview, CQ repeat and microphone reply | Normal operation, CAT 9600 and audio interface |
 | Logbook & Cloud | Local QSO records, ADIF import/export, callbook enrichment and configured cloud services | Offline for local records |
 | Firmware Update | Select a reviewed official `.fw` file or download from the built-in Lab599 catalog; verify normal-mode CAT identity first, then enter the loader; checks the complete file hash and known target, blocks a mismatch with the CAT family or operator-declared radio model, transfers with a two-ACK handshake and TIOCOUTQ-paced streaming, and prevents system sleep during flash | CAT 9600 first, then bootloader — "The loader is waiting..." |

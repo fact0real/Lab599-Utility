@@ -57,3 +57,4 @@ This release delivers soundcard CW transmission over the REM/DATA audio interfac
 - **Package:** `Lab599-Utility-v2.283-macOS-universal.zip`
 - **Application:** `Lab599 Utility.app` (v2.283, Build 289)
 - **Minimum macOS:** macOS 12.0 (Monterey) or later
+- **SHA-256:** `bb2597717592d66fabe188f0638352bd0fcecfe8f853974542ca314154c9ac88`

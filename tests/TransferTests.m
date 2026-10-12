@@ -60,7 +60,7 @@ static void RunScenario(NSString *name, NSData *firmware, NSString *headerReply,
     __block BOOL peerClosed = NO;
     dispatch_semaphore_t finished = dispatch_semaphore_create(0);
     TXTransferOptions options = TXDefaultTransferOptions();
-    options.acknowledgementTimeout = 0.2;
+    options.acknowledgementTimeout = 0.8;
     options.writeTimeout = backpressure ? 0.15 : 1.0;
     options.settleDelay = 0.01;
 

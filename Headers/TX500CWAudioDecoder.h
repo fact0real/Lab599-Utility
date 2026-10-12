@@ -5,7 +5,8 @@
 //  Real-Time DSP Morse Code Audio Decoder Engine for macOS
 //  Optimized for Lab599 Discovery TX-500 over AD-508 USB-C Audio / REM-DATA
 //  Buffered Goertzel DSP, confidence-gated AFC, adaptive hysteresis, joint
-//  mark/gap timing estimation, and synthetic practice simulation.
+//  mark/gap timing estimation, synthetic practice simulation, and wideband
+//  3 kHz multi-channel concurrent carrier decoding across Filter 1.
 //
 
 #import <Foundation/Foundation.h>
@@ -31,6 +32,19 @@ FOUNDATION_EXPORT int TX500CWRunLiveAudioCheck(NSString *directory, NSString *re
 @property (nonatomic, strong) NSDate *timestamp;
 @end
 
+/// State for a concurrent carrier channel within the 3 kHz wideband passband
+@interface TX500CWChannelState : NSObject
+@property (nonatomic, assign) NSInteger channelId;
+@property (nonatomic, assign) double frequencyHz;
+@property (nonatomic, assign) double snrDb;
+@property (nonatomic, assign) double estimatedWPM;
+@property (nonatomic, assign) BOOL isCarrierActive;
+@property (nonatomic, copy) NSString *activeCharBuffer;
+@property (nonatomic, copy) NSString *decodedText;
+@property (nonatomic, copy) NSString *extractedCallsign;
+@property (nonatomic, strong) NSDate *lastActivityTime;
+@end
+
 @interface TX500CWAudioDecoder : NSObject
 
 // Operational State
@@ -51,6 +65,10 @@ FOUNDATION_EXPORT int TX500CWRunLiveAudioCheck(NSString *directory, NSString *re
 @property (nonatomic, strong, readonly) NSArray<TX500CWDecodedToken *> *decodedTokens;
 @property (nonatomic, strong, readonly) NSArray<TX500CWSpectrumBin *> *spectrumBins;
 
+// Wideband 3 kHz Multi-Channel Decoder
+@property (nonatomic, strong, readonly) NSArray<TX500CWChannelState *> *activeChannels;
+@property (nonatomic, strong, readonly) NSArray<NSNumber *> *detectedCarrierFrequencies;
+
 // Audio Device & Simulation
 @property (nonatomic, copy, nullable) NSString *selectedAudioDeviceUID;
 @property (nonatomic, strong, readonly) NSArray<NSDictionary<NSString *, NSString *> *> *availableAudioInputDevices;
@@ -62,9 +80,11 @@ FOUNDATION_EXPORT int TX500CWRunLiveAudioCheck(NSString *directory, NSString *re
 @property (nonatomic, copy, nullable) void (^onTokenReceived)(TX500CWDecodedToken *token);
 @property (nonatomic, copy, nullable) void (^onMetricsUpdated)(double wpm, double snrDb, float inputLevel, BOOL signalPresent);
 @property (nonatomic, copy, nullable) void (^onSpectrumUpdated)(NSArray<TX500CWSpectrumBin *> *bins);
+@property (nonatomic, copy, nullable) void (^onMultiChannelUpdated)(NSArray<TX500CWChannelState *> *channels);
 @property (nonatomic, copy, nullable) void (^onAudioDevicesChanged)(void);
 @property (nonatomic, copy, nullable) void (^onListeningStateChanged)(BOOL listening);
 @property (nonatomic, copy, nullable) void (^onAudioError)(NSString *message);
+@property (nonatomic, copy, nullable) void (^onRawAudioSamples)(const float *samples, int count);
 
 // Methods
 - (void)startListening;
@@ -75,6 +95,7 @@ FOUNDATION_EXPORT int TX500CWRunLiveAudioCheck(NSString *directory, NSString *re
 // Feed Float32 PCM (8 - 192 kHz); arbitrary frame counts, mono or multichannel.
 // For finite streams, supply trailing silence to finish the last character/word.
 - (void)processAudioBuffer:(AVAudioPCMBuffer *)buffer;
+- (void)processRawAudioSamples:(const float *)samples count:(int)count;
 - (void)refreshAudioDevices;
 - (void)startSimulation;
 - (void)stopSimulation;

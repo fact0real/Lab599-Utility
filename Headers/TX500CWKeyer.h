@@ -49,10 +49,16 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy, nullable) void (^logHandler)(NSString *line);
 @property (nonatomic, copy, nullable) void (^onTransmitStateChanged)(BOOL transmitting, NSString *activeText);
 
+@property (nonatomic, copy, nullable) NSString *radioOutputDeviceUID;
+@property (nonatomic, copy, nullable) NSString *txPrefixCommand;
+@property (nonatomic, copy, nullable) NSString *rxSuffixCommand;
+
 // Methods
 - (void)transmitText:(NSString *)text targetCall:(NSString *)call rst:(NSString *)rst name:(NSString *)name qth:(NSString *)qth;
 - (void)abortTransmission;
 - (void)triggerMacroAtIndex:(NSInteger)index targetCall:(NSString *)call rst:(NSString *)rst name:(NSString *)name qth:(NSString *)qth;
+- (void)startContinuousCarrierWithPitchHz:(double)pitch;
+- (void)stopContinuousCarrier;
 
 // Auto-CQ
 - (void)startAutoCQWithTemplate:(NSString *)tmpl targetCall:(NSString *)call;

@@ -8,7 +8,7 @@ for suite in CWAudioSelectionTests CWStationTests; do
         -framework AVFoundation -framework CoreAudio -framework AudioToolbox -framework WebKit -framework Security -lsqlite3 \
         -DTX500_TEST_SECRET_STORE -IHeaders -ISources -IHeaders/cft8 -ISources/cft8 \
         "tests/$suite.m" Sources/TX500CWAudioDecoder.m Sources/TX500CWKeyer.m Sources/TX500CWQSOAssistant.m \
-        Sources/TX500CWSpectrumView.m Sources/TX500CWStationController.m Sources/TX500LogbookManager.m \
+        Sources/TX500CWSpectrumView.m Sources/TX500CWStationController.m Sources/TX500AudioEngine.m Sources/TX500LogbookManager.m \
         Sources/TX500CallsignLookupService.m Sources/TX500CloudSyncEngine.m Sources/TX500WebAuthenticatorController.m \
         -o "build/$suite"
 done

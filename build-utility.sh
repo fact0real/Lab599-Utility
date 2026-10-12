@@ -62,7 +62,7 @@ if [ "${1:-}" = "--test" ] || [ "${1:-}" = "--test-only" ]; then
     clang -O2 -Wall -Wextra -Wno-unused-parameter -Werror -fobjc-arc \
         -mmacosx-version-min=12.0 -framework Cocoa -framework UniformTypeIdentifiers -framework AVFoundation -framework CoreAudio -framework AudioToolbox -framework WebKit -framework Security -lsqlite3 \
         -DTX500_TEST_SECRET_STORE -IHeaders -ISources -IHeaders/cft8 -ISources/cft8 \
-        tests/CWStationTests.m Sources/TX500CWAudioDecoder.m Sources/TX500CWKeyer.m Sources/TX500CWQSOAssistant.m Sources/TX500CWSpectrumView.m Sources/TX500CWStationController.m \
+        tests/CWStationTests.m Sources/TX500CWAudioDecoder.m Sources/TX500CWKeyer.m Sources/TX500CWQSOAssistant.m Sources/TX500CWSpectrumView.m Sources/TX500CWStationController.m Sources/TX500AudioEngine.m \
         Sources/TX500LogbookManager.m Sources/TX500CallsignLookupService.m Sources/TX500CloudSyncEngine.m Sources/TX500WebAuthenticatorController.m -o build/CWStationTests
     ./build/CWStationTests
     sh tests/run-cw-decoder-tests.sh

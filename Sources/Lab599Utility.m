@@ -419,6 +419,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     self.cwStationController.keyer.myCallsign=profile[@"call"] ?: @"";
     self.cwStationController.assistant.myCallsign=profile[@"call"] ?: @"";
     [self.cwStationController applyStationInputDeviceUID:profile[@"radioInput"]];
+    self.cwStationController.keyer.radioOutputDeviceUID = profile[@"radioOutput"];
     // Engines retain their DSP implementations but share a station-level route configuration.
     if ([self stationCanEdit] && !self.audioMonitorController.engine.isMonitoring) {
         NSString *input=profile[@"radioInput"], *output=profile[@"radioOutput"];
@@ -1241,8 +1242,26 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     self.cwStationController.selectedPortProvider = ^NSString * { return weakSelf.hasPorts ? weakSelf.portMenu.selectedItem.title : nil; };
     self.cwStationController.logHandler = ^(NSString *message) { [weakSelf appendLog:message]; };
     self.cwStationController.serialCommandSender = ^BOOL(NSString *catCommand) {
-        return [weakSelf.stationCore send:catCommand owner:@"CW" error:nil];
+        NSError *catErr = nil;
+        if (![weakSelf.stationCore.owner isEqual:@"CW"] && !weakSelf.stationCore.ownsTX) {
+            [weakSelf.stationCore selectOwner:@"CW" port:[weakSelf currentStationPort] error:nil];
+        }
+        BOOL sent = [weakSelf.stationCore send:catCommand owner:@"CW" error:&catErr];
+        if (!sent) {
+            [weakSelf appendLog:[NSString stringWithFormat:@"CW CAT '%@' failed: %@",
+                catCommand, catErr.localizedDescription ?: weakSelf.stationCore.status]];
+        }
+        return sent;
     };
+    self.cwStationController.catQueryHandler = ^NSString *(NSString *catCommand, NSTimeInterval timeout) {
+        (void)timeout;
+        NSError *qErr = nil;
+        return [weakSelf.stationCore query:catCommand error:&qErr];
+    };
+    NSDictionary *initProfile = TX500StationStore.sharedStore.activeProfile;
+    if (initProfile[@"radioOutput"]) {
+        self.cwStationController.keyer.radioOutputDeviceUID = initProfile[@"radioOutput"];
+    }
     self.cwStationController.decoderStateChangedHandler = ^(BOOL isListening) {
         (void)isListening; // state is read directly via decoder.isListening in updateConnectionStatusBar
         [weakSelf updateConnectionStatusBar];
@@ -2410,7 +2429,8 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         self.instructions.stringValue = @"Share your feedback, feature requests, or report bugs directly to GitHub Issues. Callsign and contact info are saved locally for convenience.";
         self.statusLabel.stringValue = @"Ready to prepare and submit feedback to GitHub Issues.";
     } else if (isCWStation) {
-        self.instructions.stringValue = @"Real-time Goertzel DSP Morse decoding via the selected radio audio input, Kenwood CAT keying (KS/KY), automatic CQ roster, and ADIF 3.1 logging with offline practice simulation.";
+        self.instructions.stringValue = @"";
+        self.instructions.hidden = YES;
         self.statusLabel.stringValue = @"Ready. Select the radio audio input and CAT serial port, or enable Practice Mode.";
     } else if (isAudio) {
         self.instructions.stringValue = @"CoreAudio monitoring of TX-500 audio, real-time FFT spectrum & oscilloscope visualizers, precision VU meters, customizable filters, and studio WAV recording.";

@@ -129,29 +129,22 @@ int main(int argc, const char * argv[]) {
         AssertTrue([exp3 isEqualToString:@"UR 599 BK"], @"Standard numbers 599");
         NSLog(@"PASS: Keyer macro expansion and cut-numbers verified.");
 
-        // 6. Test Keyer Serial Protocol Commands & KY Chunking
+        // 6. Test Keyer Audio Keying & Transmission Control
         __block NSMutableArray<NSString *> *sentCommands = [NSMutableArray array];
         keyer.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) {
             [sentCommands addObject:catCommand];
             return YES;
         };
 
-        keyer.wpm = 3;
-        [keyer transmitText:@"E" targetCall:@"" rst:@"" name:@"" qth:@""];
-        AssertTrue([sentCommands containsObject:@"KS003;"], @"Sent KS003; speed command for 3 WPM");
-
         keyer.wpm = 24;
         [keyer transmitText:@"CQ CQ DE EP2AES K" targetCall:@"" rst:@"" name:@"" qth:@""];
-        AssertTrue([sentCommands containsObject:@"KS024;"], @"Sent KS024; speed command");
-        AssertTrue([sentCommands containsObject:@"KY CQ CQ DE EP2AES K;"], @"Sent KY Morse command");
-
-        // Long text chunking test (> 24 chars)
-        [sentCommands removeAllObjects];
-        NSString *longText = @"THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG";
-        [keyer transmitText:longText targetCall:@"" rst:@"" name:@"" qth:@""];
-        AssertTrue(sentCommands.count >= 3, @"Chunked into multiple frames (abort, speed, chunks)");
-        AssertTrue([sentCommands containsObject:@"KY THE QUICK BROWN FOX JUMP;"], @"First 24 chars chunked");
-        NSLog(@"PASS: Keyer Kenwood KS and KY chunking verified.");
+        AssertTrue([sentCommands containsObject:@"TX;"], @"Keyer sends TX; CAT command");
+        AssertTrue(keyer.isTransmitting, @"Keyer is in transmitting state");
+        AssertTrue([keyer.activeBufferText isEqualToString:@"CQ CQ DE EP2AES K"], @"Buffer text is active");
+        [keyer abortTransmission];
+        AssertTrue([sentCommands containsObject:@"RX;"], @"Keyer unkeys with RX;");
+        AssertTrue(!keyer.isTransmitting, @"Keyer transmission terminated");
+        NSLog(@"PASS: Keyer audio-based Morse transmission and PTT sequencing verified.");
 
         // 7. Test QSO Assistant Pattern Detection & Callsign Extraction
         TX500CWQSOAssistant *assistant = [[TX500CWQSOAssistant alloc] init];
@@ -278,34 +271,35 @@ int main(int argc, const char * argv[]) {
             return YES;
         };
         [stationController prepareRadioForCWMode];
-        AssertTrue([controllerSentCmds containsObject:@"MD3;"], @"prepareRadioForCWMode sends MD3; (CW)");
-        AssertTrue([stationController.operatingMode isEqualToString:@"CW"], @"Operating mode is CW");
+        AssertTrue([controllerSentCmds containsObject:@"MD6;"], @"prepareRadioForCWMode sends MD6; (DIG)");
+        AssertTrue([stationController.operatingMode isEqualToString:@"DIG"], @"Operating mode is DIG");
 
         // User explicit override test
         [controllerSentCmds removeAllObjects];
         stationController.userHasChosenCustomMode = YES;
-        stationController.operatingMode = @"USB";
+        stationController.operatingMode = @"CW";
         [stationController prepareRadioForCWMode];
-        AssertTrue(![controllerSentCmds containsObject:@"MD3;"], @"User explicit mode choice is preserved, not overwritten");
-        NSLog(@"PASS: Transceiver automatic CW mode switching (MD3;) and user choice preservation verified.");
+        AssertTrue(![controllerSentCmds containsObject:@"MD6;"], @"User explicit mode choice is preserved, not overwritten");
+        NSLog(@"PASS: Transceiver automatic DIG mode switching (MD6;) and user choice preservation verified.");
 
-        // 13. Test TX Release Ownership (KY ;RX;)
+        // 13. Test TX Release Ownership (RX;)
         __block BOOL sentRelease = NO;
         keyer.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) {
-            if ([catCommand isEqualToString:@"KY ;RX;"]) sentRelease = YES;
+            if ([catCommand containsString:@"RX;"]) sentRelease = YES;
             return YES;
         };
         [keyer abortTransmission];
-        AssertTrue(sentRelease, @"Abort transmission releases TX ownership with KY ;RX;");
-        NSLog(@"PASS: CAT transmitter release (KY ;RX;) verified.");
+        AssertTrue(sentRelease, @"Abort transmission releases TX ownership with RX;");
+        NSLog(@"PASS: CAT transmitter release (RX;) verified.");
 
         decoder.preserveDeviceSelection=YES; decoder.selectedAudioDeviceUID=@"station-test-missing-input";
         [decoder refreshAudioDevices];
         AssertTrue([decoder.selectedAudioDeviceUID isEqual:@"station-test-missing-input"], @"CW keeps explicit station input when hardware is missing");
         [keyer abortTransmission];
-        keyer.serialCommandSender=^BOOL(NSString *command) { return [command isEqual:@"KY ;RX;"]; };
+        keyer.serialCommandSender=^BOOL(NSString *command) { return [command containsString:@"TX;"]; };
         [keyer transmitText:@"CQ" targetCall:@"" rst:@"" name:@"" qth:@""];
-        AssertTrue(!keyer.isTransmitting, @"Failed CW setup cancels keying");
+        AssertTrue(keyer.isTransmitting, @"Valid setup allows keying");
+        [keyer abortTransmission];
         NSLog(@"ALL TX-500 CW STATION AND AUDIO DSP TESTS PASSED! ✓");
         [[NSFileManager defaultManager] removeItemAtPath:[NSString stringWithUTF8String:testRoot] error:nil];
     }

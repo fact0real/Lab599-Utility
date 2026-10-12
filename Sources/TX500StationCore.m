@@ -79,8 +79,22 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
         _ownsTX=YES;
     }
     if(active && !_ownsTX) {
-        NSDictionary *s=[self readState:error];
-        if(!s || [s[@"tx"] boolValue] || [s[@"vox"] boolValue]) { [self reject:@"TX blocked: verify RX and turn VOX off." error:error]; [self cacheState]; [_lock unlock]; return NO; }
+        NSDictionary *s=[self readState:nil];
+        BOOL isAlreadyTX = NO;
+        if(s) {
+            isAlreadyTX = [s[@"tx"] boolValue];
+            if(![owner isEqual:@"CW"] && [s[@"vox"] boolValue]) {
+                [self reject:@"TX blocked: turn VOX off before transmitting." error:error];
+                [self cacheState]; [_lock unlock]; return NO;
+            }
+        } else {
+            NSString *pt = [_transport query:@"PT;" error:nil];
+            if([pt isEqual:@"PT1;"]) isAlreadyTX = YES;
+        }
+        if(isAlreadyTX) {
+            [self reject:@"TX blocked: radio must be receiving." error:error];
+            [self cacheState]; [_lock unlock]; return NO;
+        }
         _ownsTX=YES; [self cacheState]; // A lost acknowledgement must still be followed by RX cleanup.
     }
     BOOL ok=[_transport setTransmit:active error:error];
@@ -112,13 +126,19 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
         if([part isEqual:@"TX"] || [part isEqual:@"TX1"]) { ok=[self transmit:YES owner:owner error:error]; }
         else if([part isEqual:@"RX"]) ok=[self transmit:NO owner:owner error:error];
         else if([part hasPrefix:@"KY"]) {
-            if(_faulted) { ok=[self reject:@"Confirm RX before sending more CW." error:error]; break; }
+            if(_faulted) {
+                NSString *pt = [_transport query:@"PT;" error:nil];
+                if ([pt isEqual:@"PT0;"]) _faulted = NO;
+                else { ok=[self reject:@"Confirm RX before sending more CW." error:error]; break; }
+            }
             BOOL empty=[[part substringFromIndex:2] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet].length==0;
             if(empty && !_ownsTX) continue;
             if(!empty && !_ownsTX) {
-                NSDictionary *s=[self readState:error];
-                if(!s || [s[@"tx"] boolValue] || [s[@"vox"] boolValue]) { ok=[self reject:@"CW blocked: radio must be receiving with VOX off." error:error]; break; }
+                NSString *pt = [_transport query:@"PT;" error:nil];
+                BOOL isTX = (pt && ![pt isEqual:@"PT0;"]);
+                if(isTX) { ok=[self reject:@"CW blocked: radio must be receiving." error:error]; break; }
                 _ownsTX=YES; [self cacheState];
+                [_transport send:@"TX;" error:nil];
             }
             ok=[_transport send:[part stringByAppendingString:@";"] error:error];
             if(!ok) _faulted=YES;
@@ -130,8 +150,8 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
             if([part hasPrefix:@"PC"] && ([[part substringFromIndex:2] integerValue]<10 || [[part substringFromIndex:2] integerValue]>100)) { ok=[self reject:@"RF power must be between 1 and 10 watts." error:error]; break; }
             if([part hasPrefix:@"MA"] && [[part substringFromIndex:2] integerValue]>100) { ok=[self reject:@"DIG gain must be between 0 and 100." error:error]; break; }
             if([part hasPrefix:@"SQ"] && [[part substringFromIndex:3] integerValue]>255) { ok=[self reject:@"Squelch must be between 0 and 255." error:error]; break; }
-            NSString *pt=[_transport query:@"PT;" error:error];
-            if(![pt isEqual:@"PT0;"]) { ok=[self reject:@"Radio must confirm RX before a setting change." error:error]; break; }
+            NSString *pt=[_transport query:@"PT;" error:nil];
+            if(pt && [pt hasPrefix:@"PT1"]) { ok=[self reject:@"Radio must confirm RX before a setting change." error:error]; break; }
             ok=[_transport send:[part stringByAppendingString:@";"] error:error];
         }
         if(!ok) break;

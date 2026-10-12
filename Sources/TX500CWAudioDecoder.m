@@ -28,6 +28,70 @@ NSString * const TX500CWSystemAudioDeviceUID = @"cw-system-audio";
 }
 @end
 
+@implementation TX500CWChannelState
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        _activeCharBuffer = @"";
+        _decodedText = @"";
+        _extractedCallsign = @"";
+        _lastActivityTime = [NSDate date];
+        _estimatedWPM = 20.0;
+    }
+    return self;
+}
+@end
+
+@interface TX500CWChannelTracker : NSObject
+@property (nonatomic, assign) NSInteger channelId;
+@property (nonatomic, assign) double frequencyHz;
+@property (nonatomic, assign) double snrDb;
+@property (nonatomic, assign) double estimatedWPM;
+@property (nonatomic, assign) BOOL isCarrierActive;
+@property (nonatomic, copy) NSString *activeCharBuffer;
+@property (nonatomic, strong) NSMutableString *decodedText;
+@property (nonatomic, copy) NSString *extractedCallsign;
+@property (nonatomic, strong) NSDate *lastActivityTime;
+@property (nonatomic, assign) double currentMarkDuration;
+@property (nonatomic, assign) double currentSpaceDuration;
+@property (nonatomic, assign) float smoothedNoise;
+@property (nonatomic, assign) BOOL isMarkActive;
+@end
+
+@implementation TX500CWChannelTracker
+- (instancetype)init {
+    self = [super init];
+    if (self) {
+        _activeCharBuffer = @"";
+        _decodedText = [NSMutableString string];
+        _extractedCallsign = @"";
+        _lastActivityTime = [NSDate date];
+        _estimatedWPM = 20.0;
+    }
+    return self;
+}
+@end
+
+static inline NSString *ExtractCallsignFromText(NSString *text) {
+    if (!text.length) return @"";
+    static NSRegularExpression *regex = nil;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        regex = [NSRegularExpression regularExpressionWithPattern:@"\\b([A-Z0-9]{1,3}[0-9][A-Z]{1,4})\\b"
+                                                          options:0
+                                                            error:nil];
+    });
+    NSArray<NSTextCheckingResult *> *matches = [regex matchesInString:text options:0 range:NSMakeRange(0, text.length)];
+    for (NSTextCheckingResult *match in [matches reverseObjectEnumerator]) {
+        NSString *candidate = [text substringWithRange:match.range];
+        if ([candidate hasPrefix:@"5NN"] || [candidate hasPrefix:@"599"]) continue;
+        if (candidate.length >= 3 && candidate.length <= 7) {
+            return candidate;
+        }
+    }
+    return @"";
+}
+
 @interface TX500CWAudioDecoder ()
 @property (nonatomic, assign, readwrite) BOOL isListening;
 @property (nonatomic, assign, readwrite) BOOL isAudioAvailable;
@@ -43,6 +107,10 @@ NSString * const TX500CWSystemAudioDeviceUID = @"cw-system-audio";
 @property (nonatomic, strong, readwrite) NSMutableArray<TX500CWDecodedToken *> *internalDecodedTokens;
 @property (nonatomic, strong, readwrite) NSMutableArray<TX500CWSpectrumBin *> *internalSpectrumBins;
 @property (nonatomic, strong, readwrite) NSMutableArray<NSDictionary<NSString *, NSString *> *> *internalAudioDevices;
+@property (nonatomic, strong, readwrite) NSMutableArray<TX500CWChannelState *> *internalActiveChannels;
+@property (nonatomic, strong, readwrite) NSMutableArray<NSNumber *> *internalDetectedCarrierFrequencies;
+@property (nonatomic, strong) NSMutableArray<TX500CWChannelTracker *> *internalChannelTrackers;
+@property (nonatomic, assign) NSInteger nextChannelId;
 
 // Audio Engine & DSP
 @property (nonatomic, assign) AudioQueueRef audioQueue;
@@ -131,6 +199,10 @@ NSString * const TX500CWSystemAudioDeviceUID = @"cw-system-audio";
         _internalDecodedTokens = [NSMutableArray array];
         _internalSpectrumBins = [NSMutableArray array];
         _internalAudioDevices = [NSMutableArray array];
+        _internalActiveChannels = [NSMutableArray array];
+        _internalDetectedCarrierFrequencies = [NSMutableArray array];
+        _internalChannelTrackers = [NSMutableArray array];
+        _nextChannelId = 0;
         _timingRuns = [NSMutableArray array];
         _characterMarks = [NSMutableArray array];
         _hasCommittedWordBreak = YES;
@@ -198,6 +270,18 @@ static OSStatus CWAudioHardwareDevicesListener(AudioObjectID inObjectID,
 - (NSArray<NSDictionary<NSString *, NSString *> *> *)availableAudioInputDevices {
     @synchronized (self.internalAudioDevices) {
         return [self.internalAudioDevices copy];
+    }
+}
+
+- (NSArray<TX500CWChannelState *> *)activeChannels {
+    @synchronized (self) {
+        return [self.internalActiveChannels copy] ?: @[];
+    }
+}
+
+- (NSArray<NSNumber *> *)detectedCarrierFrequencies {
+    @synchronized (self) {
+        return [self.internalDetectedCarrierFrequencies copy] ?: @[];
     }
 }
 
@@ -764,6 +848,9 @@ static inline float GoertzelMagnitude(const float *data, int frameCount, double 
 
 - (void)processRawAudioSamples:(const float *)samples count:(int)count {
     if (!samples || count <= 0) return;
+    if (self.onRawAudioSamples) {
+        self.onRawAudioSamples(samples, count);
+    }
     @synchronized (self) {
         if (self.diagnosticPCM) [self.diagnosticPCM appendBytes:samples length:count*sizeof(float)];
         if (!_analysisLength) {
@@ -802,11 +889,11 @@ static inline float GoertzelMagnitude(const float *data, int frameCount, double 
     }
     energy /= _windowSum;
     float normalization = totalFrames/_windowSum;
-    // 2. Multi-Bin Spectrum (48 bins: 300 - 1500 Hz)
-#define CW_SPECTRUM_NUM_BINS 48
+    // 2. High-Density Multi-Bin Spectrum (181 bins: 300 - 3000 Hz, 15 Hz resolution)
+#define CW_SPECTRUM_NUM_BINS 181
     NSMutableArray<TX500CWSpectrumBin *> *bins = [NSMutableArray arrayWithCapacity:CW_SPECTRUM_NUM_BINS];
     double startFreq = 300.0;
-    double endFreq = 1500.0;
+    double endFreq = 3000.0;
     double stepFreq = (endFreq - startFreq) / (double)(CW_SPECTRUM_NUM_BINS - 1);
     float peakBinMag = 0.0f;
     int peakBinIdx = 0;
@@ -823,21 +910,22 @@ static inline float GoertzelMagnitude(const float *data, int frameCount, double 
         bin.magnitude = mag;
         [bins addObject:bin];
 
-        if (mag > peakBinMag) {
+        // Primary AFC tracks signals up to 1500 Hz
+        if (f <= 1500.0 && mag > peakBinMag) {
             peakBinMag = mag;
             peakBinIdx = b;
         }
     }
 
-    // Median across the analysis band rejects a small number of occupied bins.
-    for (int i = 0; i < CW_SPECTRUM_NUM_BINS - 1; i++) {
-        for (int j = i + 1; j < CW_SPECTRUM_NUM_BINS; j++) {
-            if (sortedMags[j] < sortedMags[i]) {
-                float tmp = sortedMags[i];
-                sortedMags[i] = sortedMags[j];
-                sortedMags[j] = tmp;
-            }
+    // Median across the analysis band rejects occupied bins
+    for (int i = 1; i < CW_SPECTRUM_NUM_BINS; i++) {
+        float key = sortedMags[i];
+        int j = i - 1;
+        while (j >= 0 && sortedMags[j] > key) {
+            sortedMags[j + 1] = sortedMags[j];
+            j--;
         }
+        sortedMags[j + 1] = key;
     }
     float spectralNoise = fmaxf(1e-8f, sortedMags[CW_SPECTRUM_NUM_BINS / 2]);
     // Correct the different equivalent noise bandwidths of the Hann spectrum
@@ -860,6 +948,25 @@ static inline float GoertzelMagnitude(const float *data, int frameCount, double 
     @synchronized (self.internalSpectrumBins) {
         [self.internalSpectrumBins setArray:bins];
     }
+
+    // Wideband Multi-Carrier Peak Detection (300 - 3000 Hz)
+    NSMutableArray<NSNumber *> *carriers = [NSMutableArray array];
+    for (int b = 2; b < CW_SPECTRUM_NUM_BINS - 2; b++) {
+        float m = bins[b].magnitude;
+        if (m > spectralNoise * 3.2f &&
+            m >= bins[b - 1].magnitude && m >= bins[b + 1].magnitude &&
+            m > bins[b - 2].magnitude && m > bins[b + 2].magnitude) {
+            [carriers addObject:@(bins[b].frequencyHz)];
+        }
+    }
+    @synchronized (self) {
+        [self.internalDetectedCarrierFrequencies setArray:carriers];
+    }
+    [self updateMultiChannelTracksWithCarriers:carriers
+                                 spectralNoise:spectralNoise
+                                weightedFrames:_weighted
+                                   totalFrames:totalFrames
+                                 normalization:normalization];
 
     // 3. Wide-Band AFC with Sub-Bin Quadratic Interpolation
     //    Enables tracking any CW signal across 300 - 1500 Hz
@@ -1231,6 +1338,135 @@ static inline float GoertzelMagnitude(const float *data, int frameCount, double 
             if (generation != self.outputGeneration) return;
             if (self.onTokenReceived) self.onTokenReceived(token);
         });
+    }
+}
+
+- (void)updateMultiChannelTracksWithCarriers:(NSArray<NSNumber *> *)carriers
+                               spectralNoise:(float)spectralNoise
+                              weightedFrames:(const float *)weighted
+                                 totalFrames:(int)totalFrames
+                               normalization:(float)normalization {
+    if (totalFrames <= 0 || !weighted) return;
+    double frameDuration = (double)totalFrames / self.sampleRate;
+    NSDate *now = [NSDate date];
+
+    @synchronized (self) {
+        // 1. Associate carriers with existing or new channel trackers
+        for (NSNumber *cNum in carriers) {
+            double cf = cNum.doubleValue;
+            TX500CWChannelTracker *matched = nil;
+            for (TX500CWChannelTracker *ch in self.internalChannelTrackers) {
+                if (fabs(ch.frequencyHz - cf) <= 35.0) {
+                    matched = ch;
+                    break;
+                }
+            }
+            if (!matched && self.internalChannelTrackers.count < 8) {
+                matched = [TX500CWChannelTracker new];
+                matched.channelId = ++self.nextChannelId;
+                matched.frequencyHz = cf;
+                matched.estimatedWPM = self.estimatedWPM > 10.0 ? self.estimatedWPM : 20.0;
+                matched.smoothedNoise = spectralNoise;
+                [self.internalChannelTrackers addObject:matched];
+            }
+            if (matched) {
+                matched.frequencyHz = 0.85 * matched.frequencyHz + 0.15 * cf;
+            }
+        }
+
+        // 2. Demodulate and slice each channel
+        BOOL anyUpdated = NO;
+        for (TX500CWChannelTracker *ch in self.internalChannelTrackers) {
+            float mag = GoertzelMagnitude(weighted, totalFrames, ch.frequencyHz, self.sampleRate) * normalization;
+            ch.smoothedNoise = ch.smoothedNoise > 0 ? (ch.smoothedNoise * 0.95f + spectralNoise * 0.05f) : spectralNoise;
+            float threshold = fmaxf(1e-7f, ch.smoothedNoise * 2.8f);
+            BOOL isMark = mag > threshold;
+            ch.isCarrierActive = isMark;
+
+            float ratio = fmaxf(1.0f, mag / fmaxf(1e-8f, ch.smoothedNoise));
+            ch.snrDb = 20.0 * log10(ratio);
+
+            double dit = 1.2 / fmax(10.0, ch.estimatedWPM);
+
+            if (isMark) {
+                ch.lastActivityTime = now;
+                ch.currentMarkDuration += frameDuration;
+                ch.currentSpaceDuration = 0;
+                ch.isMarkActive = YES;
+            } else {
+                if (ch.isMarkActive) {
+                    // Mark ended: append dit or dah
+                    if (ch.currentMarkDuration < 1.9 * dit) {
+                        ch.activeCharBuffer = [ch.activeCharBuffer stringByAppendingString:@"."];
+                    } else {
+                        ch.activeCharBuffer = [ch.activeCharBuffer stringByAppendingString:@"-"];
+                    }
+                    ch.currentMarkDuration = 0;
+                    ch.isMarkActive = NO;
+                    anyUpdated = YES;
+                }
+                ch.currentSpaceDuration += frameDuration;
+
+                // Character boundary (gap >= 2.0 * dit)
+                if (ch.currentSpaceDuration >= 2.0 * dit && ch.activeCharBuffer.length > 0) {
+                    NSString *sym = [TX500CWAudioDecoder reverseMorseAlphabet][ch.activeCharBuffer];
+                    if (sym) {
+                        [ch.decodedText appendString:sym];
+                        if (ch.decodedText.length > 150) {
+                            [ch.decodedText deleteCharactersInRange:NSMakeRange(0, ch.decodedText.length - 120)];
+                        }
+                        NSString *call = ExtractCallsignFromText(ch.decodedText);
+                        if (call.length > 0) {
+                            ch.extractedCallsign = call;
+                        }
+                        anyUpdated = YES;
+                    }
+                    ch.activeCharBuffer = @"";
+                }
+
+                // Word boundary (gap >= 5.0 * dit)
+                if (ch.currentSpaceDuration >= 5.0 * dit && ![ch.decodedText hasSuffix:@" "] && ch.decodedText.length > 0) {
+                    [ch.decodedText appendString:@" "];
+                    anyUpdated = YES;
+                }
+            }
+        }
+
+        // 3. Prune dead channels (> 30s inactive without text, or > 60s total)
+        NSMutableArray<TX500CWChannelTracker *> *active = [NSMutableArray array];
+        for (TX500CWChannelTracker *ch in self.internalChannelTrackers) {
+            NSTimeInterval idle = [now timeIntervalSinceDate:ch.lastActivityTime];
+            if (idle < 30.0 || (ch.decodedText.length > 0 && idle < 60.0)) {
+                [active addObject:ch];
+            }
+        }
+        self.internalChannelTrackers = active;
+
+        // 4. Update public state
+        NSMutableArray<TX500CWChannelState *> *pub = [NSMutableArray arrayWithCapacity:active.count];
+        for (TX500CWChannelTracker *ch in active) {
+            TX500CWChannelState *s = [TX500CWChannelState new];
+            s.channelId = ch.channelId;
+            s.frequencyHz = ch.frequencyHz;
+            s.snrDb = ch.snrDb;
+            s.estimatedWPM = ch.estimatedWPM;
+            s.isCarrierActive = ch.isCarrierActive;
+            s.activeCharBuffer = [ch.activeCharBuffer copy];
+            s.decodedText = [ch.decodedText copy];
+            s.extractedCallsign = [ch.extractedCallsign copy];
+            s.lastActivityTime = ch.lastActivityTime;
+            [pub addObject:s];
+        }
+        self.internalActiveChannels = pub;
+
+        if (anyUpdated && self.onMultiChannelUpdated) {
+            NSArray *snapshot = [pub copy];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (self.onMultiChannelUpdated) {
+                    self.onMultiChannelUpdated(snapshot);
+                }
+            });
+        }
     }
 }
 

@@ -10,12 +10,63 @@
 
 static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
 
+@interface TX500CWVFOTextField : NSTextField
+@property (nonatomic, copy, nullable) void (^onScrolled)(NSInteger deltaUnits);
+@end
+
+@implementation TX500CWVFOTextField
+- (void)scrollWheel:(NSEvent *)event {
+    if (self.onScrolled) {
+        CGFloat dy = event.scrollingDeltaY;
+        if (fabs(dy) > 0.1) {
+            NSInteger step = (dy > 0) ? 1 : -1;
+            self.onScrolled(step);
+            return;
+        }
+    }
+    [super scrollWheel:event];
+}
+@end
+
 @interface TX500CWStationController ()
 
 @property (nonatomic, strong, readwrite) NSView *view;
 @property (nonatomic, strong, readwrite) TX500CWAudioDecoder *decoder;
 @property (nonatomic, strong, readwrite) TX500CWKeyer *keyer;
 @property (nonatomic, strong, readwrite) TX500CWQSOAssistant *assistant;
+@property (nonatomic, strong, readwrite) TX500AudioEngine *audioEngine;
+
+// Audio Monitor Controls
+@property (nonatomic, strong) NSButton *monitorToggleButton;
+@property (nonatomic, strong) NSSlider *monitorVolumeSlider;
+@property (nonatomic, strong) NSButton *monitorMuteButton;
+@property (nonatomic, strong) NSButton *cwNarrowFilterButton;
+@property (nonatomic, assign, readwrite) BOOL isMonitoringAudio;
+
+// Recording Controls
+@property (nonatomic, strong) NSButton *recordButton;
+@property (nonatomic, strong) NSTextField *recordStatusLabel;
+@property (nonatomic, strong) NSButton *revealRecordingsButton;
+@property (nonatomic, strong) NSButton *autoRecordCheckbox;
+@property (nonatomic, strong, nullable) NSTimer *recordTimer;
+@property (nonatomic, assign) NSTimeInterval recordSeconds;
+@property (nonatomic, assign, readwrite) BOOL isRecordingAudio;
+
+// VFO & Tuning Controls
+@property (nonatomic, strong) TX500CWVFOTextField *vfoLabel;
+@property (nonatomic, strong) NSTextField *vfoOffsetLabel;
+@property (nonatomic, strong) NSButton *stepDownButton;
+@property (nonatomic, strong) NSButton *stepUpButton;
+@property (nonatomic, strong) NSSegmentedControl *vfoStepControl;
+@property (nonatomic, assign) int64_t currentTuningStepHz;
+
+// Amateur Band Selector Controls
+@property (nonatomic, strong) NSSegmentedControl *bandSelectorControl;
+@property (nonatomic, assign) NSTimeInterval userTuningLockoutUntil;
+
+// Multi-Channel Roster Controls
+@property (nonatomic, strong) NSSegmentedControl *rosterModeControl;
+@property (nonatomic, strong) NSMutableArray<TX500CWChannelState *> *widebandChannels;
 
 // UI Controls - Top Bar
 @property (nonatomic, strong) NSButton *startStopDecoderButton;
@@ -27,12 +78,14 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
 @property (nonatomic, strong) NSSlider *pitchSlider;
 @property (nonatomic, strong) NSTextField *pitchValueLabel;
 @property (nonatomic, strong) NSButton *afcCheckbox;
+@property (nonatomic, assign) BOOL cwModeConfiguredOnRadio;
 @property (nonatomic, strong) NSStepper *wpmStepper;
 @property (nonatomic, strong) NSTextField *wpmLabel;
 @property (nonatomic, strong) NSButton *cutNumbersCheckbox;
 
 // UI Controls - Spectrum & Metrics
 @property (nonatomic, strong) TX500CWSpectrumView *spectrumView;
+@property (nonatomic, strong) NSTextField *carrierLockStatusLabel;
 @property (nonatomic, strong) NSTextField *wpmMetricLabel;
 @property (nonatomic, strong) NSTextField *snrMetricLabel;
 @property (nonatomic, strong) NSTextField *ditDahMetricLabel;
@@ -52,8 +105,19 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
 @property (nonatomic, strong) NSTextField *autoCQCountdownLabel;
 @property (nonatomic, strong) NSTextField *txInputField;
 @property (nonatomic, strong) NSButton *txSendButton;
+@property (nonatomic, strong) NSButton *txTuneButton;
 @property (nonatomic, strong) NSButton *txAbortButton;
+@property (nonatomic, assign, readwrite) BOOL isManualTuneActive;
 @property (nonatomic, strong) NSMutableArray<NSButton *> *macroButtons;
+
+// UI Controls - Live Transmit Telemetry (PWR & SWR)
+@property (nonatomic, strong) NSTextField *txPowerLabel;
+@property (nonatomic, strong) NSLevelIndicator *txPowerMeterBar;
+@property (nonatomic, strong) NSTextField *txSwrLabel;
+@property (nonatomic, strong) NSLevelIndicator *txSwrMeterBar;
+@property (nonatomic, strong, nullable) NSTimer *txMeterPollingTimer;
+@property (nonatomic, assign, readwrite) double liveTXPowerWatts;
+@property (nonatomic, assign, readwrite) double liveTXSWR;
 
 // UI Controls - QSO Log Table
 @property (nonatomic, strong) NSTableView *logTableView;
@@ -77,22 +141,31 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
         } else if (@available(macOS 14.2, *)) {
             _decoder.selectedAudioDeviceUID = TX500CWSystemAudioDeviceUID;
         }
-        _operatingMode = @"CW";
+        _operatingMode = @"DIG";
         _userHasChosenCustomMode = NO;
         _decoder.preserveDeviceSelection = YES;
         _keyer = [[TX500CWKeyer alloc] init];
         _assistant = [[TX500CWQSOAssistant alloc] init];
         _macroButtons = [NSMutableArray array];
 
+        _audioEngine = [[TX500AudioEngine alloc] init];
+        _currentDialFrequencyHz = 14025000;
+        _currentTuningStepHz = 100;
+        _widebandChannels = [NSMutableArray array];
+        _isMonitoringAudio = NO;
+        _isRecordingAudio = NO;
+
         [_decoder setNominalWPM:(double)_keyer.wpm];
 
-        [self setupBindings];
         [self buildUserInterface];
+        [self setupBindings];
     }
     return self;
 }
 
 - (void)dealloc {
+    [self stopAudioMonitor];
+    [self stopRecordingMessage];
     [self stopStation];
 }
 
@@ -121,15 +194,34 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
         typeof(self) strongSelf = weakSelf;
         if (!strongSelf) return;
         strongSelf.wpmMetricLabel.stringValue = [NSString stringWithFormat:@"%.0f WPM", wpm];
-        strongSelf.snrMetricLabel.stringValue = [NSString stringWithFormat:@"%.1f dB", snrDb];
+        strongSelf.snrMetricLabel.stringValue = [NSString stringWithFormat:@"%.1f dB SNR", snrDb];
         strongSelf.ditDahMetricLabel.stringValue = [NSString stringWithFormat:@"1 : %.1f", strongSelf.decoder.ditDahRatio];
+        strongSelf.carrierLockStatusLabel.stringValue = sig ? @"● RX CARRIER" : @"○ LISTENING";
+        strongSelf.carrierLockStatusLabel.textColor = sig ? [NSColor colorWithSRGBRed:0.2 green:0.95 blue:0.4 alpha:1.0] : [NSColor secondaryLabelColor];
 
         [strongSelf.spectrumView updateWithBins:strongSelf.decoder.spectrumBins
                                      centerFreq:strongSelf.decoder.centerFrequencyHz
                                     nominalPitch:strongSelf.decoder.nominalPitchHz
                                            level:level
                                            snrDb:snrDb
-                                  signalDetected:sig];
+                                  signalDetected:sig
+                                detectedCarriers:strongSelf.decoder.detectedCarrierFrequencies];
+    };
+
+    self.decoder.onMultiChannelUpdated = ^(NSArray<TX500CWChannelState *> *channels) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        strongSelf.widebandChannels = [channels mutableCopy];
+        if (strongSelf.rosterModeControl.selectedSegment == 0) {
+            [strongSelf.cqRosterTableView reloadData];
+        }
+        [strongSelf.spectrumView updateWithBins:strongSelf.decoder.spectrumBins
+                                     centerFreq:strongSelf.decoder.centerFrequencyHz
+                                    nominalPitch:strongSelf.decoder.nominalPitchHz
+                                           level:strongSelf.decoder.audioInputLevel
+                                           snrDb:strongSelf.decoder.signalToNoiseRatioDb
+                                  signalDetected:strongSelf.decoder.isSignalDetected
+                                detectedCarriers:strongSelf.decoder.detectedCarrierFrequencies];
     };
 
     self.decoder.onAudioDevicesChanged = ^{
@@ -143,6 +235,10 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
         if (!strongSelf) return;
         strongSelf.startStopDecoderButton.title = listening ? @"STOP DECODER" : @"START DECODER";
         strongSelf.startStopDecoderButton.contentTintColor = listening ? NSColor.systemRedColor : NSColor.systemGreenColor;
+        if (!listening) {
+            if (strongSelf.isMonitoringAudio) [strongSelf stopAudioMonitor];
+            if (strongSelf.isRecordingAudio) [strongSelf stopRecordingMessage];
+        }
         if (strongSelf.decoderStateChangedHandler) strongSelf.decoderStateChangedHandler(listening);
     };
     self.decoder.onAudioError = ^(NSString *message) {
@@ -156,7 +252,34 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
         if (strongSelf.view.window) [alert beginSheetModalForWindow:strongSelf.view.window completionHandler:nil];
     };
 
-    // User click anywhere on Spectrum Waterfall tunes the pitch
+    // User click anywhere on Spectrum Waterfall tunes the radio VFO frequency
+    self.spectrumView.onWaterfallFrequencyClicked = ^(double clickedAudioFreqHz) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) return;
+
+        double nomPitch = strongSelf.decoder ? strongSelf.decoder.nominalPitchHz : 650.0;
+        if (nomPitch < 300.0 || nomPitch > 1500.0) nomPitch = 650.0;
+
+        int64_t deltaHz = (int64_t)round(clickedAudioFreqHz - nomPitch);
+
+        // Retune radio VFO dial so clicked signal centers on the operator's nominal CW pitch
+        if (llabs(deltaHz) >= 5) {
+            strongSelf.userTuningLockoutUntil = [NSDate timeIntervalSinceReferenceDate] + 1.5;
+            [strongSelf stepFrequencyHz:deltaHz];
+            if (strongSelf.logHandler) {
+                strongSelf.logHandler([NSString stringWithFormat:@"[CW Waterfall] Retuned radio VFO by %+lld Hz (Clicked: %.0f Hz -> Pitch: %.0f Hz)",
+                                       (long long)deltaHz, clickedAudioFreqHz, nomPitch]);
+            }
+        } else {
+            // Already centered, align decoder tone
+            [strongSelf.decoder setPitch:clickedAudioFreqHz];
+            strongSelf.keyer.sidetonePitchHz = clickedAudioFreqHz;
+            strongSelf.pitchSlider.doubleValue = clickedAudioFreqHz;
+            strongSelf.pitchValueLabel.stringValue = [NSString stringWithFormat:@"%.0fHz", clickedAudioFreqHz];
+            [strongSelf updateVFOOffsetLabel];
+        }
+    };
+
     self.spectrumView.onPitchSelected = ^(double pitchHz) {
         typeof(self) strongSelf = weakSelf;
         if (!strongSelf) return;
@@ -164,9 +287,7 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
         strongSelf.pitchValueLabel.stringValue = [NSString stringWithFormat:@"%.0fHz", pitchHz];
         [strongSelf.decoder setPitch:pitchHz];
         strongSelf.keyer.sidetonePitchHz = pitchHz;
-        if (strongSelf.logHandler) {
-            strongSelf.logHandler([NSString stringWithFormat:@"CW Pitch tuned to %.0f Hz via Spectrum click.", pitchHz]);
-        }
+        [strongSelf updateVFOOffsetLabel];
     };
 
     // Assistant -> UI Updates
@@ -235,9 +356,23 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
         if (transmitting) {
             strongSelf.txAbortButton.enabled = YES;
             strongSelf.txSendButton.enabled = NO;
+            strongSelf.txTuneButton.title = @"■ TX ON";
+            strongSelf.txTuneButton.contentTintColor = [NSColor systemRedColor];
+            strongSelf.txTuneButton.enabled = NO;
+            strongSelf.carrierLockStatusLabel.stringValue = @"● TX ON THE AIR";
+            strongSelf.carrierLockStatusLabel.textColor = [NSColor systemRedColor];
+            [strongSelf startTXMeterPolling];
         } else {
-            strongSelf.txAbortButton.enabled = NO;
+            strongSelf.txAbortButton.enabled = strongSelf.isManualTuneActive;
             strongSelf.txSendButton.enabled = YES;
+            strongSelf.txTuneButton.title = strongSelf.isManualTuneActive ? @"■ RX (Stop)" : @"TX (Tune)";
+            strongSelf.txTuneButton.contentTintColor = strongSelf.isManualTuneActive ? [NSColor systemRedColor] : nil;
+            strongSelf.txTuneButton.enabled = YES;
+            strongSelf.carrierLockStatusLabel.stringValue = strongSelf.isManualTuneActive ? @"● TX (TUNING)" : @"○ LISTENING";
+            strongSelf.carrierLockStatusLabel.textColor = strongSelf.isManualTuneActive ? [NSColor systemRedColor] : [NSColor secondaryLabelColor];
+            if (!strongSelf.isManualTuneActive) {
+                [strongSelf stopTXMeterPolling];
+            }
         }
         (void)text;
     };
@@ -245,30 +380,53 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
 
 #pragma mark - Radio Mode & Lifecycle
 
+- (void)updateKeyerCommandsForCurrentMode {
+    if ([self.operatingMode isEqualToString:@"CW"]) {
+        self.keyer.txPrefixCommand = @"MD6;TX;";
+        self.keyer.rxSuffixCommand = @"RX;MD3;";
+    } else if ([self.operatingMode isEqualToString:@"CW-R"]) {
+        self.keyer.txPrefixCommand = @"MD6;TX;";
+        self.keyer.rxSuffixCommand = @"RX;MD7;";
+    } else {
+        self.keyer.txPrefixCommand = @"TX;";
+        self.keyer.rxSuffixCommand = @"RX;";
+    }
+}
+
 - (void)prepareRadioForCWMode {
     if (self.userHasChosenCustomMode) {
+        [self updateKeyerCommandsForCurrentMode];
         return;
     }
-    self.operatingMode = @"CW";
-    if (self.modePopup) {
-        [self.modePopup selectItemWithTag:3];
+    self.operatingMode = @"DIG";
+    if (self.modePopup && self.modePopup.selectedItem.tag != 6) {
+        [self.modePopup selectItemWithTag:6];
     }
-    if (self.serialCommandSender) {
-        BOOL sent = self.serialCommandSender(@"MD3;");
-        if (sent && self.logHandler) {
-            self.logHandler(@"[CW Station] Transceiver configured for CW mode (MD3;).");
+    if (!self.cwModeConfiguredOnRadio) {
+        if (self.serialCommandSender) {
+            BOOL sent = self.serialCommandSender(@"MD6;");
+            if (sent) {
+                self.cwModeConfiguredOnRadio = YES;
+                if (self.logHandler) {
+                    self.logHandler(@"[CW Station] Transceiver configured for DIG mode (MD6;).");
+                }
+            }
         }
     }
+    [self updateKeyerCommandsForCurrentMode];
 }
 
 - (void)modePopupChanged:(NSPopUpButton *)sender {
     NSInteger tag = sender.selectedItem.tag;
     self.userHasChosenCustomMode = YES;
+    self.cwModeConfiguredOnRadio = (tag == 6 || tag == 3);
     if (tag == 3) self.operatingMode = @"CW";
     else if (tag == 7) self.operatingMode = @"CW-R";
     else if (tag == 2) self.operatingMode = @"USB";
     else if (tag == 1) self.operatingMode = @"LSB";
     else if (tag == 6) self.operatingMode = @"DIG";
+
+    [self updateKeyerCommandsForCurrentMode];
 
     NSString *cmd = [NSString stringWithFormat:@"MD%ld;", (long)tag];
     if (self.serialCommandSender) {
@@ -286,6 +444,8 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
 }
 
 - (void)stopStation {
+    [self stopManualTune];
+    [self stopTXMeterPolling];
     [self stopAutoCQTimer];
     [self.decoder stopListening];
     [self.decoder stopSimulation];
@@ -296,25 +456,40 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
 }
 
 - (void)updateFrequencyHz:(uint64_t)freqHz mode:(NSString *)mode {
+    NSTimeInterval now = [NSDate timeIntervalSinceReferenceDate];
+    if (now < self.userTuningLockoutUntil) {
+        // Discard stale in-flight serial poll replies while user tuning command is settling
+        return;
+    }
+    self.currentDialFrequencyHz = freqHz;
     self.assistant.currentFrequencyHz = freqHz;
     // Derive amateur band
     double mhz = (double)freqHz / 1000000.0;
     NSString *b = @"20m";
-    if (mhz >= 1.8 && mhz <= 2.0) b = @"160m";
-    else if (mhz >= 3.5 && mhz <= 4.0) b = @"80m";
-    else if (mhz >= 7.0 && mhz <= 7.3) b = @"40m";
-    else if (mhz >= 10.1 && mhz <= 10.15) b = @"30m";
-    else if (mhz >= 14.0 && mhz <= 14.35) b = @"20m";
-    else if (mhz >= 18.068 && mhz <= 18.168) b = @"17m";
-    else if (mhz >= 21.0 && mhz <= 21.45) b = @"15m";
-    else if (mhz >= 24.89 && mhz <= 24.99) b = @"12m";
-    else if (mhz >= 28.0 && mhz <= 29.7) b = @"10m";
-    else if (mhz >= 50.0 && mhz <= 54.0) b = @"6m";
+    NSInteger bandIndex = 4;
+    if (mhz >= 1.8 && mhz <= 2.0) { b = @"160m"; bandIndex = 0; }
+    else if (mhz >= 3.5 && mhz <= 4.0) { b = @"80m"; bandIndex = 1; }
+    else if (mhz >= 7.0 && mhz <= 7.3) { b = @"40m"; bandIndex = 2; }
+    else if (mhz >= 10.1 && mhz <= 10.15) { b = @"30m"; bandIndex = 3; }
+    else if (mhz >= 14.0 && mhz <= 14.35) { b = @"20m"; bandIndex = 4; }
+    else if (mhz >= 18.068 && mhz <= 18.168) { b = @"17m"; bandIndex = 5; }
+    else if (mhz >= 21.0 && mhz <= 21.45) { b = @"15m"; bandIndex = 6; }
+    else if (mhz >= 24.89 && mhz <= 24.99) { b = @"12m"; bandIndex = 7; }
+    else if (mhz >= 28.0 && mhz <= 29.7) { b = @"10m"; bandIndex = 8; }
+    else if (mhz >= 50.0 && mhz <= 54.0) { b = @"6m"; bandIndex = 9; }
     self.assistant.currentBand = b;
 
+    if (self.vfoLabel) {
+        self.vfoLabel.stringValue = [NSString stringWithFormat:@"%.3f.%03llu MHz", (double)freqHz / 1e6, (unsigned long long)(freqHz % 1000)];
+    }
+    if (self.bandSelectorControl && bandIndex >= 0 && bandIndex < self.bandSelectorControl.segmentCount) {
+        self.bandSelectorControl.selectedSegment = bandIndex;
+    }
+    [self updateVFOOffsetLabel];
+
     if (!self.userHasChosenCustomMode) {
-        // Automatically ensure CW mode unless the user explicitly selected another mode
-        if (mode.length > 0 && ![mode isEqualToString:@"CW"] && ![mode isEqualToString:@"CW-R"]) {
+        // Automatically ensure DIG/CW mode unless the user explicitly selected another mode
+        if (mode.length > 0 && ![mode isEqualToString:@"DIG"] && ![mode isEqualToString:@"CW"] && ![mode isEqualToString:@"CW-R"]) {
             [self prepareRadioForCWMode];
         }
     } else if (mode.length > 0) {
@@ -324,7 +499,265 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
         else if ([mode isEqualToString:@"USB"]) [self.modePopup selectItemWithTag:2];
         else if ([mode isEqualToString:@"LSB"]) [self.modePopup selectItemWithTag:1];
         else if ([mode isEqualToString:@"DIG"]) [self.modePopup selectItemWithTag:6];
+        [self updateKeyerCommandsForCurrentMode];
     }
+}
+
+- (void)updateVFOOffsetLabel {
+    if (!self.vfoOffsetLabel) return;
+    uint64_t dial = self.currentDialFrequencyHz > 0 ? self.currentDialFrequencyHz : 14025000;
+    double pitch = self.decoder ? self.decoder.nominalPitchHz : 650.0;
+    uint64_t rf = dial + (uint64_t)round(pitch);
+    self.vfoOffsetLabel.stringValue = [NSString stringWithFormat:@"Pitch: +%.0fHz | RF: %.3f.%03llu MHz",
+                                       pitch, (double)rf / 1e6, (unsigned long long)(rf % 1000)];
+}
+
+- (void)tuneToFrequencyHz:(uint64_t)freqHz {
+    if (freqHz < 1000000 || freqHz > 60000000) return;
+    self.userTuningLockoutUntil = [NSDate timeIntervalSinceReferenceDate] + 1.5;
+    self.currentDialFrequencyHz = freqHz;
+    self.assistant.currentFrequencyHz = freqHz;
+
+    // Derive amateur band
+    double mhz = (double)freqHz / 1000000.0;
+    NSString *b = @"20m";
+    NSInteger bandIndex = 4;
+    if (mhz >= 1.8 && mhz <= 2.0) { b = @"160m"; bandIndex = 0; }
+    else if (mhz >= 3.5 && mhz <= 4.0) { b = @"80m"; bandIndex = 1; }
+    else if (mhz >= 7.0 && mhz <= 7.3) { b = @"40m"; bandIndex = 2; }
+    else if (mhz >= 10.1 && mhz <= 10.15) { b = @"30m"; bandIndex = 3; }
+    else if (mhz >= 14.0 && mhz <= 14.35) { b = @"20m"; bandIndex = 4; }
+    else if (mhz >= 18.068 && mhz <= 18.168) { b = @"17m"; bandIndex = 5; }
+    else if (mhz >= 21.0 && mhz <= 21.45) { b = @"15m"; bandIndex = 6; }
+    else if (mhz >= 24.89 && mhz <= 24.99) { b = @"12m"; bandIndex = 7; }
+    else if (mhz >= 28.0 && mhz <= 29.7) { b = @"10m"; bandIndex = 8; }
+    else if (mhz >= 50.0 && mhz <= 54.0) { b = @"6m"; bandIndex = 9; }
+    self.assistant.currentBand = b;
+
+    if (self.vfoLabel) {
+        self.vfoLabel.stringValue = [NSString stringWithFormat:@"%.3f.%03llu MHz", (double)freqHz / 1e6, (unsigned long long)(freqHz % 1000)];
+    }
+    if (self.bandSelectorControl && bandIndex >= 0 && bandIndex < self.bandSelectorControl.segmentCount) {
+        self.bandSelectorControl.selectedSegment = bandIndex;
+    }
+    [self updateVFOOffsetLabel];
+    if (self.serialCommandSender) {
+        NSString *cmd = [NSString stringWithFormat:@"FA%011llu;", (unsigned long long)freqHz];
+        self.serialCommandSender(cmd);
+        if (self.logHandler) {
+            self.logHandler([NSString stringWithFormat:@"[CW Station] Tuned VFO to %.4f MHz (%@)", (double)freqHz / 1e6, cmd]);
+        }
+    }
+}
+
+- (void)stepFrequencyHz:(int64_t)stepHz {
+    uint64_t current = self.currentDialFrequencyHz > 0 ? self.currentDialFrequencyHz : 14025000;
+    int64_t target = (int64_t)current + stepHz;
+    if (target < 1000000) target = 1000000;
+    if (target > 60000000) target = 60000000;
+    self.userTuningLockoutUntil = [NSDate timeIntervalSinceReferenceDate] + 1.5;
+    [self tuneToFrequencyHz:(uint64_t)target];
+}
+
+- (void)selectAmateurBand:(NSString *)band {
+    uint64_t f = 14025000;
+    NSInteger bandIndex = 4;
+    if ([band isEqualToString:@"160m"]) { f = 1810000; bandIndex = 0; }
+    else if ([band isEqualToString:@"80m"]) { f = 3520000; bandIndex = 1; }
+    else if ([band isEqualToString:@"40m"]) { f = 7020000; bandIndex = 2; }
+    else if ([band isEqualToString:@"30m"]) { f = 10110000; bandIndex = 3; }
+    else if ([band isEqualToString:@"20m"]) { f = 14025000; bandIndex = 4; }
+    else if ([band isEqualToString:@"17m"]) { f = 18075000; bandIndex = 5; }
+    else if ([band isEqualToString:@"15m"]) { f = 21025000; bandIndex = 6; }
+    else if ([band isEqualToString:@"12m"]) { f = 24895000; bandIndex = 7; }
+    else if ([band isEqualToString:@"10m"]) { f = 28025000; bandIndex = 8; }
+    else if ([band isEqualToString:@"6m"]) { f = 50090000; bandIndex = 9; }
+
+    self.userTuningLockoutUntil = [NSDate timeIntervalSinceReferenceDate] + 1.5;
+    self.currentDialFrequencyHz = f;
+    self.assistant.currentBand = band;
+    self.assistant.currentFrequencyHz = f;
+    if (self.vfoLabel) {
+        self.vfoLabel.stringValue = [NSString stringWithFormat:@"%.3f.%03llu MHz", (double)f / 1e6, (unsigned long long)(f % 1000)];
+    }
+    if (self.bandSelectorControl && bandIndex >= 0 && bandIndex < self.bandSelectorControl.segmentCount) {
+        self.bandSelectorControl.selectedSegment = bandIndex;
+    }
+    [self updateVFOOffsetLabel];
+
+    [self tuneToFrequencyHz:f];
+    [self prepareRadioForCWMode];
+}
+
+- (void)vfoStepControlChanged:(NSSegmentedControl *)sender {
+    NSInteger sel = sender.selectedSegment;
+    if (sel == 0) self.currentTuningStepHz = 10;
+    else if (sel == 1) self.currentTuningStepHz = 100;
+    else if (sel == 2) self.currentTuningStepHz = 500;
+    else if (sel == 3) self.currentTuningStepHz = 1000;
+    else if (sel == 4) self.currentTuningStepHz = 5000;
+}
+
+- (void)stepDownClicked:(id)sender {
+    (void)sender;
+    int64_t step = self.currentTuningStepHz > 0 ? self.currentTuningStepHz : 100;
+    [self stepFrequencyHz:-step];
+}
+
+- (void)stepUpClicked:(id)sender {
+    (void)sender;
+    int64_t step = self.currentTuningStepHz > 0 ? self.currentTuningStepHz : 100;
+    [self stepFrequencyHz:step];
+}
+
+- (void)bandSelectorChanged:(NSSegmentedControl *)sender {
+    NSInteger sel = sender.selectedSegment;
+    NSArray<NSString *> *names = @[@"160m", @"80m", @"40m", @"30m", @"20m", @"17m", @"15m", @"12m", @"10m", @"6m"];
+    if (sel >= 0 && sel < (NSInteger)names.count) {
+        [self selectAmateurBand:names[sel]];
+    }
+}
+
+#pragma mark - Audio Monitor & Recording
+
+- (void)startAudioMonitor {
+    if (self.decoder.selectedAudioDeviceUID.length > 0 &&
+        ![self.decoder.selectedAudioDeviceUID isEqualToString:TX500CWSystemAudioDeviceUID]) {
+        self.audioEngine.selectedInputDeviceUID = self.decoder.selectedAudioDeviceUID;
+    }
+    self.audioEngine.masterVolume = self.monitorVolumeSlider ? self.monitorVolumeSlider.floatValue : 1.0f;
+    self.audioEngine.isMuted = self.monitorMuteButton ? (self.monitorMuteButton.state == NSControlStateValueOn) : NO;
+    if (self.cwNarrowFilterButton && self.cwNarrowFilterButton.state == NSControlStateValueOn) {
+        [self.audioEngine applyPreset:TX500AudioFilterPresetCWNarrow];
+    } else {
+        [self.audioEngine applyPreset:TX500AudioFilterPresetFlat];
+    }
+    NSError *err = nil;
+    BOOL ok = [self.audioEngine startMonitoring:&err];
+    if (ok) {
+        _isMonitoringAudio = YES;
+        self.monitorToggleButton.title = @"🔊 Monitor: ON";
+        self.monitorToggleButton.contentTintColor = [NSColor systemGreenColor];
+        if (self.logHandler) {
+            self.logHandler(@"[CW Station] RX Audio Monitor enabled (output to Mac speakers/headphones).");
+        }
+    } else {
+        _isMonitoringAudio = NO;
+        self.monitorToggleButton.title = @"🔈 Monitor: OFF";
+        self.monitorToggleButton.contentTintColor = [NSColor secondaryLabelColor];
+        if (err && self.logHandler) {
+            self.logHandler([NSString stringWithFormat:@"[CW Station] Audio monitor failed: %@", err.localizedDescription]);
+        }
+    }
+}
+
+- (void)stopAudioMonitor {
+    [self.audioEngine stopMonitoring];
+    _isMonitoringAudio = NO;
+    self.monitorToggleButton.title = @"🔈 Monitor: OFF";
+    self.monitorToggleButton.contentTintColor = [NSColor secondaryLabelColor];
+    if (self.logHandler) {
+        self.logHandler(@"[CW Station] RX Audio Monitor stopped.");
+    }
+}
+
+- (void)toggleAudioMonitor {
+    if (self.isMonitoringAudio) {
+        [self stopAudioMonitor];
+    } else {
+        [self startAudioMonitor];
+    }
+}
+
+- (void)monitorVolumeChanged:(NSSlider *)sender {
+    self.audioEngine.masterVolume = sender.floatValue;
+}
+
+- (void)monitorMuteClicked:(NSButton *)sender {
+    self.audioEngine.isMuted = (sender.state == NSControlStateValueOn);
+    sender.contentTintColor = self.audioEngine.isMuted ? [NSColor systemRedColor] : [NSColor controlTextColor];
+}
+
+- (void)cwFilterClicked:(NSButton *)sender {
+    if (sender.state == NSControlStateValueOn) {
+        [self.audioEngine applyPreset:TX500AudioFilterPresetCWNarrow];
+    } else {
+        [self.audioEngine applyPreset:TX500AudioFilterPresetFlat];
+    }
+}
+
+- (void)startRecordingMessage {
+    if (self.isRecordingAudio) return;
+    NSError *err = nil;
+    BOOL ok = [self.audioEngine startRecordingWithError:&err];
+    if (ok) {
+        _isRecordingAudio = YES;
+        self.recordSeconds = 0;
+        self.recordButton.title = @"■ STOP REC";
+        self.recordButton.contentTintColor = [NSColor systemRedColor];
+        self.recordStatusLabel.stringValue = @"● REC 00:00";
+        self.recordStatusLabel.textColor = [NSColor systemRedColor];
+
+        __weak typeof(self) weakSelf = self;
+        [self.recordTimer invalidate];
+        self.recordTimer = [NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer * _Nonnull timer) {
+            typeof(self) strongSelf = weakSelf;
+            if (!strongSelf || !strongSelf.isRecordingAudio) {
+                [timer invalidate];
+                return;
+            }
+            strongSelf.recordSeconds += 1.0;
+            NSInteger mins = (NSInteger)strongSelf.recordSeconds / 60;
+            NSInteger secs = (NSInteger)strongSelf.recordSeconds % 60;
+            strongSelf.recordStatusLabel.stringValue = [NSString stringWithFormat:@"● REC %02ld:%02ld", (long)mins, (long)secs];
+        }];
+
+        if (self.logHandler) {
+            self.logHandler([NSString stringWithFormat:@"[CW Station] Audio recording started: %@", self.audioEngine.currentRecordingPath.lastPathComponent ?: @"CW.wav"]);
+        }
+    } else if (err && self.logHandler) {
+        self.logHandler([NSString stringWithFormat:@"[CW Station] Failed to start recording: %@", err.localizedDescription]);
+    }
+}
+
+- (void)stopRecordingMessage {
+    if (!self.isRecordingAudio) return;
+    [self.recordTimer invalidate];
+    self.recordTimer = nil;
+    NSString *path = self.audioEngine.currentRecordingPath;
+    [self.audioEngine stopRecording];
+    _isRecordingAudio = NO;
+
+    self.recordButton.title = @"● REC";
+    self.recordButton.contentTintColor = [NSColor systemRedColor];
+    self.recordStatusLabel.textColor = [NSColor secondaryLabelColor];
+    if (path.length > 0) {
+        self.recordStatusLabel.stringValue = [NSString stringWithFormat:@"Saved: %@", path.lastPathComponent];
+        self.revealRecordingsButton.hidden = NO;
+        if (self.logHandler) {
+            self.logHandler([NSString stringWithFormat:@"[CW Station] Recording saved: %@", path]);
+        }
+    } else {
+        self.recordStatusLabel.stringValue = @"";
+    }
+}
+
+- (void)toggleRecording {
+    if (self.isRecordingAudio) {
+        [self stopRecordingMessage];
+    } else {
+        [self startRecordingMessage];
+    }
+}
+
+- (void)revealRecordingsClicked:(id)sender {
+    (void)sender;
+    [self.audioEngine revealRecordingsInFinder];
+}
+
+- (void)rosterModeChanged:(NSSegmentedControl *)sender {
+    (void)sender;
+    [self.cqRosterTableView reloadData];
 }
 
 #pragma mark - UI Building
@@ -344,12 +777,13 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
     self.view = [[NSView alloc] initWithFrame:NSZeroRect];
     self.view.translatesAutoresizingMaskIntoConstraints = NO;
 
+    NSView *vfoCard = [self buildVFOBandControlBar];
     NSView *topCard = [self buildTopControlBar];
     NSView *scopeCard = [self buildSpectrumAndMetricsRow];
     NSView *middleCard = [self buildMiddleWorkstation];
     NSView *bottomCard = [self buildBottomLogSection];
 
-    NSStackView *rootStack = [NSStackView stackViewWithViews:@[topCard, scopeCard, middleCard, bottomCard]];
+    NSStackView *rootStack = [NSStackView stackViewWithViews:@[vfoCard, topCard, scopeCard, middleCard, bottomCard]];
     rootStack.translatesAutoresizingMaskIntoConstraints = NO;
     rootStack.orientation = NSUserInterfaceLayoutOrientationVertical;
     rootStack.spacing = 8;
@@ -363,6 +797,7 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
         [rootStack.trailingAnchor constraintEqualToAnchor:self.view.trailingAnchor],
         [rootStack.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor],
 
+        [vfoCard.widthAnchor constraintEqualToAnchor:rootStack.widthAnchor],
         [topCard.widthAnchor constraintEqualToAnchor:rootStack.widthAnchor],
         [scopeCard.widthAnchor constraintEqualToAnchor:rootStack.widthAnchor],
         [middleCard.widthAnchor constraintEqualToAnchor:rootStack.widthAnchor],
@@ -370,7 +805,143 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
     ]];
 }
 
-#pragma mark - Top Control Bar
+#pragma mark - VFO & Amateur Band Bar
+
+- (NSView *)buildVFOBandControlBar {
+    NSView *container = [self createCardView];
+
+    // Row 1: VFO Readout, Step Buttons, Step Selector, Pitch Offset
+    NSTextField *vfoTitle = [NSTextField labelWithString:@"VFO A:"];
+    vfoTitle.font = [NSFont systemFontOfSize:11.5 weight:NSFontWeightBold];
+    vfoTitle.textColor = [NSColor secondaryLabelColor];
+    vfoTitle.translatesAutoresizingMaskIntoConstraints = NO;
+
+    self.vfoLabel = [[TX500CWVFOTextField alloc] init];
+    self.vfoLabel.font = [NSFont monospacedDigitSystemFontOfSize:15.0 weight:NSFontWeightBold];
+    self.vfoLabel.textColor = [NSColor colorWithSRGBRed:0.25 green:0.95 blue:0.4 alpha:1.0];
+    self.vfoLabel.backgroundColor = [NSColor colorWithCalibratedWhite:0.04 alpha:0.95];
+    self.vfoLabel.drawsBackground = YES;
+    self.vfoLabel.bordered = YES;
+    self.vfoLabel.alignment = NSTextAlignmentCenter;
+    self.vfoLabel.editable = NO;
+    self.vfoLabel.stringValue = @"14.025.000 MHz";
+    self.vfoLabel.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.vfoLabel.widthAnchor constraintEqualToConstant:140].active = YES;
+    [self.vfoLabel.heightAnchor constraintEqualToConstant:24].active = YES;
+    self.vfoLabel.toolTip = @"Transceiver VFO Dial Frequency. Scroll mouse wheel here to tune frequency up/down by selected step!";
+
+    __weak typeof(self) weakSelf = self;
+    self.vfoLabel.onScrolled = ^(NSInteger deltaUnits) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        int64_t step = (int64_t)deltaUnits * (strongSelf.currentTuningStepHz > 0 ? strongSelf.currentTuningStepHz : 100);
+        [strongSelf stepFrequencyHz:step];
+    };
+
+    self.stepDownButton = [NSButton buttonWithTitle:@"◀ -" target:self action:@selector(stepDownClicked:)];
+    self.stepDownButton.bezelStyle = NSBezelStyleRounded;
+    self.stepDownButton.controlSize = NSControlSizeSmall;
+    self.stepDownButton.font = [NSFont systemFontOfSize:10.5 weight:NSFontWeightBold];
+    self.stepDownButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.stepDownButton.widthAnchor constraintEqualToConstant:40].active = YES;
+    self.stepDownButton.toolTip = @"Step frequency down by current step";
+
+    self.stepUpButton = [NSButton buttonWithTitle:@"+ ▶" target:self action:@selector(stepUpClicked:)];
+    self.stepUpButton.bezelStyle = NSBezelStyleRounded;
+    self.stepUpButton.controlSize = NSControlSizeSmall;
+    self.stepUpButton.font = [NSFont systemFontOfSize:10.5 weight:NSFontWeightBold];
+    self.stepUpButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.stepUpButton.widthAnchor constraintEqualToConstant:40].active = YES;
+    self.stepUpButton.toolTip = @"Step frequency up by current step";
+
+    self.vfoStepControl = [NSSegmentedControl segmentedControlWithLabels:@[@"10Hz", @"100Hz", @"500Hz", @"1kHz", @"5kHz"]
+                                                            trackingMode:NSSegmentSwitchTrackingSelectOne
+                                                                  target:self
+                                                                  action:@selector(vfoStepControlChanged:)];
+    self.vfoStepControl.controlSize = NSControlSizeSmall;
+    self.vfoStepControl.font = [NSFont systemFontOfSize:10.0 weight:NSFontWeightMedium];
+    self.vfoStepControl.selectedSegment = 1; // 100Hz
+    self.vfoStepControl.translatesAutoresizingMaskIntoConstraints = NO;
+    self.vfoStepControl.toolTip = @"Tuning step resolution for mouse scroll and +/- buttons";
+
+    self.vfoOffsetLabel = [NSTextField labelWithString:@"Pitch: +650Hz | RF: 14.025.650 MHz"];
+    self.vfoOffsetLabel.font = [NSFont monospacedDigitSystemFontOfSize:10.5 weight:NSFontWeightMedium];
+    self.vfoOffsetLabel.textColor = [NSColor secondaryLabelColor];
+    self.vfoOffsetLabel.translatesAutoresizingMaskIntoConstraints = NO;
+
+    NSView *spacer1 = [NSView new];
+    spacer1.translatesAutoresizingMaskIntoConstraints = NO;
+    [spacer1 setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    NSStackView *r1 = [NSStackView stackViewWithViews:@[
+        vfoTitle, self.vfoLabel, self.stepDownButton, self.stepUpButton, self.vfoStepControl, self.vfoOffsetLabel, spacer1
+    ]];
+    r1.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    r1.alignment = NSLayoutAttributeCenterY;
+    r1.spacing = 8;
+
+    // Row 2: Amateur CW Sub-Bands (160m to 6m)
+    NSTextField *bandTitle = [NSTextField labelWithString:@"CW Bands:"];
+    bandTitle.font = [NSFont systemFontOfSize:11.0 weight:NSFontWeightSemibold];
+    bandTitle.textColor = [NSColor secondaryLabelColor];
+    bandTitle.translatesAutoresizingMaskIntoConstraints = NO;
+
+    NSArray<NSString *> *bands = @[
+        @"160m (1.810)", @"80m (3.520)", @"40m (7.020)", @"30m (10.110)",
+        @"20m (14.025)", @"17m (18.075)", @"15m (21.025)", @"12m (24.895)",
+        @"10m (28.025)", @"6m (50.090)"
+    ];
+    self.bandSelectorControl = [NSSegmentedControl segmentedControlWithLabels:bands
+                                                                 trackingMode:NSSegmentSwitchTrackingSelectOne
+                                                                       target:self
+                                                                       action:@selector(bandSelectorChanged:)];
+    self.bandSelectorControl.controlSize = NSControlSizeSmall;
+    self.bandSelectorControl.font = [NSFont monospacedDigitSystemFontOfSize:9.5 weight:NSFontWeightMedium];
+    self.bandSelectorControl.selectedSegment = 4; // 20m
+    self.bandSelectorControl.translatesAutoresizingMaskIntoConstraints = NO;
+
+    [self.bandSelectorControl setToolTip:@"160m CW Sub-band: 1.800 – 1.840 MHz (QRP: 1.810 MHz)" forSegment:0];
+    [self.bandSelectorControl setToolTip:@"80m CW Sub-band: 3.500 – 3.570 MHz (QRP: 3.560 MHz)" forSegment:1];
+    [self.bandSelectorControl setToolTip:@"40m CW Sub-band: 7.000 – 7.040 MHz (QRP: 7.030 MHz)" forSegment:2];
+    [self.bandSelectorControl setToolTip:@"30m CW Sub-band: 10.100 – 10.130 MHz (QRP: 10.116 MHz)" forSegment:3];
+    [self.bandSelectorControl setToolTip:@"20m CW Sub-band: 14.000 – 14.070 MHz (QRP: 14.060 MHz)" forSegment:4];
+    [self.bandSelectorControl setToolTip:@"17m CW Sub-band: 18.068 – 18.095 MHz (QRP: 18.086 MHz)" forSegment:5];
+    [self.bandSelectorControl setToolTip:@"15m CW Sub-band: 21.000 – 21.070 MHz (QRP: 21.060 MHz)" forSegment:6];
+    [self.bandSelectorControl setToolTip:@"12m CW Sub-band: 24.890 – 24.915 MHz (QRP: 24.906 MHz)" forSegment:7];
+    [self.bandSelectorControl setToolTip:@"10m CW Sub-band: 28.000 – 28.070 MHz (QRP: 28.060 MHz)" forSegment:8];
+    [self.bandSelectorControl setToolTip:@"6m CW Sub-band: 50.000 – 50.100 MHz (Calling: 50.090 MHz)" forSegment:9];
+
+    NSView *spacer2 = [NSView new];
+    spacer2.translatesAutoresizingMaskIntoConstraints = NO;
+    [spacer2 setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    NSStackView *r2 = [NSStackView stackViewWithViews:@[bandTitle, self.bandSelectorControl, spacer2]];
+    r2.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    r2.alignment = NSLayoutAttributeCenterY;
+    r2.spacing = 8;
+
+    NSStackView *vfoStack = [NSStackView stackViewWithViews:@[r1, r2]];
+    vfoStack.translatesAutoresizingMaskIntoConstraints = NO;
+    vfoStack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    vfoStack.alignment = NSLayoutAttributeLeading;
+    vfoStack.spacing = 5;
+    [container addSubview:vfoStack];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [vfoStack.leadingAnchor constraintEqualToAnchor:container.leadingAnchor constant:10],
+        [vfoStack.trailingAnchor constraintEqualToAnchor:container.trailingAnchor constant:-10],
+        [vfoStack.topAnchor constraintEqualToAnchor:container.topAnchor constant:6],
+        [vfoStack.bottomAnchor constraintEqualToAnchor:container.bottomAnchor constant:-6],
+        [r1.widthAnchor constraintEqualToAnchor:vfoStack.widthAnchor],
+        [r2.widthAnchor constraintEqualToAnchor:vfoStack.widthAnchor],
+        [container.heightAnchor constraintEqualToConstant:62]
+    ]];
+
+    [self updateVFOOffsetLabel];
+    return container;
+}
+
+#pragma mark - Top Control Bar (Hardware, Monitor, Keyer & Recording)
 
 - (NSView *)buildTopControlBar {
     NSView *container = [self createCardView];
@@ -381,24 +952,23 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
     self.startStopDecoderButton.contentTintColor = [NSColor systemGreenColor];
     self.startStopDecoderButton.font = [NSFont systemFontOfSize:11.5 weight:NSFontWeightBold];
     self.startStopDecoderButton.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.startStopDecoderButton.widthAnchor constraintEqualToConstant:130].active = YES;
+    [self.startStopDecoderButton.widthAnchor constraintEqualToConstant:125].active = YES;
 
     self.audioDevicePopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
-    self.audioDevicePopup.toolTip = @"Choose and save the CW input here; Station Profiles are not required. System Audio (Direct) receives audio playing on this Mac. Microphone and USB inputs receive external audio. macOS may ask for recording permission.";
+    self.audioDevicePopup.toolTip = @"Choose and save the CW input here. System Audio (Direct) receives audio playing on this Mac. Microphone and USB inputs receive external radio audio.";
     self.audioDevicePopup.controlSize = NSControlSizeSmall;
     self.audioDevicePopup.font = [NSFont systemFontOfSize:11];
     self.audioDevicePopup.target = self;
     self.audioDevicePopup.action = @selector(audioDeviceChanged:);
     self.audioDevicePopup.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.audioDevicePopup.widthAnchor constraintEqualToConstant:170].active = YES;
+    [self.audioDevicePopup.widthAnchor constraintEqualToConstant:150].active = YES;
     [self updateAudioDeviceMenu];
 
-    // Radio Mode selector (Auto CW mode switching)
+    // Radio Mode selector
     NSTextField *modeTitle = [NSTextField labelWithString:@"Mode:"];
     modeTitle.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
     modeTitle.textColor = [NSColor secondaryLabelColor];
     modeTitle.translatesAutoresizingMaskIntoConstraints = NO;
-    modeTitle.toolTip = @"Transceiver operating mode. Switches to CW automatically when decoding unless custom mode selected.";
 
     self.modePopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
     self.modePopup.controlSize = NSControlSizeSmall;
@@ -406,35 +976,119 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
     self.modePopup.target = self;
     self.modePopup.action = @selector(modePopupChanged:);
     self.modePopup.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.modePopup.widthAnchor constraintEqualToConstant:100].active = YES;
-    self.modePopup.toolTip = @"Transceiver operating mode. Switches to CW automatically when decoding unless custom mode selected.";
+    [self.modePopup.widthAnchor constraintEqualToConstant:145].active = YES;
 
-    NSMenuItem *itemCW = [[NSMenuItem alloc] initWithTitle:@"CW (Auto)" action:nil keyEquivalent:@""];
+    NSMenuItem *itemDIG = [[NSMenuItem alloc] initWithTitle:@"DIG (Soundcard CW)" action:nil keyEquivalent:@""];
+    itemDIG.tag = 6;
+    [self.modePopup.menu addItem:itemDIG];
+    NSMenuItem *itemCW = [[NSMenuItem alloc] initWithTitle:@"CW (Paddle Key)" action:nil keyEquivalent:@""];
     itemCW.tag = 3;
     [self.modePopup.menu addItem:itemCW];
-
     NSMenuItem *itemCWR = [[NSMenuItem alloc] initWithTitle:@"CW-R" action:nil keyEquivalent:@""];
     itemCWR.tag = 7;
     [self.modePopup.menu addItem:itemCWR];
-
     NSMenuItem *itemUSB = [[NSMenuItem alloc] initWithTitle:@"USB" action:nil keyEquivalent:@""];
     itemUSB.tag = 2;
     [self.modePopup.menu addItem:itemUSB];
-
     NSMenuItem *itemLSB = [[NSMenuItem alloc] initWithTitle:@"LSB" action:nil keyEquivalent:@""];
     itemLSB.tag = 1;
     [self.modePopup.menu addItem:itemLSB];
+    [self.modePopup selectItemWithTag:6];
 
-    NSMenuItem *itemDIG = [[NSMenuItem alloc] initWithTitle:@"DIG" action:nil keyEquivalent:@""];
-    itemDIG.tag = 6;
-    [self.modePopup.menu addItem:itemDIG];
-
-    [self.modePopup selectItemWithTag:3];
-
-    self.simulationCheckbox = [NSButton checkboxWithTitle:@"Practice / Sim" target:self action:@selector(toggleSimulation:)];
+    self.simulationCheckbox = [NSButton checkboxWithTitle:@"Practice/Sim" target:self action:@selector(toggleSimulation:)];
     self.simulationCheckbox.controlSize = NSControlSizeSmall;
-    self.simulationCheckbox.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
+    self.simulationCheckbox.font = [NSFont systemFontOfSize:10.5 weight:NSFontWeightMedium];
     self.simulationCheckbox.translatesAutoresizingMaskIntoConstraints = NO;
+
+    // Audio Monitor group (Speaker passthrough & volume)
+    self.monitorToggleButton = [NSButton buttonWithTitle:@"🔈 Monitor: OFF" target:self action:@selector(toggleAudioMonitor)];
+    self.monitorToggleButton.bezelStyle = NSBezelStyleRounded;
+    self.monitorToggleButton.controlSize = NSControlSizeSmall;
+    self.monitorToggleButton.font = [NSFont systemFontOfSize:10.5 weight:NSFontWeightBold];
+    self.monitorToggleButton.contentTintColor = [NSColor secondaryLabelColor];
+    self.monitorToggleButton.translatesAutoresizingMaskIntoConstraints = NO;
+    self.monitorToggleButton.toolTip = @"Stream incoming CW audio live through Mac speakers or headphones";
+
+    self.monitorVolumeSlider = [[NSSlider alloc] init];
+    self.monitorVolumeSlider.controlSize = NSControlSizeSmall;
+    self.monitorVolumeSlider.minValue = 0.0;
+    self.monitorVolumeSlider.maxValue = 1.5;
+    self.monitorVolumeSlider.floatValue = 1.0;
+    self.monitorVolumeSlider.target = self;
+    self.monitorVolumeSlider.action = @selector(monitorVolumeChanged:);
+    self.monitorVolumeSlider.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.monitorVolumeSlider.widthAnchor constraintEqualToConstant:60].active = YES;
+    self.monitorVolumeSlider.toolTip = @"Audio monitor output volume";
+
+    self.monitorMuteButton = [NSButton buttonWithTitle:@"Mute" target:self action:@selector(monitorMuteClicked:)];
+    self.monitorMuteButton.bezelStyle = NSBezelStyleInline;
+    self.monitorMuteButton.controlSize = NSControlSizeSmall;
+    self.monitorMuteButton.font = [NSFont systemFontOfSize:10];
+    self.monitorMuteButton.translatesAutoresizingMaskIntoConstraints = NO;
+
+    self.cwNarrowFilterButton = [NSButton checkboxWithTitle:@"200Hz Filter" target:self action:@selector(cwFilterClicked:)];
+    self.cwNarrowFilterButton.controlSize = NSControlSizeSmall;
+    self.cwNarrowFilterButton.font = [NSFont systemFontOfSize:10.5];
+    self.cwNarrowFilterButton.state = NSControlStateValueOn;
+    self.cwNarrowFilterButton.translatesAutoresizingMaskIntoConstraints = NO;
+    self.cwNarrowFilterButton.toolTip = @"DSP 200 Hz steep bandpass filter centered at Morse pitch";
+
+    // Separators
+    NSBox *div1 = [NSBox new]; div1.boxType = NSBoxSeparator; div1.translatesAutoresizingMaskIntoConstraints = NO;
+    [div1.heightAnchor constraintEqualToConstant:16].active = YES;
+    NSBox *div2 = [NSBox new]; div2.boxType = NSBoxSeparator; div2.translatesAutoresizingMaskIntoConstraints = NO;
+    [div2.heightAnchor constraintEqualToConstant:16].active = YES;
+    NSBox *div3 = [NSBox new]; div3.boxType = NSBoxSeparator; div3.translatesAutoresizingMaskIntoConstraints = NO;
+    [div3.heightAnchor constraintEqualToConstant:16].active = YES;
+
+    NSView *spacerR1 = [NSView new];
+    spacerR1.translatesAutoresizingMaskIntoConstraints = NO;
+    [spacerR1 setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+    NSStackView *r1 = [NSStackView stackViewWithViews:@[
+        self.startStopDecoderButton,
+        self.audioDevicePopup,
+        modeTitle,
+        self.modePopup,
+        self.simulationCheckbox,
+        div1,
+        self.monitorToggleButton,
+        self.monitorVolumeSlider,
+        self.monitorMuteButton,
+        self.cwNarrowFilterButton,
+        spacerR1
+    ]];
+    r1.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    r1.alignment = NSLayoutAttributeCenterY;
+    r1.spacing = 6;
+
+    // Row 2: Per-Message Recording + Pitch + Speed
+    self.recordButton = [NSButton buttonWithTitle:@"● REC" target:self action:@selector(toggleRecording)];
+    self.recordButton.bezelStyle = NSBezelStyleRounded;
+    self.recordButton.controlSize = NSControlSizeSmall;
+    self.recordButton.font = [NSFont systemFontOfSize:10.5 weight:NSFontWeightBold];
+    self.recordButton.contentTintColor = [NSColor systemRedColor];
+    self.recordButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.recordButton.widthAnchor constraintEqualToConstant:65].active = YES;
+    self.recordButton.toolTip = @"Record Morse audio transmissions to WAV file";
+
+    self.recordStatusLabel = [NSTextField labelWithString:@""];
+    self.recordStatusLabel.font = [NSFont monospacedDigitSystemFontOfSize:10.0 weight:NSFontWeightBold];
+    self.recordStatusLabel.textColor = [NSColor secondaryLabelColor];
+    self.recordStatusLabel.translatesAutoresizingMaskIntoConstraints = NO;
+
+    self.revealRecordingsButton = [NSButton buttonWithTitle:@"Recordings ↗" target:self action:@selector(revealRecordingsClicked:)];
+    self.revealRecordingsButton.bezelStyle = NSBezelStyleInline;
+    self.revealRecordingsButton.controlSize = NSControlSizeSmall;
+    self.revealRecordingsButton.font = [NSFont systemFontOfSize:9.5];
+    self.revealRecordingsButton.translatesAutoresizingMaskIntoConstraints = NO;
+    self.revealRecordingsButton.toolTip = @"Open recordings directory in Finder";
+
+    self.autoRecordCheckbox = [NSButton checkboxWithTitle:@"Auto-REC QSO" target:nil action:nil];
+    self.autoRecordCheckbox.controlSize = NSControlSizeSmall;
+    self.autoRecordCheckbox.font = [NSFont systemFontOfSize:10.5];
+    self.autoRecordCheckbox.translatesAutoresizingMaskIntoConstraints = NO;
+    self.autoRecordCheckbox.toolTip = @"Automatically record audio during each active QSO";
 
     // Pitch & AFC group
     NSTextField *pitchTitle = [NSTextField labelWithString:@"Pitch:"];
@@ -450,36 +1104,29 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
     self.pitchSlider.target = self;
     self.pitchSlider.action = @selector(pitchSliderChanged:);
     self.pitchSlider.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.pitchSlider.widthAnchor constraintEqualToConstant:70].active = YES;
+    [self.pitchSlider.widthAnchor constraintEqualToConstant:65].active = YES;
 
     self.pitchValueLabel = [NSTextField labelWithString:[NSString stringWithFormat:@"%.0fHz", self.decoder.nominalPitchHz]];
     self.pitchValueLabel.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightMedium];
     self.pitchValueLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.pitchValueLabel.widthAnchor constraintEqualToConstant:54].active = YES;
-
-    pitchTitle.toolTip = @"Listening center pitch (RX Goertzel 300-1500 Hz) & Transmitter sidetone (TX).";
-    self.pitchSlider.toolTip = @"Listening center pitch (RX Goertzel 300-1500 Hz) & Transmitter sidetone (TX).";
-    self.pitchValueLabel.toolTip = @"Listening center pitch (RX Goertzel 300-1500 Hz) & Transmitter sidetone (TX).";
+    [self.pitchValueLabel.widthAnchor constraintEqualToConstant:50].active = YES;
 
     self.afcCheckbox = [NSButton checkboxWithTitle:@"AFC" target:self action:@selector(toggleAFC:)];
     self.afcCheckbox.controlSize = NSControlSizeSmall;
     self.afcCheckbox.font = [NSFont systemFontOfSize:11];
     self.afcCheckbox.state = self.decoder.afcEnabled ? NSControlStateValueOn : NSControlStateValueOff;
     self.afcCheckbox.translatesAutoresizingMaskIntoConstraints = NO;
-    self.afcCheckbox.toolTip = @"Automatic Frequency Control (RX only): Acquires incoming CW tones from 300 to 1500 Hz and holds the frequency through gaps.";
 
     // Speed group
     NSTextField *wpmTitle = [NSTextField labelWithString:@"Speed:"];
     wpmTitle.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
     wpmTitle.textColor = [NSColor secondaryLabelColor];
     wpmTitle.translatesAutoresizingMaskIntoConstraints = NO;
-    wpmTitle.toolTip = @"CW Speed (WPM): Sets transmitter keyer speed & primes initial receiver decoding speed.";
 
     self.wpmLabel = [NSTextField labelWithString:[NSString stringWithFormat:@"%ld WPM", (long)self.keyer.wpm]];
     self.wpmLabel.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightBold];
     self.wpmLabel.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.wpmLabel.widthAnchor constraintEqualToConstant:54].active = YES;
-    self.wpmLabel.toolTip = @"CW Speed (WPM): Sets transmitter keyer speed & primes initial receiver decoding speed.";
+    [self.wpmLabel.widthAnchor constraintEqualToConstant:50].active = YES;
 
     self.wpmStepper = [[NSStepper alloc] init];
     self.wpmStepper.controlSize = NSControlSizeSmall;
@@ -489,50 +1136,28 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
     self.wpmStepper.target = self;
     self.wpmStepper.action = @selector(wpmStepperChanged:);
     self.wpmStepper.translatesAutoresizingMaskIntoConstraints = NO;
-    self.wpmStepper.toolTip = @"CW Speed (WPM): Sets transmitter keyer speed & primes initial receiver decoding speed.";
 
     self.cutNumbersCheckbox = [NSButton checkboxWithTitle:@"Cut 5NN" target:self action:@selector(toggleCutNumbers:)];
     self.cutNumbersCheckbox.controlSize = NSControlSizeSmall;
     self.cutNumbersCheckbox.font = [NSFont systemFontOfSize:11];
     self.cutNumbersCheckbox.state = self.keyer.useCutNumbers ? NSControlStateValueOn : NSControlStateValueOff;
     self.cutNumbersCheckbox.translatesAutoresizingMaskIntoConstraints = NO;
-    self.cutNumbersCheckbox.toolTip = @"Cut Numbers (TX only): Sends 5NN instead of 599 for signal reports.";
-
-    // Separators
-    NSBox *div1 = [NSBox new]; div1.boxType = NSBoxSeparator; div1.translatesAutoresizingMaskIntoConstraints = NO;
-    [div1.heightAnchor constraintEqualToConstant:16].active = YES;
-    NSBox *div2 = [NSBox new]; div2.boxType = NSBoxSeparator; div2.translatesAutoresizingMaskIntoConstraints = NO;
-    [div2.heightAnchor constraintEqualToConstant:16].active = YES;
-
-    NSView *spacer = [NSView new];
-    spacer.translatesAutoresizingMaskIntoConstraints = NO;
-    [spacer setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
-
-    NSStackView *r1 = [NSStackView stackViewWithViews:@[
-        self.startStopDecoderButton,
-        self.audioDevicePopup,
-        modeTitle,
-        self.modePopup,
-        self.simulationCheckbox,
-        spacer
-    ]];
-    r1.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    r1.alignment = NSLayoutAttributeCenterY;
-    r1.spacing = 8;
 
     NSView *spacerR2 = [NSView new];
     spacerR2.translatesAutoresizingMaskIntoConstraints = NO;
     [spacerR2 setContentHuggingPriority:NSLayoutPriorityDefaultLow forOrientation:NSLayoutConstraintOrientationHorizontal];
 
     NSStackView *r2 = [NSStackView stackViewWithViews:@[
-        pitchTitle, self.pitchSlider, self.pitchValueLabel, self.afcCheckbox,
+        self.recordButton, self.recordStatusLabel, self.revealRecordingsButton, self.autoRecordCheckbox,
         div2,
+        pitchTitle, self.pitchSlider, self.pitchValueLabel, self.afcCheckbox,
+        div3,
         wpmTitle, self.wpmLabel, self.wpmStepper, self.cutNumbersCheckbox,
         spacerR2
     ]];
     r2.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     r2.alignment = NSLayoutAttributeCenterY;
-    r2.spacing = 8;
+    r2.spacing = 6;
 
     NSStackView *stack = [NSStackView stackViewWithViews:@[r1, r2]];
     stack.translatesAutoresizingMaskIntoConstraints = NO;
@@ -559,7 +1184,7 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
 - (NSView *)buildSpectrumAndMetricsRow {
     NSView *container = [self createCardView];
 
-    self.spectrumView = [[TX500CWSpectrumView alloc] initWithFrame:NSMakeRect(0, 0, 520, 78)];
+    self.spectrumView = [[TX500CWSpectrumView alloc] initWithFrame:NSMakeRect(0, 0, 520, 155)];
     self.spectrumView.translatesAutoresizingMaskIntoConstraints = NO;
     [container addSubview:self.spectrumView];
 
@@ -573,13 +1198,18 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
     metricCard.layer.backgroundColor = [NSColor colorWithCalibratedWhite:0.08 alpha:0.6].CGColor;
     [container addSubview:metricCard];
 
-    self.wpmMetricLabel = [NSTextField labelWithString:@"20 WPM"];
-    self.wpmMetricLabel.font = [NSFont monospacedDigitSystemFontOfSize:12.0 weight:NSFontWeightBold];
+    self.carrierLockStatusLabel = [NSTextField labelWithString:@"○ LISTENING"];
+    self.carrierLockStatusLabel.font = [NSFont monospacedDigitSystemFontOfSize:10.5 weight:NSFontWeightBold];
+    self.carrierLockStatusLabel.textColor = [NSColor secondaryLabelColor];
+    self.carrierLockStatusLabel.translatesAutoresizingMaskIntoConstraints = NO;
+
+    self.wpmMetricLabel = [NSTextField labelWithString:@"25 WPM"];
+    self.wpmMetricLabel.font = [NSFont monospacedDigitSystemFontOfSize:13.0 weight:NSFontWeightBold];
     self.wpmMetricLabel.textColor = [NSColor systemOrangeColor];
     self.wpmMetricLabel.translatesAutoresizingMaskIntoConstraints = NO;
 
     self.snrMetricLabel = [NSTextField labelWithString:@"0.0 dB SNR"];
-    self.snrMetricLabel.font = [NSFont monospacedDigitSystemFontOfSize:11.0 weight:NSFontWeightMedium];
+    self.snrMetricLabel.font = [NSFont monospacedDigitSystemFontOfSize:11.5 weight:NSFontWeightMedium];
     self.snrMetricLabel.textColor = [NSColor labelColor];
     self.snrMetricLabel.translatesAutoresizingMaskIntoConstraints = NO;
 
@@ -589,11 +1219,12 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
     self.ditDahMetricLabel.translatesAutoresizingMaskIntoConstraints = NO;
 
     self.activeDitDahLabel = [NSTextField labelWithString:@"[ ]"];
-    self.activeDitDahLabel.font = [NSFont monospacedSystemFontOfSize:12.0 weight:NSFontWeightBold];
+    self.activeDitDahLabel.font = [NSFont monospacedSystemFontOfSize:12.5 weight:NSFontWeightBold];
     self.activeDitDahLabel.textColor = [NSColor systemGreenColor];
     self.activeDitDahLabel.translatesAutoresizingMaskIntoConstraints = NO;
 
     NSStackView *metricsStack = [NSStackView stackViewWithViews:@[
+        self.carrierLockStatusLabel,
         self.wpmMetricLabel,
         self.snrMetricLabel,
         self.ditDahMetricLabel,
@@ -602,7 +1233,7 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
     metricsStack.translatesAutoresizingMaskIntoConstraints = NO;
     metricsStack.orientation = NSUserInterfaceLayoutOrientationVertical;
     metricsStack.alignment = NSLayoutAttributeLeading;
-    metricsStack.spacing = 2;
+    metricsStack.spacing = 3;
     [metricCard addSubview:metricsStack];
 
     [NSLayoutConstraint activateConstraints:@[
@@ -620,7 +1251,7 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
         [metricCard.bottomAnchor constraintEqualToAnchor:container.bottomAnchor constant:-5],
         [metricCard.widthAnchor constraintEqualToConstant:150],
 
-        [container.heightAnchor constraintEqualToConstant:78]
+        [container.heightAnchor constraintEqualToConstant:165]
     ]];
 
     return container;
@@ -704,21 +1335,23 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
     NSView *col = [NSView new];
     col.translatesAutoresizingMaskIntoConstraints = NO;
 
-    // ── 1. CQ Roster Table ────────────────────────────────────────────
-    NSTextField *rosterTitle = [NSTextField labelWithString:@"Detected CQs (Click to Answer):"];
-    rosterTitle.font = [NSFont systemFontOfSize:11.0 weight:NSFontWeightSemibold];
-    rosterTitle.translatesAutoresizingMaskIntoConstraints = NO;
-    // Prevent the label from expanding vertically beyond its intrinsic height
-    [rosterTitle setContentHuggingPriority:NSLayoutPriorityRequired
-                            forOrientation:NSLayoutConstraintOrientationVertical];
-    [rosterTitle setContentCompressionResistancePriority:NSLayoutPriorityRequired
-                                         forOrientation:NSLayoutConstraintOrientationVertical];
+    // ── 1. Roster Mode Switcher & Table ───────────────────────────────
+    self.rosterModeControl = [NSSegmentedControl segmentedControlWithLabels:@[@"⚡ 3kHz Passband Channels", @"📡 Detected CQs"]
+                                                               trackingMode:NSSegmentSwitchTrackingSelectOne
+                                                                     target:self
+                                                                     action:@selector(rosterModeChanged:)];
+    self.rosterModeControl.controlSize = NSControlSizeSmall;
+    self.rosterModeControl.font = [NSFont systemFontOfSize:10.5 weight:NSFontWeightMedium];
+    self.rosterModeControl.selectedSegment = 0;
+    self.rosterModeControl.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.rosterModeControl setToolTip:@"Switch between wideband Morse signals detected across 3 kHz IF passband and parsed CQ stations" forSegment:0];
+    [self.rosterModeControl setToolTip:@"Stations actively calling CQ or TEST" forSegment:1];
 
     NSScrollView *rosterScroll = [[NSScrollView alloc] init];
     rosterScroll.borderType = NSBezelBorder;
     rosterScroll.hasVerticalScroller = YES;
     rosterScroll.translatesAutoresizingMaskIntoConstraints = NO;
-    [rosterScroll.heightAnchor constraintEqualToConstant:72].active = YES;
+    [rosterScroll.heightAnchor constraintEqualToConstant:76].active = YES;
 
     self.cqRosterTableView = [[NSTableView alloc] init];
     self.cqRosterTableView.dataSource = self;
@@ -727,7 +1360,7 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
     self.cqRosterTableView.columnAutoresizingStyle = NSTableViewUniformColumnAutoresizingStyle;
 
     NSTableColumn *colCall = [[NSTableColumn alloc] initWithIdentifier:@"call"];
-    colCall.title = @"Callsign"; colCall.width = 75; colCall.minWidth = 60;
+    colCall.title = @"Signal / Call"; colCall.width = 85; colCall.minWidth = 60;
     colCall.resizingMask = NSTableColumnAutoresizingMask | NSTableColumnUserResizingMask;
     [self.cqRosterTableView addTableColumn:colCall];
 
@@ -831,6 +1464,14 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
     self.txSendButton.translatesAutoresizingMaskIntoConstraints = NO;
     [self.txSendButton.widthAnchor constraintEqualToConstant:50].active = YES;
 
+    self.txTuneButton = [NSButton buttonWithTitle:@"TX (Tune)" target:self action:@selector(txTuneClicked:)];
+    self.txTuneButton.bezelStyle = NSBezelStyleRounded;
+    self.txTuneButton.controlSize = NSControlSizeSmall;
+    self.txTuneButton.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
+    self.txTuneButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.txTuneButton.widthAnchor constraintEqualToConstant:78].active = YES;
+    self.txTuneButton.toolTip = @"Toggle transceiver TX mode for antenna tuning or carrier test. Click again to return to RX.";
+
     self.txAbortButton = [NSButton buttonWithTitle:@"ABORT" target:self action:@selector(txAbortClicked:)];
     self.txAbortButton.bezelStyle = NSBezelStyleRounded;
     self.txAbortButton.controlSize = NSControlSizeSmall;
@@ -842,14 +1483,51 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
     self.txAbortButton.translatesAutoresizingMaskIntoConstraints = NO;
     [self.txAbortButton.widthAnchor constraintEqualToConstant:60].active = YES;
 
-    NSStackView *txRow = [NSStackView stackViewWithViews:@[self.txInputField, self.txSendButton, self.txAbortButton]];
+    NSStackView *txRow = [NSStackView stackViewWithViews:@[self.txInputField, self.txSendButton, self.txTuneButton, self.txAbortButton]];
     txRow.translatesAutoresizingMaskIntoConstraints = NO;
     txRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     txRow.spacing = 4;
     txRow.alignment = NSLayoutAttributeCenterY;
 
+    self.txPowerLabel = [NSTextField labelWithString:@"⚡ PWR: 0.0 W"];
+    self.txPowerLabel.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightBold];
+    self.txPowerLabel.textColor = [NSColor secondaryLabelColor];
+
+    self.txPowerMeterBar = [[NSLevelIndicator alloc] init];
+    self.txPowerMeterBar.levelIndicatorStyle = NSLevelIndicatorStyleContinuousCapacity;
+    self.txPowerMeterBar.minValue = 0.0;
+    self.txPowerMeterBar.maxValue = 10.0;
+    self.txPowerMeterBar.warningValue = 8.5;
+    self.txPowerMeterBar.criticalValue = 10.0;
+    self.txPowerMeterBar.doubleValue = 0.0;
+    self.txPowerMeterBar.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.txPowerMeterBar.widthAnchor constraintEqualToConstant:70].active = YES;
+
+    self.txSwrLabel = [NSTextField labelWithString:@"📶 SWR: 1.0:1"];
+    self.txSwrLabel.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightBold];
+    self.txSwrLabel.textColor = [NSColor secondaryLabelColor];
+
+    self.txSwrMeterBar = [[NSLevelIndicator alloc] init];
+    self.txSwrMeterBar.levelIndicatorStyle = NSLevelIndicatorStyleContinuousCapacity;
+    self.txSwrMeterBar.minValue = 1.0;
+    self.txSwrMeterBar.maxValue = 5.0;
+    self.txSwrMeterBar.warningValue = 2.0;
+    self.txSwrMeterBar.criticalValue = 3.0;
+    self.txSwrMeterBar.doubleValue = 1.0;
+    self.txSwrMeterBar.translatesAutoresizingMaskIntoConstraints = NO;
+    [self.txSwrMeterBar.widthAnchor constraintEqualToConstant:60].active = YES;
+
+    NSStackView *txMeterRow = [NSStackView stackViewWithViews:@[
+        self.txPowerLabel, self.txPowerMeterBar,
+        self.txSwrLabel, self.txSwrMeterBar
+    ]];
+    txMeterRow.translatesAutoresizingMaskIntoConstraints = NO;
+    txMeterRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    txMeterRow.spacing = 8;
+    txMeterRow.alignment = NSLayoutAttributeCenterY;
+
     NSStackView *coPilotStack = [NSStackView stackViewWithViews:@[
-        self.qsoStateLabel, self.qsoNextActionButton, cqRow, macroRow1, macroRow2, txRow
+        self.qsoStateLabel, self.qsoNextActionButton, cqRow, macroRow1, macroRow2, txRow, txMeterRow
     ]];
     coPilotStack.translatesAutoresizingMaskIntoConstraints = NO;
     coPilotStack.orientation = NSUserInterfaceLayoutOrientationVertical;
@@ -858,9 +1536,9 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
     [coPilotCard addSubview:coPilotStack];
 
     // ── 3. Vertical NSStackView for entire column ─────────────────────
-    // Using NSStackView guarantees that rosterTitle, rosterScroll, and coPilotCard
+    // Using NSStackView guarantees that rosterModeControl, rosterScroll, and coPilotCard
     // are placed in distinct non-overlapping slots — no z-ordering issues possible.
-    NSStackView *colStack = [NSStackView stackViewWithViews:@[rosterTitle, rosterScroll, coPilotCard]];
+    NSStackView *colStack = [NSStackView stackViewWithViews:@[self.rosterModeControl, rosterScroll, coPilotCard]];
     colStack.translatesAutoresizingMaskIntoConstraints = NO;
     colStack.orientation = NSUserInterfaceLayoutOrientationVertical;
     colStack.alignment = NSLayoutAttributeLeading;
@@ -876,7 +1554,7 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
         [colStack.bottomAnchor constraintEqualToAnchor:col.bottomAnchor],
 
         // All managed views fill the full width of colStack
-        [rosterTitle.widthAnchor constraintEqualToAnchor:colStack.widthAnchor],
+        [self.rosterModeControl.widthAnchor constraintEqualToAnchor:colStack.widthAnchor],
         [rosterScroll.widthAnchor constraintEqualToAnchor:colStack.widthAnchor],
         [coPilotCard.widthAnchor constraintEqualToAnchor:colStack.widthAnchor],
 
@@ -1116,6 +1794,8 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
     [self.assistant advanceQSOStepWithAction:^(NSString * _Nonnull macroToTransmit) {
         typeof(self) strongSelf = weakSelf;
         if (strongSelf && macroToTransmit.length > 0) {
+            [strongSelf stopManualTune];
+            [strongSelf prepareRadioForCWMode];
             strongSelf.txInputField.stringValue = macroToTransmit;
             [strongSelf.keyer transmitText:macroToTransmit
                                 targetCall:strongSelf.assistant.activeTargetCallsign
@@ -1171,6 +1851,8 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
 - (void)macroButtonClicked:(NSButton *)sender {
     NSInteger idx = sender.tag;
     if (idx < 0 || idx >= (NSInteger)self.keyer.macroList.count) return;
+    [self stopManualTune];
+    [self prepareRadioForCWMode];
     TX500CWMacro *m = self.keyer.macroList[idx];
     NSString *expanded = [self.keyer expandTemplate:m.templateString
                                           targetCall:self.assistant.activeTargetCallsign
@@ -1189,6 +1871,8 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
     (void)sender;
     NSString *txt = self.txInputField.stringValue;
     if (txt.length == 0) return;
+    [self stopManualTune];
+    [self prepareRadioForCWMode];
     [self.keyer transmitText:txt
                   targetCall:self.assistant.activeTargetCallsign
                          rst:self.assistant.activeRstSent
@@ -1197,8 +1881,191 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
     self.txInputField.stringValue = @"";
 }
 
+- (void)txTuneClicked:(id)sender {
+    (void)sender;
+    [self toggleManualTransmit];
+}
+
+- (void)toggleManualTransmit {
+    if (!self.isManualTuneActive) {
+        [self prepareRadioForCWMode];
+        NSString *txCmd = self.keyer.txPrefixCommand.length > 0 ? self.keyer.txPrefixCommand : @"TX;";
+        if (self.serialCommandSender) {
+            BOOL ok = self.serialCommandSender(txCmd);
+            if (ok) {
+                self.isManualTuneActive = YES;
+                self.txTuneButton.title = @"■ RX (Stop)";
+                self.txTuneButton.contentTintColor = [NSColor systemRedColor];
+                self.txAbortButton.enabled = YES;
+                self.carrierLockStatusLabel.stringValue = @"● TX (TUNING)";
+                self.carrierLockStatusLabel.textColor = [NSColor systemRedColor];
+                [self.keyer startContinuousCarrierWithPitchHz:self.keyer.sidetonePitchHz];
+                [self startTXMeterPolling];
+                if (self.logHandler) {
+                    self.logHandler(@"CW Station: Transceiver keyed to TX (Manual Tune)");
+                }
+                // Automatic 10-second safety cutoff timer for Tune
+                __weak typeof(self) weakSelf = self;
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                    typeof(self) strongSelf = weakSelf;
+                    if (strongSelf && strongSelf.isManualTuneActive) {
+                        [strongSelf stopManualTransmit];
+                        if (strongSelf.logHandler) {
+                            strongSelf.logHandler(@"CW Station: Manual Tune 10-second safety cutoff triggered.");
+                        }
+                    }
+                });
+            } else {
+                if (self.logHandler) {
+                    self.logHandler(@"CW Station: Could not key transceiver to TX (check CAT connection)");
+                }
+            }
+        }
+    } else {
+        [self stopManualTransmit];
+    }
+}
+
+- (void)stopManualTune {
+    [self stopManualTransmit];
+}
+
+- (void)stopManualTransmit {
+    if (self.isManualTuneActive) {
+        self.isManualTuneActive = NO;
+        self.txTuneButton.title = @"TX (Tune)";
+        self.txTuneButton.contentTintColor = nil;
+        self.txAbortButton.enabled = self.keyer.isTransmitting;
+        self.carrierLockStatusLabel.stringValue = @"○ LISTENING";
+        self.carrierLockStatusLabel.textColor = [NSColor secondaryLabelColor];
+        [self.keyer stopContinuousCarrier];
+        [self stopTXMeterPolling];
+        NSString *rxCmd = self.keyer.rxSuffixCommand.length > 0 ? self.keyer.rxSuffixCommand : @"RX;";
+        if (self.serialCommandSender) {
+            self.serialCommandSender(rxCmd);
+        }
+        if (self.logHandler) {
+            self.logHandler(@"CW Station: Transceiver returned to RX");
+        }
+    }
+}
+
+#pragma mark - Live Transmit Telemetry Polling (PWR & SWR)
+
+- (void)startTXMeterPolling {
+    [self.txMeterPollingTimer invalidate];
+    self.txMeterPollingTimer = nil;
+    __weak typeof(self) weakSelf = self;
+    self.txMeterPollingTimer = [NSTimer scheduledTimerWithTimeInterval:0.18 repeats:YES block:^(NSTimer * _Nonnull timer) {
+        (void)timer;
+        [weakSelf pollTXMeters];
+    }];
+    [self pollTXMeters];
+}
+
+- (void)stopTXMeterPolling {
+    [self.txMeterPollingTimer invalidate];
+    self.txMeterPollingTimer = nil;
+    self.txPowerLabel.stringValue = @"⚡ PWR: 0.0 W";
+    self.txPowerLabel.textColor = [NSColor secondaryLabelColor];
+    self.txPowerMeterBar.doubleValue = 0.0;
+    self.txSwrLabel.stringValue = @"📶 SWR: 1.0:1";
+    self.txSwrLabel.textColor = [NSColor secondaryLabelColor];
+    self.txSwrMeterBar.doubleValue = 1.0;
+    self.liveTXPowerWatts = 0.0;
+    self.liveTXSWR = 1.0;
+}
+
+- (void)pollTXMeters {
+    if (!self.keyer.isTransmitting && !self.isManualTuneActive) {
+        [self stopTXMeterPolling];
+        return;
+    }
+    if (!self.catQueryHandler) return;
+
+    __weak typeof(self) weakSelf = self;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), ^{
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf || (!strongSelf.keyer.isTransmitting && !strongSelf.isManualTuneActive)) return;
+
+        NSString *pwrReply = strongSelf.catQueryHandler(@"RM0;RM;", 0.07);
+        NSString *swrReply = strongSelf.catQueryHandler(@"RM1;RM;", 0.07);
+
+        NSInteger pwrDots = -1;
+        if (pwrReply.length >= 7) {
+            NSRange r = [pwrReply rangeOfString:@"RM0"];
+            if (r.location != NSNotFound && pwrReply.length >= r.location + 7) {
+                NSString *dotsStr = [pwrReply substringWithRange:NSMakeRange(r.location + 3, 4)];
+                pwrDots = dotsStr.integerValue;
+            }
+        }
+
+        NSInteger swrDots = -1;
+        if (swrReply.length >= 7) {
+            NSRange r = [swrReply rangeOfString:@"RM1"];
+            if (r.location != NSNotFound && swrReply.length >= r.location + 7) {
+                NSString *dotsStr = [swrReply substringWithRange:NSMakeRange(r.location + 3, 4)];
+                swrDots = dotsStr.integerValue;
+            }
+        }
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) uiSelf = weakSelf;
+            if (!uiSelf) return;
+            if (uiSelf.keyer.isTransmitting || uiSelf.isManualTuneActive) {
+                [uiSelf updateLiveTXPowerDots:pwrDots swrDots:swrDots];
+            }
+        });
+    });
+}
+
+- (void)updateLiveTXPowerDots:(NSInteger)pwrDots swrDots:(NSInteger)swrDots {
+    if (pwrDots >= 0) {
+        double clampedDots = (double)MAX(0, MIN(30, pwrDots));
+        double watts = (clampedDots / 30.0) * 10.0;
+        self.liveTXPowerWatts = watts;
+        self.txPowerLabel.stringValue = [NSString stringWithFormat:@"⚡ PWR: %.1f W", watts];
+        self.txPowerMeterBar.doubleValue = watts;
+        if (watts > 0.2) {
+            self.txPowerLabel.textColor = [NSColor systemOrangeColor];
+        } else {
+            self.txPowerLabel.textColor = [NSColor systemYellowColor];
+        }
+    }
+
+    if (swrDots >= 0) {
+        double swr = 1.0;
+        if (swrDots <= 0) swr = 1.0;
+        else if (swrDots == 1) swr = 1.3;
+        else if (swrDots == 2) swr = 1.6;
+        else if (swrDots == 3) swr = 1.9;
+        else if (swrDots == 4) swr = 2.3;
+        else if (swrDots == 5) swr = 2.8;
+        else if (swrDots == 6) swr = 3.5;
+        else if (swrDots == 7) swr = 4.5;
+        else swr = 5.0 + (double)(swrDots - 7) * 0.5;
+
+        self.liveTXSWR = swr;
+        if (swr >= 5.0) {
+            self.txSwrLabel.stringValue = @"📶 SWR: >5.0";
+        } else {
+            self.txSwrLabel.stringValue = [NSString stringWithFormat:@"📶 SWR: %.1f:1", swr];
+        }
+        self.txSwrMeterBar.doubleValue = MIN(5.0, MAX(1.0, swr));
+
+        if (swr <= 1.5) {
+            self.txSwrLabel.textColor = [NSColor systemGreenColor];
+        } else if (swr <= 2.5) {
+            self.txSwrLabel.textColor = [NSColor systemYellowColor];
+        } else {
+            self.txSwrLabel.textColor = [NSColor systemRedColor];
+        }
+    }
+}
+
 - (void)txAbortClicked:(id)sender {
     (void)sender;
+    [self stopManualTune];
     [self stopAutoCQTimer];
     [self.keyer abortTransmission];
     [self.keyer stopAutoCQ];
@@ -1236,7 +2103,11 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
 
 - (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView {
     if (tableView == self.cqRosterTableView) {
-        return self.assistant.heardStations.count;
+        if (self.rosterModeControl && self.rosterModeControl.selectedSegment == 0) {
+            return self.widebandChannels.count;
+        } else {
+            return self.assistant.heardStations.count;
+        }
     } else if (tableView == self.logTableView) {
         return self.assistant.loggedContacts.count;
     }
@@ -1245,51 +2116,110 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
 
 - (NSView *)tableView:(NSTableView *)tableView viewForTableColumn:(NSTableColumn *)tableColumn row:(NSInteger)row {
     if (tableView == self.cqRosterTableView) {
-        NSArray<TX500CWHeardStation *> *stations = self.assistant.heardStations;
-        if (row < 0 || row >= (NSInteger)stations.count) return nil;
-        TX500CWHeardStation *st = stations[row];
+        if (self.rosterModeControl && self.rosterModeControl.selectedSegment == 0) {
+            NSArray<TX500CWChannelState *> *channels = self.widebandChannels;
+            if (row < 0 || row >= (NSInteger)channels.count) return nil;
+            TX500CWChannelState *ch = channels[row];
 
-        if ([tableColumn.identifier isEqualToString:@"call"]) {
-            NSTextField *tf = [tableView makeViewWithIdentifier:@"callCell" owner:self];
-            if (!tf) {
-                tf = [NSTextField labelWithString:@""];
-                tf.identifier = @"callCell";
-                tf.font = [NSFont monospacedSystemFontOfSize:11.5 weight:NSFontWeightBold];
-                tf.textColor = [NSColor systemYellowColor];
+            if ([tableColumn.identifier isEqualToString:@"call"]) {
+                NSTextField *tf = [tableView makeViewWithIdentifier:@"chCallCell" owner:self];
+                if (!tf) {
+                    tf = [NSTextField labelWithString:@""];
+                    tf.identifier = @"chCallCell";
+                    tf.font = [NSFont monospacedSystemFontOfSize:11.0 weight:NSFontWeightBold];
+                    tf.textColor = [NSColor systemCyanColor];
+                }
+                if (ch.extractedCallsign.length > 0) {
+                    tf.stringValue = [NSString stringWithFormat:@"%@ (%.0fHz)", ch.extractedCallsign, ch.frequencyHz];
+                    tf.textColor = [NSColor systemYellowColor];
+                } else {
+                    tf.stringValue = [NSString stringWithFormat:@"%.0f Hz", ch.frequencyHz];
+                    tf.textColor = [NSColor systemCyanColor];
+                }
+                return tf;
+            } else if ([tableColumn.identifier isEqualToString:@"wpm"]) {
+                NSTextField *tf = [tableView makeViewWithIdentifier:@"chWpmCell" owner:self];
+                if (!tf) {
+                    tf = [NSTextField labelWithString:@""];
+                    tf.identifier = @"chWpmCell";
+                    tf.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightRegular];
+                }
+                tf.stringValue = [NSString stringWithFormat:@"%.0f", ch.estimatedWPM];
+                return tf;
+            } else if ([tableColumn.identifier isEqualToString:@"snr"]) {
+                NSTextField *tf = [tableView makeViewWithIdentifier:@"chSnrCell" owner:self];
+                if (!tf) {
+                    tf = [NSTextField labelWithString:@""];
+                    tf.identifier = @"chSnrCell";
+                    tf.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightRegular];
+                }
+                tf.stringValue = [NSString stringWithFormat:@"%.0fdB", ch.snrDb];
+                return tf;
+            } else if ([tableColumn.identifier isEqualToString:@"action"]) {
+                NSButton *btn = [tableView makeViewWithIdentifier:@"chActionCell" owner:self];
+                if (!btn) {
+                    btn = [NSButton buttonWithTitle:@"" target:self action:@selector(rosterWidebandAnswerClicked:)];
+                    btn.identifier = @"chActionCell";
+                    btn.bezelStyle = NSBezelStyleRounded;
+                    btn.controlSize = NSControlSizeSmall;
+                    btn.font = [NSFont systemFontOfSize:10.5 weight:NSFontWeightMedium];
+                    btn.contentTintColor = [NSColor systemGreenColor];
+                }
+                if (ch.extractedCallsign.length > 0) {
+                    btn.title = [NSString stringWithFormat:@"Answer %@", ch.extractedCallsign];
+                } else {
+                    btn.title = [NSString stringWithFormat:@"Tune %.0fHz", ch.frequencyHz];
+                }
+                btn.tag = row;
+                return btn;
             }
-            tf.stringValue = st.callsign;
-            return tf;
-        } else if ([tableColumn.identifier isEqualToString:@"wpm"]) {
-            NSTextField *tf = [tableView makeViewWithIdentifier:@"wpmCell" owner:self];
-            if (!tf) {
-                tf = [NSTextField labelWithString:@""];
-                tf.identifier = @"wpmCell";
-                tf.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightRegular];
+        } else {
+            NSArray<TX500CWHeardStation *> *stations = self.assistant.heardStations;
+            if (row < 0 || row >= (NSInteger)stations.count) return nil;
+            TX500CWHeardStation *st = stations[row];
+
+            if ([tableColumn.identifier isEqualToString:@"call"]) {
+                NSTextField *tf = [tableView makeViewWithIdentifier:@"callCell" owner:self];
+                if (!tf) {
+                    tf = [NSTextField labelWithString:@""];
+                    tf.identifier = @"callCell";
+                    tf.font = [NSFont monospacedSystemFontOfSize:11.5 weight:NSFontWeightBold];
+                    tf.textColor = [NSColor systemYellowColor];
+                }
+                tf.stringValue = st.callsign;
+                return tf;
+            } else if ([tableColumn.identifier isEqualToString:@"wpm"]) {
+                NSTextField *tf = [tableView makeViewWithIdentifier:@"wpmCell" owner:self];
+                if (!tf) {
+                    tf = [NSTextField labelWithString:@""];
+                    tf.identifier = @"wpmCell";
+                    tf.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightRegular];
+                }
+                tf.stringValue = [NSString stringWithFormat:@"%.0f", st.wpm];
+                return tf;
+            } else if ([tableColumn.identifier isEqualToString:@"snr"]) {
+                NSTextField *tf = [tableView makeViewWithIdentifier:@"snrCell" owner:self];
+                if (!tf) {
+                    tf = [NSTextField labelWithString:@""];
+                    tf.identifier = @"snrCell";
+                    tf.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightRegular];
+                }
+                tf.stringValue = [NSString stringWithFormat:@"%.0fdB", st.snrDb];
+                return tf;
+            } else if ([tableColumn.identifier isEqualToString:@"action"]) {
+                NSButton *btn = [tableView makeViewWithIdentifier:@"actionCell" owner:self];
+                if (!btn) {
+                    btn = [NSButton buttonWithTitle:@"" target:self action:@selector(rosterAnswerClicked:)];
+                    btn.identifier = @"actionCell";
+                    btn.bezelStyle = NSBezelStyleRounded;
+                    btn.controlSize = NSControlSizeSmall;
+                    btn.font = [NSFont systemFontOfSize:10.5 weight:NSFontWeightMedium];
+                    btn.contentTintColor = [NSColor systemGreenColor];
+                }
+                btn.title = [NSString stringWithFormat:@"Answer %@", st.callsign];
+                btn.tag = row;
+                return btn;
             }
-            tf.stringValue = [NSString stringWithFormat:@"%.0f", st.wpm];
-            return tf;
-        } else if ([tableColumn.identifier isEqualToString:@"snr"]) {
-            NSTextField *tf = [tableView makeViewWithIdentifier:@"snrCell" owner:self];
-            if (!tf) {
-                tf = [NSTextField labelWithString:@""];
-                tf.identifier = @"snrCell";
-                tf.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightRegular];
-            }
-            tf.stringValue = [NSString stringWithFormat:@"%.0fdB", st.snrDb];
-            return tf;
-        } else if ([tableColumn.identifier isEqualToString:@"action"]) {
-            NSButton *btn = [tableView makeViewWithIdentifier:@"actionCell" owner:self];
-            if (!btn) {
-                btn = [NSButton buttonWithTitle:@"" target:self action:@selector(rosterAnswerClicked:)];
-                btn.identifier = @"actionCell";
-                btn.bezelStyle = NSBezelStyleRounded;
-                btn.controlSize = NSControlSizeSmall;
-                btn.font = [NSFont systemFontOfSize:10.5 weight:NSFontWeightMedium];
-                btn.contentTintColor = [NSColor systemGreenColor];
-            }
-            btn.title = [NSString stringWithFormat:@"Answer %@", st.callsign];
-            btn.tag = row;
-            return btn;
         }
     } else if (tableView == self.logTableView) {
         NSArray<TX500QSOContact *> *contacts = self.assistant.loggedContacts;
@@ -1344,6 +2274,69 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
                          rst:@"599"
                         name:@""
                          qth:@""];
+}
+
+- (void)rosterWidebandAnswerClicked:(NSButton *)sender {
+    NSInteger row = sender.tag;
+    if (row < 0 || row >= (NSInteger)self.widebandChannels.count) return;
+    TX500CWChannelState *ch = self.widebandChannels[row];
+    [self answerWidebandChannel:ch];
+}
+
+- (void)answerWidebandChannel:(TX500CWChannelState *)channel {
+    if (!channel) return;
+    double freq = channel.frequencyHz;
+
+    // 1. Tune receiver pitch or radio VFO
+    if (freq <= 1500.0) {
+        [self.decoder setPitch:freq];
+        self.keyer.sidetonePitchHz = freq;
+        self.pitchSlider.doubleValue = freq;
+        self.pitchValueLabel.stringValue = [NSString stringWithFormat:@"%.0fHz", freq];
+    } else {
+        // Frequency is higher than 1500 Hz: shift radio dial VFO so it centers at 650 Hz
+        int64_t delta = (int64_t)round(freq - 650.0);
+        [self stepFrequencyHz:delta];
+        [self.decoder setPitch:650.0];
+        self.keyer.sidetonePitchHz = 650.0;
+        self.pitchSlider.doubleValue = 650.0;
+        self.pitchValueLabel.stringValue = @"650Hz";
+    }
+    [self updateVFOOffsetLabel];
+
+    // 2. Set decoder & keyer WPM to match this station
+    if (channel.estimatedWPM >= 5.0 && channel.estimatedWPM <= 45.0) {
+        self.keyer.wpm = (NSInteger)channel.estimatedWPM;
+        self.wpmStepper.integerValue = self.keyer.wpm;
+        self.wpmLabel.stringValue = [NSString stringWithFormat:@"%ld WPM", (long)self.keyer.wpm];
+        [self.decoder setNominalWPM:channel.estimatedWPM];
+    }
+
+    // 3. If a callsign was recognized on this channel, initiate response
+    if (channel.extractedCallsign.length > 0) {
+        TX500CWHeardStation *st = [[TX500CWHeardStation alloc] init];
+        st.callsign = channel.extractedCallsign;
+        st.wpm = channel.estimatedWPM;
+        st.snrDb = channel.snrDb;
+        st.timestamp = [NSDate date];
+        [self.assistant selectAndAnswerStation:st];
+
+        NSString *answerText = [NSString stringWithFormat:@"%@ DE %@ K", channel.extractedCallsign, self.assistant.myCallsign];
+        self.txInputField.stringValue = answerText;
+        [self.keyer transmitText:answerText
+                      targetCall:channel.extractedCallsign
+                             rst:@"599"
+                            name:@""
+                             qth:@""];
+    }
+
+    if (self.logHandler) {
+        if (channel.extractedCallsign.length > 0) {
+            self.logHandler([NSString stringWithFormat:@"[CW Station] Tuned & answered %@ at %.0f Hz.", channel.extractedCallsign, freq]);
+        } else {
+            self.logHandler([NSString stringWithFormat:@"[CW Station] Tuned receiver to carrier at %.0f Hz.", freq]);
+        }
+    }
 }
 
 @end

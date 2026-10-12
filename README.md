@@ -2,21 +2,28 @@
 
 A native macOS application for the Lab599 TX-500 family of transceivers. It includes a Station workspace, DX Cluster, FT8/FT4 and CW operation, Voice Keyer, contact logbook, firmware updates, live telemetry, radio screen capture, time sync, CAT diagnostics, settings and memory management. Developed by **EP2AES (factoreal)**.
 
-**Newest published pre-release: v2.283 (Build 289) · macOS 12+ · Apple Silicon and Intel · English interface · Persian guide included**
+**Newest published pre-release: v2.284 (Build 290) · macOS 12+ · Apple Silicon and Intel · English interface · Persian guide included**
 
-[Download v2.283](https://github.com/fact0real/Lab599-Utility/releases/tag/2.283) · [In-app Help guide](Resources/Help/index.html) · [راهنمای فارسی](QUICKSTART-FA.md) · [Build instructions](UPDATER-README.md) · [Report an issue](https://github.com/fact0real/Lab599-Utility/issues/new)
+[Download v2.284](https://github.com/fact0real/Lab599-Utility/releases/tag/2.284) · [In-app Help guide](Resources/Help/index.html) · [راهنمای فارسی](QUICKSTART-FA.md) · [Build instructions](UPDATER-README.md) · [Report an issue](https://github.com/fact0real/Lab599-Utility/issues/new)
 
 ## Download and install
 
-Download `Lab599-Utility-v2.283-macOS-universal.zip` from the [v2.283 release](https://github.com/fact0real/Lab599-Utility/releases/tag/2.283). Extract the ZIP and move `Lab599 Utility.app` to `/Applications`. The ZIP contains the app, offline illustrated Help, English and Persian guides, and license notices; manufacturer firmware is not included.
+Download `Lab599-Utility-v2.284-macOS-universal.zip` from the [v2.284 release](https://github.com/fact0real/Lab599-Utility/releases/tag/2.284). Extract the ZIP and move `Lab599 Utility.app` to `/Applications`. The ZIP contains the app, offline illustrated Help, English and Persian guides, and license notices; manufacturer firmware is not included.
 
 Verify the download before opening the app:
 
 ```sh
-shasum -a 256 Lab599-Utility-v2.283-macOS-universal.zip
+shasum -a 256 Lab599-Utility-v2.284-macOS-universal.zip
 ```
 
 Compare the result with the `SHA256SUMS.txt` asset on the release page. The app is ad-hoc signed, **not Apple notarized**. If macOS blocks the first launch, select this app in **System Settings → Privacy & Security → Open Anyway** after verifying the checksum.
+
+## What's new in v2.284
+
+- **AudioQueue CoreAudio Engine for CW Modulation & Tune Carrier:** Replaced `AVAudioEngine` in `TX500CWKeyer` with low-level Apple `AudioQueue` streaming at 48000 Hz Float32 stereo. This completely eliminates the 0-Watt transmit issue where `AVAudioEngine` locked to default internal speakers and failed to route modulation to external USB DACs.
+- **Full 10W Transmit RF Drive in `DIG` Mode:** Morse tones and continuous tuning carriers are now streamed interleaved across both Left and Right channels with calibrated ~0.85 amplitude (-1.4 dBFS) and 4ms raised-cosine envelopes, delivering full ~10 W RF power verified live via CAT power meter polling (`RM00009;`).
+- **Automatic Audio Input/Output Endpoint Pairing:** CW Station now automatically pairs and binds the matching USB audio output interface when an input audio device is selected or changed.
+- **Strict Device Selection Preservation:** Fixed `preserveDeviceSelection` handling in audio device enumeration to prevent missing audio routes from being silently overridden.
 
 ## What's new in v2.283
 

@@ -612,8 +612,7 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
     // A preserved UID is therefore only a preference, never a reason to keep
     // an unavailable device selected. Rebind to the best physical interface
     // immediately so reconnecting the cable does not leave FT8 unusable.
-    if ((!selectedInValid && (bestPreferredUSBAudioInUID || bestUSBInUID)) ||
-        (!self.preserveDeviceSelection && (currentInIsVirtual || !_selectedInputDeviceUID))) {
+    if (!self.preserveDeviceSelection && (!selectedInValid || currentInIsVirtual || !_selectedInputDeviceUID)) {
         if (bestPreferredUSBAudioInUID) {
             _selectedInputDeviceUID = bestPreferredUSBAudioInUID;
         } else if (bestUSBInUID) {
@@ -635,8 +634,7 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
             break;
         }
     }
-    if ((!selectedOutValid && (bestPreferredUSBAudioOutUID || bestUSBOutUID)) ||
-        (!self.preserveDeviceSelection && (currentOutIsVirtual || !_selectedOutputDeviceUID))) {
+    if (!self.preserveDeviceSelection && (!selectedOutValid || currentOutIsVirtual || !_selectedOutputDeviceUID)) {
         NSString *matchingOutput = [TX500FT8AudioEngine matchingOutputUIDForInputUID:_selectedInputDeviceUID
                                                                         inputDevices:inputs
                                                                        outputDevices:outputs];

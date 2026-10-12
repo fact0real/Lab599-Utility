@@ -6,6 +6,7 @@
 //
 
 #import "TX500CWStationController.h"
+#import "TX500FT8AudioEngine.h"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
@@ -393,7 +394,33 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
     }
 }
 
+- (void)updateKeyerRadioOutputDevice {
+    NSString *inputUID = self.decoder.selectedAudioDeviceUID;
+    NSString *matchedOutputUID = nil;
+    if (inputUID.length > 0 && ![inputUID isEqualToString:TX500CWSystemAudioDeviceUID]) {
+        if ([inputUID hasPrefix:@"AppleUSBAudioEngine:"]) {
+            NSRange lastColon = [inputUID rangeOfString:@":" options:NSBackwardsSearch];
+            if (lastColon.location != NSNotFound) {
+                NSString *family = [inputUID substringToIndex:lastColon.location + 1];
+                for (TX500AudioDeviceItem *dev in self.audioEngine.outputDevices) {
+                    NSString *u = dev.uid;
+                    if ([u hasPrefix:family]) {
+                        matchedOutputUID = u;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    if (matchedOutputUID.length > 0) {
+        self.keyer.radioOutputDeviceUID = matchedOutputUID;
+    } else if (!self.keyer.radioOutputDeviceUID.length) {
+        self.keyer.radioOutputDeviceUID = [TX500CWKeyer findBestUSBAudioOutputUID];
+    }
+}
+
 - (void)prepareRadioForCWMode {
+    [self updateKeyerRadioOutputDevice];
     if (self.userHasChosenCustomMode) {
         [self updateKeyerCommandsForCurrentMode];
         return;
@@ -1745,12 +1772,14 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
     if (![self.decoder.selectedAudioDeviceUID isEqualToString:uid]) [self.decoder stopListening];
     self.decoder.preserveDeviceSelection = YES;
     self.decoder.selectedAudioDeviceUID = uid;
+    [self updateKeyerRadioOutputDevice];
     [self updateAudioDeviceMenu];
 }
 
 - (void)refreshAudioDevicesClicked:(id)sender {
     (void)sender;
     [self.decoder refreshAudioDevices];
+    [self updateKeyerRadioOutputDevice];
     [self updateAudioDeviceMenu];
     if (self.logHandler) {
         self.logHandler(@"[CW Audio] Audio devices refreshed. USB interfaces re-enumerated.");
@@ -1773,6 +1802,7 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
         self.hasLocalAudioSelection = YES;
         self.decoder.preserveDeviceSelection = YES;
         self.decoder.selectedAudioDeviceUID = uid;
+        [self updateKeyerRadioOutputDevice];
         [NSUserDefaults.standardUserDefaults setObject:uid forKey:CWInputPreferenceKey];
         if (self.logHandler) {
             self.logHandler([NSString stringWithFormat:@"Selected audio input device: %@", item.title]);

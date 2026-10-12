@@ -7,6 +7,7 @@
 
 #import "TX500CWKeyer.h"
 #import <math.h>
+#import <pthread.h>
 #import <CoreAudio/CoreAudio.h>
 #import <AudioToolbox/AudioToolbox.h>
 
@@ -38,15 +39,28 @@
 @property (nonatomic, strong, nullable) AVAudioPlayerNode *sidetonePlayer;
 @property (nonatomic, assign) BOOL sidetoneEngineReady;
 
-// Radio Audio Output (routes CW modulation to TX-500 transceiver)
-@property (nonatomic, strong, nullable) AVAudioEngine *radioEngine;
-@property (nonatomic, strong, nullable) AVAudioPlayerNode *radioPlayer;
-@property (nonatomic, assign) BOOL radioEngineReady;
+// Radio Audio Output (routes CW modulation to TX-500 transceiver via AudioQueue)
+@property (nonatomic, assign) BOOL radioQueueReady;
 @property (nonatomic, copy, nullable) NSString *activeRadioUID;
 
 @end
 
-@implementation TX500CWKeyer
+@implementation TX500CWKeyer {
+    AudioQueueRef _radioOutputQueue;
+    AudioQueueBufferRef _radioBuffers[3];
+    pthread_mutex_t _radioAudioLock;
+    float *_radioTxBuffer;
+    UInt32 _radioTxBufferTotalSamples;
+    UInt32 _radioTxBufferReadIndex;
+    BOOL _isContinuousCarrier;
+    double _carrierPhase;
+    double _carrierFrequency;
+    float _carrierAmplitude;
+}
+
++ (nullable NSString *)findBestUSBAudioOutputUID {
+    return CWKeyerFindBestUSBAudioOutputUID();
+}
 
 - (instancetype)init {
     self = [super init];
@@ -61,6 +75,15 @@
         _internalSentHistory = [NSMutableArray array];
         _txPrefixCommand = @"TX;";
         _rxSuffixCommand = @"RX;";
+
+        pthread_mutex_init(&_radioAudioLock, NULL);
+        _radioTxBuffer = NULL;
+        _radioTxBufferTotalSamples = 0;
+        _radioTxBufferReadIndex = 0;
+        _isContinuousCarrier = NO;
+        _carrierPhase = 0.0;
+        _carrierFrequency = 650.0;
+        _carrierAmplitude = 0.85f;
 
         _macroList = [NSMutableArray arrayWithArray:@[
             [TX500CWMacro macroWithId:1 label:@"F1 CQ" template:@"CQ CQ DE {MYCALL} {MYCALL} K"],
@@ -88,6 +111,13 @@
         self.sidetoneEngine = nil;
     }
     [self teardownRadioAudio];
+    pthread_mutex_lock(&_radioAudioLock);
+    if (_radioTxBuffer) {
+        free(_radioTxBuffer);
+        _radioTxBuffer = NULL;
+    }
+    pthread_mutex_unlock(&_radioAudioLock);
+    pthread_mutex_destroy(&_radioAudioLock);
 }
 
 - (NSArray<NSString *> *)sentHistory {
@@ -95,25 +125,6 @@
 }
 
 #pragma mark - CoreAudio Helpers
-
-static AudioDeviceID CWKeyerDeviceIDForUID(NSString *uid) {
-    if (!uid.length) return kAudioObjectUnknown;
-    AudioValueTranslation translation;
-    CFStringRef uidString = (__bridge CFStringRef)uid;
-    AudioDeviceID deviceID = kAudioObjectUnknown;
-    translation.mInputData = &uidString;
-    translation.mInputDataSize = sizeof(CFStringRef);
-    translation.mOutputData = &deviceID;
-    translation.mOutputDataSize = sizeof(AudioDeviceID);
-    AudioObjectPropertyAddress propAddress = {
-        kAudioHardwarePropertyDeviceForUID,
-        kAudioObjectPropertyScopeGlobal,
-        kAudioObjectPropertyElementMain
-    };
-    UInt32 propSize = sizeof(AudioValueTranslation);
-    OSStatus status = AudioObjectGetPropertyData(kAudioObjectSystemObject, &propAddress, 0, NULL, &propSize, &translation);
-    return (status == noErr) ? deviceID : kAudioObjectUnknown;
-}
 
 static NSString *CWKeyerFindBestUSBAudioOutputUID(void) {
     AudioObjectPropertyAddress addr = {
@@ -194,13 +205,57 @@ static NSString *CWKeyerFindBestUSBAudioOutputUID(void) {
     }
 }
 
-- (void)teardownRadioAudio {
-    if (self.radioEngine) {
-        [self.radioEngine stop];
-        self.radioPlayer = nil;
-        self.radioEngine = nil;
+static void CWKeyerRadioOutputCallback(void *inUserData,
+                                       AudioQueueRef inAQ,
+                                       AudioQueueBufferRef inBuffer) {
+    TX500CWKeyer *keyer = (__bridge TX500CWKeyer *)inUserData;
+    if (!keyer) return;
+    UInt32 frameCount = inBuffer->mAudioDataBytesCapacity / (2 * sizeof(float));
+    float *samples = (float *)inBuffer->mAudioData;
+    [keyer renderRadioAudioSamples:samples count:frameCount];
+    inBuffer->mAudioDataByteSize = frameCount * 2 * sizeof(float);
+    if (inAQ) {
+        AudioQueueEnqueueBuffer(inAQ, inBuffer, 0, NULL);
     }
-    self.radioEngineReady = NO;
+}
+
+- (void)renderRadioAudioSamples:(float *)samples count:(UInt32)frameCount {
+    pthread_mutex_lock(&_radioAudioLock);
+    if (_isContinuousCarrier) {
+        double omega = 2.0 * M_PI * _carrierFrequency / 48000.0;
+        for (UInt32 i = 0; i < frameCount; i++) {
+            float val = _carrierAmplitude * sinf((float)_carrierPhase);
+            samples[i * 2] = val;
+            samples[i * 2 + 1] = val;
+            _carrierPhase += omega;
+            if (_carrierPhase > 2.0 * M_PI) _carrierPhase -= 2.0 * M_PI;
+        }
+    } else if (self.isTransmitting && _radioTxBuffer && _radioTxBufferReadIndex < _radioTxBufferTotalSamples) {
+        UInt32 remaining = _radioTxBufferTotalSamples - _radioTxBufferReadIndex;
+        UInt32 toCopy = MIN(frameCount, remaining);
+        for (UInt32 i = 0; i < toCopy; i++) {
+            float val = _radioTxBuffer[_radioTxBufferReadIndex + i];
+            samples[i * 2] = val;
+            samples[i * 2 + 1] = val;
+        }
+        _radioTxBufferReadIndex += toCopy;
+        for (UInt32 i = toCopy; i < frameCount; i++) {
+            samples[i * 2] = 0.0f;
+            samples[i * 2 + 1] = 0.0f;
+        }
+    } else {
+        memset(samples, 0, frameCount * 2 * sizeof(float));
+    }
+    pthread_mutex_unlock(&_radioAudioLock);
+}
+
+- (void)teardownRadioAudio {
+    if (_radioOutputQueue) {
+        AudioQueueStop(_radioOutputQueue, true);
+        AudioQueueDispose(_radioOutputQueue, true);
+        _radioOutputQueue = NULL;
+    }
+    self.radioQueueReady = NO;
     self.activeRadioUID = nil;
 }
 
@@ -214,45 +269,64 @@ static NSString *CWKeyerFindBestUSBAudioOutputUID(void) {
     if (!targetUID.length) {
         return;
     }
-    if (self.radioEngineReady && [self.activeRadioUID isEqualToString:targetUID]) {
+    if (self.radioQueueReady && [self.activeRadioUID isEqualToString:targetUID]) {
         return;
     }
     [self teardownRadioAudio];
 
-    AudioDeviceID devID = CWKeyerDeviceIDForUID(targetUID);
-    if (devID == kAudioObjectUnknown) return;
+    AudioStreamBasicDescription format = {0};
+    format.mSampleRate = 48000.0;
+    format.mFormatID = kAudioFormatLinearPCM;
+    format.mFormatFlags = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked;
+    format.mBytesPerPacket = 2 * sizeof(float);
+    format.mFramesPerPacket = 1;
+    format.mBytesPerFrame = 2 * sizeof(float);
+    format.mChannelsPerFrame = 2;
+    format.mBitsPerChannel = 32;
 
-    @try {
-        self.radioEngine = [[AVAudioEngine alloc] init];
-        self.radioPlayer = [[AVAudioPlayerNode alloc] init];
-        [self.radioEngine attachNode:self.radioPlayer];
+    OSStatus status = AudioQueueNewOutput(&format,
+                                          CWKeyerRadioOutputCallback,
+                                          (__bridge void *)self,
+                                          NULL,
+                                          NULL,
+                                          0,
+                                          &_radioOutputQueue);
+    if (status != noErr) {
+        NSLog(@"TX500CWKeyer: AudioQueueNewOutput failed with status %d", (int)status);
+        return;
+    }
 
-        AudioUnit outputUnit = self.radioEngine.outputNode.audioUnit;
-        OSStatus status = AudioUnitSetProperty(outputUnit,
-                                               kAudioOutputUnitProperty_CurrentDevice,
-                                               kAudioUnitScope_Global,
-                                               0,
-                                               &devID,
-                                               sizeof(AudioDeviceID));
-        if (status != noErr) {
-            NSLog(@"TX500CWKeyer: Could not set current device %u: %d", (unsigned int)devID, (int)status);
-            return;
+    CFStringRef uidRef = (__bridge CFStringRef)targetUID;
+    status = AudioQueueSetProperty(_radioOutputQueue,
+                                   kAudioQueueProperty_CurrentDevice,
+                                   &uidRef,
+                                   sizeof(uidRef));
+    if (status != noErr) {
+        NSLog(@"TX500CWKeyer: AudioQueueSetProperty current device failed (%d) for UID %@", (int)status, targetUID);
+        AudioQueueDispose(_radioOutputQueue, true);
+        _radioOutputQueue = NULL;
+        return;
+    }
+
+    for (int i = 0; i < 3; i++) {
+        status = AudioQueueAllocateBuffer(_radioOutputQueue,
+                                          480 * 2 * sizeof(float),
+                                          &_radioBuffers[i]);
+        if (status == noErr) {
+            memset(_radioBuffers[i]->mAudioData, 0, _radioBuffers[i]->mAudioDataBytesCapacity);
+            _radioBuffers[i]->mAudioDataByteSize = _radioBuffers[i]->mAudioDataBytesCapacity;
+            AudioQueueEnqueueBuffer(_radioOutputQueue, _radioBuffers[i], 0, NULL);
         }
+    }
 
-        AVAudioMixerNode *mainMixer = self.radioEngine.mainMixerNode;
-        AVAudioFormat *format = [mainMixer outputFormatForBus:0];
-        [self.radioEngine connect:self.radioPlayer to:mainMixer format:format];
-
-        NSError *err = nil;
-        [self.radioEngine startAndReturnError:&err];
-        if (!err) {
-            self.radioEngineReady = YES;
-            self.activeRadioUID = targetUID;
-        } else {
-            NSLog(@"TX500CWKeyer: Radio audio engine start error: %@", err);
-        }
-    } @catch (NSException *e) {
-        NSLog(@"TX500CWKeyer: Exception setting up radio audio: %@", e);
+    status = AudioQueueStart(_radioOutputQueue, NULL);
+    if (status == noErr) {
+        self.radioQueueReady = YES;
+        self.activeRadioUID = targetUID;
+        NSLog(@"TX500CWKeyer: Radio AudioQueue ready on %@", targetUID);
+    } else {
+        NSLog(@"TX500CWKeyer: AudioQueueStart failed (%d)", (int)status);
+        [self teardownRadioAudio];
     }
 }
 
@@ -412,16 +486,49 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
 
     // 2. Play Morse modulation tone to Radio USB Audio output interface (drives TX-500 transmitter!)
     [self ensureRadioAudioReady];
-    if (self.radioEngineReady && self.radioPlayer) {
-        AVAudioFormat *radFmt = [self.radioEngine.mainMixerNode outputFormatForBus:0];
-        if (radFmt && radFmt.sampleRate > 0) {
-            NSMutableArray<NSDictionary *> *radIntervals = buildIntervalsForRate(radFmt.sampleRate);
-            AVAudioPCMBuffer *radBuf = TX500GenerateMorsePCMBuffer(radFmt, radIntervals, pitch, 0.55f);
-            if (radBuf && token == self.transmissionGeneration && self.isTransmitting) {
-                [self.radioPlayer scheduleBuffer:radBuf atTime:nil options:0 completionHandler:nil];
-                if (!self.radioPlayer.isPlaying) {
-                    [self.radioPlayer play];
+    if (self.radioQueueReady) {
+        NSMutableArray<NSDictionary *> *radIntervals = buildIntervalsForRate(48000.0);
+        int totalMorseSamples = 0;
+        for (NSDictionary *d in radIntervals) {
+            totalMorseSamples += [d[@"samples"] intValue];
+        }
+        if (totalMorseSamples > 0) {
+            float *morseSamples = (float *)calloc(totalMorseSamples, sizeof(float));
+            if (morseSamples) {
+                double omega = 2.0 * M_PI * pitch / 48000.0;
+                double currentPhase = 0;
+                int rampSamples = (int)(0.004 * 48000.0); // 4ms raised-cosine envelope to eliminate key clicks
+                if (rampSamples < 1) rampSamples = 1;
+                int sampleOffset = 0;
+                for (NSDictionary *d in radIntervals) {
+                    BOOL isTone = [d[@"tone"] boolValue];
+                    int count = [d[@"samples"] intValue];
+                    if (isTone) {
+                        int thisRamp = MIN(rampSamples, count / 4);
+                        for (int s = 0; s < count; s++) {
+                            float env = 1.0f;
+                            if (s < thisRamp) {
+                                env = 0.5f * (1.0f - cosf((float)s / (float)thisRamp * (float)M_PI));
+                            } else if (s > count - 1 - thisRamp) {
+                                env = 0.5f * (1.0f - cosf((float)(count - 1 - s) / (float)thisRamp * (float)M_PI));
+                            }
+                            morseSamples[sampleOffset + s] = 0.85f * env * sinf((float)currentPhase);
+                            currentPhase += omega;
+                            if (currentPhase > 2.0 * M_PI) currentPhase -= 2.0 * M_PI;
+                        }
+                    }
+                    sampleOffset += count;
                 }
+                pthread_mutex_lock(&_radioAudioLock);
+                if (_radioTxBuffer) {
+                    free(_radioTxBuffer);
+                    _radioTxBuffer = NULL;
+                }
+                _radioTxBuffer = morseSamples;
+                _radioTxBufferTotalSamples = (UInt32)totalMorseSamples;
+                _radioTxBufferReadIndex = 0;
+                _isContinuousCarrier = NO;
+                pthread_mutex_unlock(&_radioAudioLock);
             }
         }
     }
@@ -495,9 +602,10 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
             strongSelf.isTransmitting = NO;
             strongSelf.activeBufferText = @"";
             strongSelf.currentlyTransmittingChar = @"";
-            if (strongSelf.radioPlayer.isPlaying) {
-                [strongSelf.radioPlayer stop];
-            }
+            pthread_mutex_lock(&strongSelf->_radioAudioLock);
+            strongSelf->_isContinuousCarrier = NO;
+            strongSelf->_radioTxBufferReadIndex = strongSelf->_radioTxBufferTotalSamples;
+            pthread_mutex_unlock(&strongSelf->_radioAudioLock);
             if (strongSelf.sidetonePlayer.isPlaying) {
                 [strongSelf.sidetonePlayer stop];
             }
@@ -527,11 +635,13 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
     self.activeBufferText = @"";
     self.currentlyTransmittingChar = @"";
 
+    pthread_mutex_lock(&_radioAudioLock);
+    _isContinuousCarrier = NO;
+    _radioTxBufferReadIndex = _radioTxBufferTotalSamples;
+    pthread_mutex_unlock(&_radioAudioLock);
+
     if (self.sidetonePlayer.isPlaying) {
         [self.sidetonePlayer stop];
-    }
-    if (self.radioPlayer.isPlaying) {
-        [self.radioPlayer stop];
     }
 
     if (self.serialCommandSender) {
@@ -546,27 +656,12 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
 
 - (void)startContinuousCarrierWithPitchHz:(double)pitch {
     [self ensureRadioAudioReady];
-    if (self.radioEngineReady && self.radioPlayer) {
-        AVAudioFormat *fmt = [self.radioEngine.mainMixerNode outputFormatForBus:0];
-        if (fmt && fmt.sampleRate > 0) {
-            double sampleRate = fmt.sampleRate;
-            NSUInteger frames = (NSUInteger)sampleRate;
-            AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:fmt frameCapacity:(AVAudioFrameCount)frames];
-            buffer.frameLength = (AVAudioFrameCount)frames;
-            double omega = 2.0 * M_PI * pitch / sampleRate;
-            for (int ch = 0; ch < (int)fmt.channelCount; ch++) {
-                float *data = buffer.floatChannelData[ch];
-                double phase = 0;
-                for (NSUInteger i = 0; i < frames; i++) {
-                    data[i] = 0.55f * sin(phase);
-                    phase += omega;
-                }
-            }
-            [self.radioPlayer stop];
-            [self.radioPlayer scheduleBuffer:buffer atTime:nil options:AVAudioPlayerNodeBufferLoops completionHandler:nil];
-            [self.radioPlayer play];
-        }
-    }
+    pthread_mutex_lock(&_radioAudioLock);
+    _isContinuousCarrier = YES;
+    _carrierFrequency = (pitch > 100.0) ? pitch : 650.0;
+    _carrierAmplitude = 0.85f;
+    _carrierPhase = 0.0;
+    pthread_mutex_unlock(&_radioAudioLock);
 
     if (self.sidetoneEngineReady && self.sidetonePlayer && self.sidetoneEnabled) {
         AVAudioFormat *fmt = [self.sidetoneEngine.mainMixerNode outputFormatForBus:0];
@@ -593,9 +688,10 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
 }
 
 - (void)stopContinuousCarrier {
-    if (self.radioPlayer.isPlaying) {
-        [self.radioPlayer stop];
-    }
+    pthread_mutex_lock(&_radioAudioLock);
+    _isContinuousCarrier = NO;
+    pthread_mutex_unlock(&_radioAudioLock);
+
     if (self.sidetonePlayer.isPlaying) {
         [self.sidetonePlayer stop];
     }

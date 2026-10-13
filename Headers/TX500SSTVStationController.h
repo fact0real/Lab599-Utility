@@ -43,6 +43,14 @@ FOUNDATION_EXPORT NSString *const TX500SSTVEnabledDefaultsKey;
 /// Opens the gallery folder for «Show pictures in Finder». By default the Finder opens it
 /// (NSWorkspace openURL:); the tests give their own, so no Finder window opens.
 @property (nonatomic, copy, nullable) void (^revealFolderHandler)(NSURL *folder);
+/// Asked before a picture's PNG goes to the Trash (the X on a thumbnail of the gallery): YES moves it. The text says
+/// what goes and, when it applies, that its recording is marked Keep, or that its reception would be left with
+/// nothing and leave Recent receptions. By default a question on the screen, «Move this picture to the Trash?», with
+/// Cancel as the default answer; the tests give their own answer.
+@property (nonatomic, copy, nullable) BOOL (^confirmMoveToTrash)(NSString *text);
+/// How a PNG goes to the Trash: NSFileManager trashItemAtURL: by default (never removed for good); the tests give
+/// their own, so nothing reaches the Mac's Trash.
+@property (nonatomic, copy, nullable) BOOL (^trashHandler)(NSURL *file, NSError **error);
 
 @property (nonatomic, readonly) BOOL enabled;
 /// The fax, files only for now: the second part of this screen (one sidebar entry, «SSTV»).
@@ -131,6 +139,12 @@ FOUNDATION_EXPORT NSString *const TX500SSTVEnabledDefaultsKey;
 - (void)discardQSO;
 - (BOOL)exportPicture:(TX500SSTVPicture *)picture toURL:(NSURL *)url error:(NSError **)error;
 - (void)showPicture:(TX500SSTVPicture *)picture;
+/// The X on a thumbnail of the gallery (the Delete key on it, and its menu, too). A picture whose PNG is in the folder
+/// goes to the Trash, after the question; one with no PNG there (practice, the disk Off or full, or its PNG gone)
+/// only leaves the gallery, with no question and nothing changed on disk. Shown on the right, that view is emptied;
+/// shown live, it stays there (Export… still saves it); a form that logs it says its picture is no longer kept.
+/// YES when it left the gallery.
+- (BOOL)removePictureFromGallery:(TX500SSTVPicture *)picture;
 
 /// A CAT reading and when it was taken (nil or 0: no valid reading). The screen keeps the last
 /// minutes of them, so a picture found later gets the frequency it was received on. The app may

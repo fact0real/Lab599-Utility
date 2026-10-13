@@ -25,6 +25,7 @@
 @property (nonatomic) BOOL choiceWaiting;
 - (NSButton *)openButton;
 - (void)refreshDraftInfo;
+- (NSStackView *)galleryStack;
 @end
 
 @interface TX500LogbookController (SSTVTests)
@@ -143,6 +144,34 @@ static NSTextField *LabelSaying(NSView *v, NSString *text) {
 static NSTextField *LabelBeginning(NSView *v, NSString *text) {
     if ([v isKindOfClass:NSTextField.class] && [((NSTextField *)v).stringValue hasPrefix:text]) return (NSTextField *)v;
     for (NSView *s in v.subviews) { NSTextField *f = LabelBeginning(s, text); if (f) return f; }
+    return nil;
+}
+
+// the X of a gallery thumbnail: the button inside it
+static NSButton *XOf(NSView *thumb) {
+    for (NSView *s in thumb.subviews) if ([s isKindOfClass:NSButton.class]) return (NSButton *)s;
+    return nil;
+}
+
+// every file under a folder, with its size and modification time: what is on disk there
+static NSArray<NSString *> *DiskSnapshot(NSURL *dir) {
+    NSMutableArray<NSString *> *out = [NSMutableArray array];
+    for (NSURL *u in [NSFileManager.defaultManager enumeratorAtURL:dir includingPropertiesForKeys:@[NSURLFileSizeKey, NSURLContentModificationDateKey]
+                                                           options:0 errorHandler:nil]) {
+        NSNumber *size = nil; NSDate *mod = nil;
+        [u getResourceValue:&size forKey:NSURLFileSizeKey error:nil];
+        [u getResourceValue:&mod forKey:NSURLContentModificationDateKey error:nil];
+        [out addObject:[NSString stringWithFormat:@"%@ %@ %.6f", u.path, size, mod.timeIntervalSince1970]];
+    }
+    [out sortUsingSelector:@selector(compare:)];
+    return out;
+}
+
+// a reception's entry in index.json, as written on disk
+static NSDictionary *IndexItem(NSURL *recordings, NSString *identifier) {
+    NSData *d = [NSData dataWithContentsOfURL:[recordings URLByAppendingPathComponent:@"index.json"]];
+    NSDictionary *index = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
+    for (NSDictionary *it in index[@"items"]) if ([it[@"id"] isEqualToString:identifier]) return it;
     return nil;
 }
 
@@ -1683,6 +1712,298 @@ int main(int argc, const char *argv[]) {
                   @"Gallery: a click on «Show pictures in Finder» after its folder has gone opens nothing, turns it off, "
                   @"and never makes the folder");
             [NSUserDefaults.standardUserDefaults removePersistentDomainForName:suiteH];
+        }
+
+        // 9e. The X of the gallery. What it does depends on whether the picture has its PNG in the folder, never on
+        // where it came from. With one: a question first (Cancel the default), then the test's own Trash (never the
+        // Mac's), its name out of its reception, the bytes counted again, the list saved and the lamp refreshed; a
+        // reception left with nothing leaves the table. Without one: out of the gallery only, no question, nothing on
+        // disk changes. On screen: the offline view emptied, the live one kept, an open form told at once. The same
+        // from the Delete key and from the thumbnail's menu; each thumbnail has a name for VoiceOver
+        {
+            NSFileManager *fm = NSFileManager.defaultManager;
+            NSString *suiteX = [suite stringByAppendingString:@".trash"];
+            NSUserDefaults *defsX = [[NSUserDefaults alloc] initWithSuiteName:suiteX];
+            NSURL *gX = [NSURL fileURLWithPath:[root stringByAppendingPathComponent:@"gallery-trash"] isDirectory:YES];
+            NSURL *trash = [NSURL fileURLWithPath:[root stringByAppendingPathComponent:@"Trash"] isDirectory:YES];
+            [fm createDirectoryAtURL:trash withIntermediateDirectories:YES attributes:nil error:nil];
+            TX500SSTVStationController *cx = NewController(defsX, gX, lb);
+            NSMutableArray<NSString *> *asked = [NSMutableArray array];
+            NSMutableArray<NSURL *> *trashed = [NSMutableArray array];          // where each PNG went in the test's Trash
+            __block BOOL answer = NO, trashFails = NO;
+            cx.confirmMoveToTrash = ^BOOL(NSString *text) { [asked addObject:text]; return answer; };
+            // as the Trash does, a name already there gets a number
+            cx.trashHandler = ^BOOL(NSURL *file, NSError **error) {
+                if (trashFails) {
+                    if (error) *error = [NSError errorWithDomain:@"SSTVTests" code:1 userInfo:@{NSLocalizedDescriptionKey: @"the test's Trash is full"}];
+                    return NO;
+                }
+                NSURL *to = [trash URLByAppendingPathComponent:file.lastPathComponent];
+                for (int k = 2; [fm fileExistsAtPath:to.path]; k++)
+                    to = [trash URLByAppendingPathComponent:[NSString stringWithFormat:@"%@ %d.png", file.lastPathComponent.stringByDeletingPathExtension, k]];
+                if (![fm moveItemAtURL:file toURL:to error:error]) return NO;
+                [trashed addObject:to];
+                return YES;
+            };
+            cx.radioSourceFactory = ^id<TX500SSTVAudioSource> {
+                SSTVTestRadio *r = [SSTVTestRadio new];
+                r.file = [[TX500SSTVFileSource alloc] initWithURL:Fixture(@"M1.wav") error:nil];
+                return r;
+            };
+            NSEvent *enter = [NSEvent enterExitEventWithType:NSEventTypeMouseEntered location:NSZeroPoint modifierFlags:0 timestamp:0
+                                                windowNumber:0 context:nil eventNumber:0 trackingNumber:0 userData:NULL];
+            NSEvent *leave = [NSEvent enterExitEventWithType:NSEventTypeMouseExited location:NSZeroPoint modifierFlags:0 timestamp:0
+                                                windowNumber:0 context:nil eventNumber:0 trackingNumber:0 userData:NULL];
+            NSString *delKey = [NSString stringWithFormat:@"%C", (unichar)NSDeleteCharacter];
+            NSEvent *del = [NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:0 context:nil
+                                          characters:delKey charactersIgnoringModifiers:delKey isARepeat:NO keyCode:51];
+            NSDateFormatter *hf = [NSDateFormatter new];
+            hf.timeZone = [NSTimeZone timeZoneWithAbbreviation:@"UTC"]; hf.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+            hf.dateFormat = @"HH:mm:ss";
+            NSURL *recDir = nil;
+            [cx activate];
+
+            // a picture from the radio, with its PNG: shown live, and the form that logs it open
+            [cx setEnabled:YES error:nil]; [cx setEnabled:NO error:nil];
+            recDir = cx.recordings.directory;
+            TX500SSTVPicture *pa = cx.pictures.lastObject;
+            TX500SSTVStoredReception *ra = cx.recordings.receptions.firstObject;
+            NSButton *ta = (NSButton *)cx.galleryStack.arrangedSubviews.lastObject;
+            NSButton *xa = XOf(ta);
+            NSURL *pngA = pa.savedURL;
+            NSString *nameA = pngA.lastPathComponent ?: @"?";
+            BOOL hidden0 = xa && xa.hidden;
+            [ta mouseEntered:enter];
+            BOOL shownOver = xa && !xa.hidden && [xa.toolTip isEqualToString:@"Move to Trash"] && [xa.accessibilityLabel isEqualToString:@"Move to Trash"];
+            [ta mouseExited:leave];
+            BOOL hiddenAfter = xa && xa.hidden;
+            BOOL tracked = NO;
+            for (NSTrackingArea *t in ta.trackingAreas) if (t.owner == ta && (t.options & NSTrackingMouseEnteredAndExited)) tracked = YES;
+            NSString *labelA = [NSString stringWithFormat:@"Martin M1, from the radio, %@ UTC", [hf stringFromDate:pa.endUTC]];
+            Check(pa && !pa.fromFile && pngA && [fm fileExistsAtPath:pngA.path] && cx.shownPicture == pa && cx.draft.picture == pa &&
+                  [ra.pictureNames containsObject:nameA] && hidden0 && shownOver && hiddenAfter && tracked && [ta.accessibilityLabel isEqualToString:labelA],
+                  @"Gallery: a thumbnail shows its X («Move to Trash» for a picture with its PNG) only while the pointer is over it, and has "
+                  @"a name for VoiceOver: its mode, from the radio or practice, and its UTC time");
+            // a plain button takes the focus only with Full Keyboard Access on (off by default): the thumbnail answers by itself
+            BOOL ownFocus = [ta.class instanceMethodForSelector:@selector(acceptsFirstResponder)] != [NSButton instanceMethodForSelector:@selector(acceptsFirstResponder)] &&
+                            [ta.class instanceMethodForSelector:@selector(canBecomeKeyView)] != [NSButton instanceMethodForSelector:@selector(canBecomeKeyView)];
+            Check(ownFocus && ta.acceptsFirstResponder && ta.canBecomeKeyView && ta.accessibilityCustomActions.count == 1 &&
+                  [ta.accessibilityCustomActions.firstObject.name isEqualToString:@"Move to Trash"],
+                  @"Gallery: a thumbnail takes the keyboard's focus (by a click or by Tab) whatever Full Keyboard Access says, and "
+                  @"VoiceOver finds the X's action on the thumbnail itself, «Move to Trash», as the X is hidden until the pointer is over it");
+
+            // Cancel: nothing changes
+            NSData *indexA = [NSData dataWithContentsOfURL:[recDir URLByAppendingPathComponent:@"index.json"]];
+            unsigned long long bytesA = ra.pictureBytes;
+            NSUInteger nPics = cx.pictures.count, nThumbs = cx.galleryStack.arrangedSubviews.count;
+            answer = NO;
+            [ta mouseEntered:enter];
+            [xa performClick:nil];
+            BOOL same = [fm fileExistsAtPath:pngA.path] && trashed.count == 0 && DiskSnapshot(trash).count == 0 &&
+                        cx.pictures.count == nPics && [cx.pictures containsObject:pa] && cx.galleryStack.arrangedSubviews.count == nThumbs &&
+                        [ra.pictureNames containsObject:nameA] && ra.pictureBytes == bytesA && bytesA > 0 && pa.savedURL != nil &&
+                        indexA && [[NSData dataWithContentsOfURL:[recDir URLByAppendingPathComponent:@"index.json"]] isEqualToData:indexA] &&
+                        cx.draftShowsPicture;
+            Check(asked.count == 1 && [asked[0] containsString:nameA] && ![asked[0] containsString:@"Keep"] &&
+                  ![asked[0] containsString:@"Recent receptions"] && same,
+                  @"Gallery: the X on a picture with its PNG asks first (the PNG named; its reception keeps its audio, so no more is said); "
+                  @"Cancel changes nothing: the PNG, the gallery, the reception and its list stay as they were");
+
+            // the Trash fails: said on the progress line, nothing else changes
+            answer = YES; trashFails = YES;
+            [xa performClick:nil];
+            trashFails = NO;
+            Check(asked.count == 2 && [cx.progressLabel.stringValue containsString:@"could not be moved to the Trash"] &&
+                  [cx.progressLabel.stringValue containsString:@"the test's Trash is full"] && [fm fileExistsAtPath:pngA.path] &&
+                  [cx.pictures containsObject:pa] && cx.galleryStack.arrangedSubviews.count == nThumbs && [ra.pictureNames containsObject:nameA] &&
+                  ra.pictureBytes == bytesA && [[NSData dataWithContentsOfURL:[recDir URLByAppendingPathComponent:@"index.json"]] isEqualToData:indexA] &&
+                  trashed.count == 0,
+                  @"Gallery: when the PNG cannot go to the Trash, the progress line says so, and nothing else changes");
+
+            // the Delete key on the thumbnail, its recording marked Keep: yes moves the PNG to the test's Trash
+            BOOL keptA = [cx.recordings setKeep:YES forReception:ra];
+            NSImage *liveImage = cx.pictureView.image;
+            unsigned long long usedA = cx.recordings.diskBytesUsed;
+            cx.diskSummaryLabel.stringValue = @"(not refreshed)";
+            NSUInteger askedA = asked.count;
+            if (xa) [ta keyDown:del];                                   // only to a thumbnail with its X: a plain button would hand the key on
+            NSURL *inTrashA = trashed.count == 1 ? trashed[0] : nil;
+            NSDictionary *itemA = IndexItem(recDir, ra.identifier);
+            unsigned long long sizeA = [[fm attributesOfItemAtPath:inTrashA.path error:nil][NSFileSize] unsignedLongLongValue];
+            Check(keptA && asked.count == askedA + 1 && [asked.lastObject containsString:@"marked Keep"] &&
+                  ![asked.lastObject containsString:@"Recent receptions"] &&
+                  inTrashA && [inTrashA.lastPathComponent isEqualToString:nameA] && [fm fileExistsAtPath:inTrashA.path] &&
+                  ![fm fileExistsAtPath:pngA.path] && ![cx.pictures containsObject:pa] &&
+                  cx.galleryStack.arrangedSubviews.count == nThumbs - 1 && ta.superview == nil,
+                  @"Gallery: the Delete key on a thumbnail does what its X does: asked (its recording is marked Keep, and it says so); yes moves "
+                  @"the PNG to the test's Trash, out of the gallery folder, and the picture out of the gallery and its strip");
+            Check(![ra.pictureNames containsObject:nameA] && ra.pictureBytes == 0 && bytesA > 0 && itemA &&
+                  [itemA[@"pictures"] isKindOfClass:NSArray.class] && ![itemA[@"pictures"] containsObject:nameA] &&
+                  [cx.recordings.receptions containsObject:ra],
+                  @"Store: the picture's name leaves its reception, its pictures' bytes are counted again (0 now), index.json is written "
+                  @"without it, and the reception keeps its row (its audio is still there)");
+            Check(sizeA > 0 && usedA - cx.recordings.diskBytesUsed == sizeA && [cx.diskSummaryLabel.stringValue hasPrefix:@"● "],
+                  @"Gallery: then the disk lamp is refreshed, with that PNG no longer counted");
+            NSURL *expA = [NSURL fileURLWithPath:[root stringByAppendingPathComponent:@"export-removed-live.png"]];
+            Check(cx.shownPicture == pa && cx.pictureView.image == liveImage && cx.exportButton.enabled &&
+                  [cx exportPicture:cx.shownPicture toURL:expA error:nil] && SamePixels(pa, expA) &&
+                  [cx.progressLabel.stringValue hasPrefix:@"Removed from the gallery"] && [cx.progressLabel.stringValue containsString:@"Export"],
+                  @"Gallery: taken out while shown live, the picture stays in the live view (the radio's last) and Export… still saves "
+                  @"it from memory; the progress line says so");
+            Check(cx.draft.reception == ra && !cx.draftShowsPicture && [cx.draftInfoLabel.stringValue containsString:@"no longer kept"],
+                  @"Gallery: the open Record QSO form that logs that picture says at once that its picture is no longer kept");
+
+            // shown on the right (Decode again), with its PNG: the thumbnail's menu
+            NSArray<TX500SSTVPicture *> *again = [cx decodeAgainReception:ra mode:TX500SSTVModeAuto colourScale:TX500SSTVColourScaleStudio
+                                                            scottieLayout:TX500SSTVScottieLayoutAuto fitSlant:YES slantPPM:0];
+            TX500SSTVPicture *pc = again.firstObject;
+            NSButton *tc = (NSButton *)cx.galleryStack.arrangedSubviews.lastObject;
+            NSURL *pngC = pc.savedURL;
+            NSString *nameC = pngC.lastPathComponent ?: @"?";
+            BOOL offlineC = pc && cx.reviewPicture == pc && cx.reviewExportButton.enabled && pngC && [fm fileExistsAtPath:pngC.path] &&
+                            cx.reviewPictureView.image.representations.count > 0;
+            [tc.menu.delegate menuNeedsUpdate:tc.menu];
+            NSString *menuC = tc.menu.itemArray.firstObject.title;
+            NSUInteger askedC = asked.count, trashedC = trashed.count;
+            answer = YES;
+            if (tc.menu.numberOfItems) [tc.menu performActionForItemAtIndex:0];
+            Check(offlineC && [menuC isEqualToString:@"Move to Trash"] && asked.count == askedC + 1 &&
+                  trashed.count == trashedC + 1 && [fm fileExistsAtPath:trashed.lastObject.path] && ![fm fileExistsAtPath:pngC.path] &&
+                  ![cx.pictures containsObject:pc] && ![ra.pictureNames containsObject:nameC] && [cx.recordings.receptions containsObject:ra],
+                  @"Gallery: the thumbnail's menu says «Move to Trash» and does what its X does (asked; yes: the PNG in the test's Trash, "
+                  @"its name out of the reception)");
+            Check(cx.reviewPicture == nil && cx.reviewPictureView.image.representations.count == 0 && !cx.reviewExportButton.enabled &&
+                  [cx.reviewLabel.stringValue hasPrefix:@"Removed from the gallery"],
+                  @"Gallery: taken out while shown on the right, that view shows the empty placeholder, its Export is off, and its line "
+                  @"says «Removed from the gallery»");
+
+            // the last thing kept of a reception: no audio left (in memory or on disk) and no other picture
+            [cx setEnabled:YES error:nil]; [cx setEnabled:NO error:nil];
+            TX500SSTVPicture *pb = cx.pictures.lastObject;
+            TX500SSTVStoredReception *rb = cx.recordings.receptions.firstObject;
+            NSButton *tb = (NSButton *)cx.galleryStack.arrangedSubviews.lastObject;
+            NSURL *pngB = pb.savedURL;
+            NSString *nameB = pngB.lastPathComponent ?: @"?";
+            cx.recordings.memoryCount = 0;
+            NSURL *wavB = [recDir URLByAppendingPathComponent:[rb.identifier stringByAppendingString:@".wav"]];
+            BOOL wavAway = [fm moveItemAtURL:wavB toURL:[NSURL fileURLWithPath:[root stringByAppendingPathComponent:@"moved-away-x.wav"]] error:nil];
+            [cx reloadRecordings];
+            NSInteger rowsB = cx.recordingsTable.numberOfRows;
+            BOOL listedB = rb != ra && [cx.recordings.receptions containsObject:rb] && IndexItem(recDir, rb.identifier) != nil;
+            NSUInteger askedB = asked.count, trashedB = trashed.count;
+            [tb mouseEntered:enter];
+            [XOf(tb) performClick:nil];
+            Check(wavAway && listedB && pngB && !rb.inMemory && asked.count == askedB + 1 && [asked.lastObject containsString:@"Recent receptions"] &&
+                  ![asked.lastObject containsString:@"Keep"] && trashed.count == trashedB + 1 &&
+                  [trashed.lastObject.lastPathComponent hasPrefix:nameB.stringByDeletingPathExtension] && [fm fileExistsAtPath:trashed.lastObject.path] &&
+                  ![fm fileExistsAtPath:pngB.path] &&
+                  ![cx.recordings.receptions containsObject:rb] && cx.recordingsTable.numberOfRows == rowsB - 1 &&
+                  IndexItem(recDir, rb.identifier) == nil && [cx.recordings.receptions containsObject:ra],
+                  @"Gallery: on the last thing kept of a reception (no audio, no other picture) the question says it would leave Recent "
+                  @"receptions; with yes it leaves the table and index.json, and the other receptions stay");
+
+            // with no PNG in the folder: a picture from the radio whose PNG was taken away by hand, and a practice one
+            [cx setEnabled:YES error:nil]; [cx setEnabled:NO error:nil];
+            TX500SSTVPicture *pd = cx.pictures.lastObject;
+            TX500SSTVStoredReception *rd = cx.recordings.receptions.firstObject;
+            NSButton *td = (NSButton *)cx.galleryStack.arrangedSubviews.lastObject;
+            NSURL *pngD = pd.savedURL;
+            NSString *nameD = pngD.lastPathComponent ?: @"?";
+            BOOL pngAway = pngD && [fm moveItemAtURL:pngD toURL:[NSURL fileURLWithPath:[root stringByAppendingPathComponent:@"moved-away-x.png"]] error:nil];
+            [cx decodeFileAtURL:Fixture(@"R36.wav") synchronously:YES error:nil];
+            TX500SSTVPicture *pp = cx.pictures.lastObject;
+            NSButton *tp = (NSButton *)cx.galleryStack.arrangedSubviews.lastObject;
+            NSString *labelP = [NSString stringWithFormat:@"%@, practice, %@ UTC", pp.modeName, [hf stringFromDate:pp.endUTC]];
+            BOOL offlineP = pp.fromFile && !pp.savedURL && cx.reviewPicture == pp && [tp.accessibilityLabel isEqualToString:labelP] &&
+                            [tp.accessibilityCustomActions.firstObject.name isEqualToString:@"Remove from the gallery"];
+            NSArray<NSString *> *diskBefore = DiskSnapshot(gX), *trashBefore = DiskSnapshot(trash);
+            NSUInteger askedD = asked.count, trashedD = trashed.count;
+            [td.menu.delegate menuNeedsUpdate:td.menu];
+            NSString *menuD = td.menu.itemArray.firstObject.title;
+            [td mouseEntered:enter];
+            NSString *xD = XOf(td).toolTip;
+            [XOf(td) performClick:nil];
+            BOOL liveD = ![cx.pictures containsObject:pd] && td.superview == nil && cx.shownPicture == pd && cx.exportButton.enabled &&
+                         [cx.progressLabel.stringValue hasPrefix:@"Removed from the gallery."];
+            if (XOf(tp)) [tp keyDown:del];
+            BOOL offlineGone = ![cx.pictures containsObject:pp] && tp.superview == nil && cx.reviewPicture == nil && !cx.reviewExportButton.enabled &&
+                               [cx.reviewLabel.stringValue isEqualToString:@"Removed from the gallery."];
+            Check(pngAway && !pd.fromFile && pd.savedURL != nil && [menuD isEqualToString:@"Remove from the gallery"] &&
+                  [xD isEqualToString:@"Remove from the gallery"] && offlineP && liveD && offlineGone && asked.count == askedD &&
+                  trashed.count == trashedD,
+                  @"Gallery: a picture with no PNG in the folder (one from the radio whose PNG was taken away, and a practice one) says "
+                  @"«Remove from the gallery», and leaves it with no question (by its X and by the Delete key)");
+            Check([DiskSnapshot(gX) isEqualToArray:diskBefore] && [DiskSnapshot(trash) isEqualToArray:trashBefore] && diskBefore.count > 0 &&
+                  [rd.pictureNames containsObject:nameD] && [cx.recordings.receptions containsObject:rd],
+                  @"Gallery: and nothing changes on disk: the gallery folder, the recordings, index.json and the test's Trash are as they were");
+
+            // VoiceOver's action on a thumbnail does what its X does
+            [cx setEnabled:YES error:nil]; [cx setEnabled:NO error:nil];
+            TX500SSTVPicture *pv = cx.pictures.lastObject;
+            NSButton *tv = (NSButton *)cx.galleryStack.arrangedSubviews.lastObject;
+            NSURL *pngV = pv.savedURL;
+            NSAccessibilityCustomAction *av = tv.accessibilityCustomActions.firstObject;
+            NSUInteger askedV = asked.count, trashedV = trashed.count;
+            answer = YES;
+            BOOL sentV = av.handler && av.handler();
+            Check(pngV && !pv.fromFile && [av.name isEqualToString:@"Move to Trash"] && sentV && asked.count == askedV + 1 &&
+                  trashed.count == trashedV + 1 && [trashed.lastObject.lastPathComponent hasPrefix:pngV.lastPathComponent.stringByDeletingPathExtension] &&
+                  [fm fileExistsAtPath:trashed.lastObject.path] && ![fm fileExistsAtPath:pngV.path] && ![cx.pictures containsObject:pv] &&
+                  tv.superview == nil,
+                  @"Gallery: the thumbnail's VoiceOver action does what its X does: asked once; yes: the PNG in the test's Trash, the "
+                  @"picture out of the gallery and its strip");
+
+            // a picture comes while the question is open (Listen stays on), and the gallery, full, lets its oldest go:
+            // the asked picture, and only it, leaves; every thumbnail left still shows its own picture
+            BOOL (^stripMatches)(void) = ^BOOL {
+                NSArray<NSView *> *strip = cx.galleryStack.arrangedSubviews;
+                NSArray<TX500SSTVPicture *> *pics = cx.pictures;
+                BOOL m = strip.count == pics.count && pics.count > 0;
+                for (NSUInteger i = 0; m && i < pics.count; i++) {
+                    [(NSButton *)strip[i] performClick:nil];
+                    m = cx.reviewPicture == pics[i];
+                }
+                return m;
+            };
+            __weak TX500SSTVStationController *weakX = cx;
+            cx.confirmMoveToTrash = ^BOOL(NSString *text) {
+                [asked addObject:text];
+                [weakX decodeFileAtURL:Fixture(@"R36.wav") synchronously:YES error:nil];
+                return YES;
+            };
+            cx.galleryInMemory = 2;
+            [cx setEnabled:YES error:nil]; [cx setEnabled:NO error:nil];
+            [cx setEnabled:YES error:nil]; [cx setEnabled:NO error:nil];
+            TX500SSTVPicture *q1 = cx.pictures.firstObject, *q2 = cx.pictures.lastObject;
+            NSButton *t2 = (NSButton *)cx.galleryStack.arrangedSubviews.lastObject;
+            NSURL *png1 = q1.savedURL, *png2 = q2.savedURL;
+            BOOL twoQ = cx.pictures.count == 2 && q1 != q2 && !q1.fromFile && !q2.fromFile && png1 && png2;
+            NSUInteger askedQ = asked.count, trashedQ = trashed.count;
+            [t2 mouseEntered:enter];
+            [XOf(t2) performClick:nil];
+            TX500SSTVPicture *came = cx.pictures.lastObject;
+            Check(twoQ && asked.count == askedQ + 1 && came.fromFile && cx.pictures.count == 1 && ![cx.pictures containsObject:q2] &&
+                  trashed.count == trashedQ + 1 && [trashed.lastObject.lastPathComponent hasPrefix:png2.lastPathComponent.stringByDeletingPathExtension] &&
+                  ![fm fileExistsAtPath:png2.path] && [fm fileExistsAtPath:png1.path] && t2.superview == nil && stripMatches(),
+                  @"Gallery: when a picture comes while the question is open and the full gallery lets its oldest go, yes takes out the "
+                  @"asked picture and only it (its PNG in the test's Trash), and every thumbnail left still shows its own picture");
+
+            // the asked picture is the oldest, and the gallery lets it go while the question is open: nothing is moved
+            [cx setEnabled:YES error:nil]; [cx setEnabled:NO error:nil];
+            [cx setEnabled:YES error:nil]; [cx setEnabled:NO error:nil];
+            TX500SSTVPicture *q3 = cx.pictures.firstObject, *q4 = cx.pictures.lastObject;
+            NSButton *t3 = (NSButton *)cx.galleryStack.arrangedSubviews.firstObject;
+            NSURL *png3 = q3.savedURL;
+            BOOL twoR = cx.pictures.count == 2 && !q3.fromFile && !q4.fromFile && png3;
+            NSUInteger askedR = asked.count, trashedR = trashed.count;
+            [t3 mouseEntered:enter];
+            [XOf(t3) performClick:nil];
+            Check(twoR && asked.count == askedR + 1 && trashed.count == trashedR && [fm fileExistsAtPath:png3.path] &&
+                  ![cx.pictures containsObject:q3] && [cx.pictures containsObject:q4] && cx.pictures.count == 2 && cx.pictures.lastObject.fromFile &&
+                  [cx.progressLabel.stringValue containsString:@"left the gallery while the question was open"] && stripMatches(),
+                  @"Gallery: when the asked picture itself leaves the full gallery while the question is open, its PNG is not moved, the "
+                  @"progress line says so, and the other pictures and their thumbnails stay as they are");
+            [NSUserDefaults.standardUserDefaults removePersistentDomainForName:suiteX];
         }
 
         // 10. the fax, files only (FX1, FX2, FX4, FX30)

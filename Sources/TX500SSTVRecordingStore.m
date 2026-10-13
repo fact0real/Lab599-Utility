@@ -433,6 +433,22 @@ static NSURL *SSTVExisting(NSURL *u) {
     [self trim];                                                // its PNG counts within the cap
 }
 
+// the operator's own removal: that one name goes, what is left on disk is what counts, and a reception with
+// nothing left goes, as trim lets it go
+- (BOOL)removePictureNamed:(NSString *)name ofReception:(TX500SSTVStoredReception *)reception {
+    if (!name.length) return NO;
+    NSMutableArray<NSString *> *names = [reception.pictureNames mutableCopy];
+    NSUInteger i = [names indexOfObject:name];
+    if (i == NSNotFound) return NO;
+    [names removeObjectAtIndex:i];
+    reception.pictureNames = names;
+    reception.pictureBytes = [self bytesOfPictures:reception];
+    BOOL gone = !reception.memory && !reception.onDisk && !reception.pictureBytes;
+    if (gone) [_list removeObjectIdenticalTo:reception];
+    [self saveIndex];
+    return gone;
+}
+
 - (nullable NSURL *)latestPictureURLOfReception:(TX500SSTVStoredReception *)reception {
     for (NSString *name in reception.pictureNames.reverseObjectEnumerator) {
         NSURL *u = [self pictureURL:name];

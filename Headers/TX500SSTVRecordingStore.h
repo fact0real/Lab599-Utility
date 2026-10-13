@@ -90,6 +90,11 @@ NS_ASSUME_NONNULL_BEGIN
 /// it is listed with that reception; no audio is stored again.
 - (void)addPictureNamed:(NSString *)name toReception:(TX500SSTVStoredReception *)reception;
 - (void)addPictureNamed:(NSString *)name modeName:(nullable NSString *)modeName toReception:(TX500SSTVStoredReception *)reception;
+/// A picture taken out of the gallery by the operator, its PNG already in the Trash: its name leaves the reception,
+/// its pictures' bytes are counted again from the PNGs still there, and the list is saved. A reception left with no
+/// audio and no pictures leaves the list, as when the share removes its last files (and with it whether its QSO was
+/// offered or logged). YES when it left the list.
+- (BOOL)removePictureNamed:(NSString *)name ofReception:(TX500SSTVStoredReception *)reception;
 /// The PNG of its latest picture that is still on disk, or nil.
 - (nullable NSURL *)latestPictureURLOfReception:(TX500SSTVStoredReception *)reception;
 - (void)markOffered:(TX500SSTVStoredReception *)reception;

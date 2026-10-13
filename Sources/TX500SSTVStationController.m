@@ -46,6 +46,94 @@ static NSString *const TX500SSTVDiskShareDefaultsKey = @"TX500SSTVDiskShare";   
 @property (nonatomic, readwrite) NSSegmentedControl *paneSwitch;
 @property (nonatomic) BOOL choiceWaiting;                                       // a new choice waits for the next picture
 @property (nonatomic, strong) NSView *sstvPane;
+@property (nonatomic, strong) NSHashTable<TX500SSTVPicture *> *removedPictures;   // taken out of the gallery (weak)
+@end
+
+// Whether a picture has its PNG in the folder now. What the X of the gallery does depends on this alone, never on
+// where the picture came from: a radio picture has none with the disk Off or full, or when the write failed.
+static BOOL SSTVHasFile(TX500SSTVPicture *_Nullable p) {
+    BOOL dir = NO;
+    return p.savedURL && [NSFileManager.defaultManager fileExistsAtPath:p.savedURL.path isDirectory:&dir] && !dir;
+}
+
+static NSString *SSTVRemoveTitle(TX500SSTVPicture *_Nullable p) { return SSTVHasFile(p) ? @"Move to Trash" : @"Remove from the gallery"; }
+
+/// A thumbnail of the gallery: a click shows its picture on the right. A discreet X at its top right, in sight only
+/// while the pointer is over it, the Delete key while it has the focus (a click or Tab gives it the focus), its menu
+/// and its VoiceOver action take it out of the gallery: each sends removeAction to its target, with its tag. It never
+/// holds its picture.
+@interface SSTVThumbnailButton : NSButton <NSMenuDelegate>
+@property (nonatomic, weak, nullable) TX500SSTVPicture *picture;
+@property (nonatomic, strong) NSButton *removeButton;
+@property (nonatomic) SEL removeAction;
+@end
+
+@implementation SSTVThumbnailButton
+
++ (instancetype)thumbnailWithImage:(NSImage *)image picture:(TX500SSTVPicture *)picture tag:(NSInteger)tag
+                            target:(id)target action:(SEL)action removeAction:(SEL)removeAction {
+    SSTVThumbnailButton *b = [self buttonWithImage:image target:target action:action];
+    b.imageScaling = NSImageScaleProportionallyUpOrDown;
+    b.bordered = NO;
+    b.tag = tag;
+    b.picture = picture;
+    b.removeAction = removeAction;
+    NSImage *x = [NSImage imageWithSystemSymbolName:@"xmark.circle.fill" accessibilityDescription:nil];
+    b.removeButton = x ? [NSButton buttonWithImage:x target:target action:removeAction] : [NSButton buttonWithTitle:@"×" target:target action:removeAction];
+    b.removeButton.bordered = NO;
+    b.removeButton.tag = tag;
+    b.removeButton.contentTintColor = NSColor.secondaryLabelColor;
+    b.removeButton.hidden = YES;
+    b.removeButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [b addSubview:b.removeButton];
+    [b.removeButton.widthAnchor constraintEqualToConstant:16].active = YES;
+    [b.removeButton.heightAnchor constraintEqualToConstant:16].active = YES;
+    [b.removeButton.topAnchor constraintEqualToAnchor:b.topAnchor constant:2].active = YES;
+    [b.removeButton.trailingAnchor constraintEqualToAnchor:b.trailingAnchor constant:-2].active = YES;
+    [b addTrackingArea:[[NSTrackingArea alloc] initWithRect:NSZeroRect
+                                                    options:NSTrackingMouseEnteredAndExited | NSTrackingActiveInActiveApp | NSTrackingInVisibleRect
+                                                      owner:b userInfo:nil]];
+    NSMenu *menu = [NSMenu new];
+    NSMenuItem *item = [menu addItemWithTitle:@"" action:removeAction keyEquivalent:@""];
+    item.target = target;
+    item.tag = tag;
+    menu.delegate = b;
+    b.menu = menu;
+    [b refreshRemoveTitle];
+    return b;
+}
+
+// the words follow the picture: «Move to Trash» while its PNG is in the folder, otherwise «Remove from the gallery»
+- (void)refreshRemoveTitle {
+    NSString *t = SSTVRemoveTitle(self.picture);
+    self.removeButton.toolTip = t;
+    self.removeButton.accessibilityLabel = t;
+    self.menu.itemArray.firstObject.title = t;
+    // VoiceOver never finds the X, hidden until the pointer is over it: the same action is the thumbnail's own
+    __weak SSTVThumbnailButton *weakSelf = self;
+    self.accessibilityCustomActions = @[[[NSAccessibilityCustomAction alloc] initWithName:t handler:^BOOL {
+        SSTVThumbnailButton *b = weakSelf;
+        return b && b.enabled && [NSApp sendAction:b.removeAction to:b.target from:b];
+    }]];
+}
+
+// the keyboard reaches a thumbnail by a click or by Tab, with its focus ring, so that the Delete key can act on it
+- (BOOL)acceptsFirstResponder { return self.enabled; }
+- (BOOL)canBecomeKeyView { return self.enabled; }
+
+- (void)menuNeedsUpdate:(NSMenu *)menu { (void)menu; [self refreshRemoveTitle]; }
+- (void)mouseEntered:(NSEvent *)event { (void)event; [self refreshRemoveTitle]; self.removeButton.hidden = NO; }
+- (void)mouseExited:(NSEvent *)event { (void)event; self.removeButton.hidden = YES; }
+
+- (void)keyDown:(NSEvent *)event {
+    NSString *k = event.charactersIgnoringModifiers;
+    unichar ch = k.length ? [k characterAtIndex:0] : 0;
+    if (ch == NSDeleteCharacter || ch == NSBackspaceCharacter || ch == NSDeleteFunctionKey) {
+        [NSApp sendAction:self.removeAction to:self.target from:self];
+        return;
+    }
+    [super keyDown:event];
+}
 @end
 
 @implementation TX500SSTVStationController
@@ -59,6 +147,7 @@ static NSString *const TX500SSTVDiskShareDefaultsKey = @"TX500SSTVDiskShare";   
         _gallery = [NSMutableArray array];
         _waitingDrafts = [NSMutableArray array];
         _bySerial = [NSMutableDictionary dictionary];
+        _removedPictures = [NSHashTable weakObjectsHashTable];
         _galleryInMemory = 30;
         _inputDevices = @[];          // asked of the system only when the operator opens the list (menuNeedsUpdate:)
         _catReadings = [NSMutableArray array];
@@ -744,17 +833,25 @@ static NSString *SSTVSize(double bytes) {
     TX500SSTVPicture *old = self.gallery.firstObject;
     if (!old) return;
     [self.gallery removeObjectAtIndex:0];
-    for (NSNumber *k in self.bySerial.allKeys) {
-        if (self.bySerial[k] != old) continue;
-        [self.bySerial removeObjectForKey:k];
-        for (NSView *v in self.galleryStack.arrangedSubviews.copy)
-            if ([v isKindOfClass:NSButton.class] && ((NSButton *)v).tag == k.integerValue) [v removeFromSuperview];
-    }
+    [self forgetThumbnailOf:old];
     if (self.shownPicture == old) {
         self.shownPicture = nil;
         for (TX500SSTVPicture *p in self.gallery.reverseObjectEnumerator) if (!p.fromFile) { self.shownPicture = p; break; }
     }
     if (self.reviewPicture == old) self.reviewPicture = nil;
+}
+
+// its thumbnail leaves the strip; it lives on until this event is over, as its own X may be what was clicked
+- (void)forgetThumbnailOf:(TX500SSTVPicture *)picture {
+    for (NSNumber *k in self.bySerial.allKeys) {
+        if (self.bySerial[k] != picture) continue;
+        [self.bySerial removeObjectForKey:k];
+        for (NSView *v in self.galleryStack.arrangedSubviews.copy)
+            if ([v isKindOfClass:NSButton.class] && ((NSButton *)v).tag == k.integerValue) {
+                (void)CFAutorelease(CFBridgingRetain(v));
+                [v removeFromSuperview];
+            }
+    }
 }
 
 
@@ -948,7 +1045,9 @@ static NSString *SSTVSize(double bytes) {
 - (void)refreshDraftInfo {
     TX500SSTVLogDraft *d = self.draft;
     if (!d) return;
-    NSImage *img = d.picture ? [d.picture image] : nil;
+    // a picture taken out of the gallery is no longer kept, even while the live view still shows it
+    TX500SSTVPicture *kept = d.picture && ![self.removedPictures containsObject:d.picture] ? d.picture : nil;
+    NSImage *img = kept ? [kept image] : nil;
     if (!img && d.reception) {
         NSURL *u = [self.recordings latestPictureURLOfReception:d.reception];
         if (u) img = [[NSImage alloc] initWithContentsOfURL:u];
@@ -1064,12 +1163,17 @@ static NSImage *SSTVThumbnail(TX500SSTVPicture *p) {
 }
 
 - (void)addThumbnail:(TX500SSTVPicture *)picture {
-    NSButton *b = [NSButton buttonWithImage:SSTVThumbnail(picture) target:self action:@selector(thumbnailClicked:)];
-    b.imageScaling = NSImageScaleProportionallyUpOrDown;
-    b.bordered = NO;
-    b.tag = ++self.serial;
+    SSTVThumbnailButton *b = [SSTVThumbnailButton thumbnailWithImage:SSTVThumbnail(picture) picture:picture tag:++self.serial target:self
+                                                              action:@selector(thumbnailClicked:) removeAction:@selector(removeThumbnailClicked:)];
     self.bySerial[@(b.tag)] = picture;
     b.toolTip = [NSString stringWithFormat:@"%@%@", picture.modeName, picture.fromFile ? @" (practice)" : @""];
+    // its name for VoiceOver: the mode, where it came from and when it ended (UTC)
+    NSDateFormatter *f = [NSDateFormatter new];
+    f.timeZone = [NSTimeZone timeZoneWithAbbreviation:@"UTC"];
+    f.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+    f.dateFormat = @"HH:mm:ss";
+    b.accessibilityLabel = [NSString stringWithFormat:@"%@, %@, %@ UTC", picture.modeName, picture.fromFile ? @"practice" : @"from the radio",
+                            [f stringFromDate:picture.endUTC]];
     [b.widthAnchor constraintEqualToConstant:90].active = YES;
     [b.heightAnchor constraintEqualToConstant:72].active = YES;
     [self.galleryStack addArrangedSubview:b];
@@ -1078,6 +1182,106 @@ static NSImage *SSTVThumbnail(TX500SSTVPicture *p) {
 - (void)thumbnailClicked:(NSButton *)sender {
     TX500SSTVPicture *p = self.bySerial[@(sender.tag)];
     if (p) [self showReviewPicture:p];                              // the gallery shows in its own view: never over the live one
+}
+
+// the X of a thumbnail, the Delete key on it and its menu: the same action
+- (void)removeThumbnailClicked:(id)sender {
+    TX500SSTVPicture *p = self.bySerial[@([sender tag])];
+    if (p) [self removePictureFromGallery:p];
+}
+
+// the size of a PNG of the gallery folder, by its plain name, as the store counts it (0: not there)
+static unsigned long long SSTVPNGBytes(NSURL *_Nullable folder, NSString *name) {
+    if (!folder || !name.length || [name containsString:@"/"] || [name hasPrefix:@"."] ||
+        ![name.pathExtension.lowercaseString isEqualToString:@"png"]) return 0;
+    NSString *path = [folder URLByAppendingPathComponent:name].path;
+    return [[NSFileManager.defaultManager attributesOfItemAtPath:path error:nil][NSFileSize] unsignedLongLongValue];
+}
+
+// the question says what goes, and what else goes with it
+- (NSString *)trashQuestionFor:(NSString *)name reception:(nullable TX500SSTVStoredReception *)r {
+    NSMutableString *t = [NSMutableString stringWithFormat:@"%@ goes to the Trash, and the picture leaves the gallery.", name];
+    if (r.keep) [t appendString:@" Its recording is marked Keep (never expires): Keep holds the recording, not this picture."];
+    // nothing else of it left: no audio, in memory or on disk, and no other PNG in the folder
+    BOOL nothingElse = r && !r.inMemory && !r.onDisk;
+    BOOL skipped = NO;
+    for (NSString *n in r.pictureNames) {
+        if (!nothingElse) break;
+        if (!skipped && [n isEqualToString:name]) { skipped = YES; continue; }
+        if (SSTVPNGBytes(self.recordings.pictureDirectory, n)) nothingElse = NO;
+    }
+    if (nothingElse)
+        [t appendString:@" Its reception would be left with no audio and no pictures, so it also leaves Recent receptions, "
+                         "and with it the record of whether a QSO was offered or logged from it."];
+    return t;
+}
+
+// the question itself; Cancel is the default answer
+- (BOOL)askBeforeTrashing:(NSString *)text {
+    NSAlert *a = [NSAlert new];
+    a.messageText = @"Move this picture to the Trash?";
+    a.informativeText = text;
+    [a addButtonWithTitle:@"Cancel"];
+    [a addButtonWithTitle:@"Move to Trash"];
+    return [a runModal] == NSAlertSecondButtonReturn;
+}
+
+- (nullable TX500SSTVStoredReception *)receptionOfPicture:(TX500SSTVPicture *)picture {
+    if (!picture.receptionIdentifier) return nil;
+    for (TX500SSTVStoredReception *r in self.recordings.receptions)
+        if ([r.identifier isEqualToString:picture.receptionIdentifier]) return r;
+    return nil;
+}
+
+- (BOOL)removePictureFromGallery:(TX500SSTVPicture *)picture {
+    if ([self.gallery indexOfObjectIdenticalTo:picture] == NSNotFound) return NO;
+    BOOL file = SSTVHasFile(picture);
+    if (file) {
+        NSURL *png = picture.savedURL;
+        NSString *name = png.lastPathComponent;
+        TX500SSTVStoredReception *rec = [self receptionOfPicture:picture];
+        NSString *text = [self trashQuestionFor:name reception:rec];
+        if (!(self.confirmMoveToTrash ? self.confirmMoveToTrash(text) : [self askBeforeTrashing:text])) return NO;
+        // pictures still come while the question is open: the gallery may have let this one go, and its order
+        // may have moved; the reception is looked for again too
+        if ([self.gallery indexOfObjectIdenticalTo:picture] == NSNotFound) {
+            self.progressLabel.stringValue = @"The picture left the gallery while the question was open; its PNG was not moved.";
+            return NO;
+        }
+        rec = [self receptionOfPicture:picture];
+        // to the Trash, never removed for good; when it cannot go, it says so and nothing changes
+        NSError *err = nil;
+        BOOL moved = self.trashHandler ? self.trashHandler(png, &err)
+                                       : [NSFileManager.defaultManager trashItemAtURL:png resultingItemURL:nil error:&err];
+        if (!moved) {
+            NSString *why = [NSString stringWithFormat:@"The picture could not be moved to the Trash: %@",
+                             err.localizedDescription ?: @"unknown error"];
+            self.progressLabel.stringValue = why;
+            [self log:why];
+            return NO;
+        }
+        [self log:[NSString stringWithFormat:@"Moved %@ to the Trash (removed from the gallery).", name]];
+        picture.savedURL = nil;                                     // no copy of it in the folder any more
+        if (rec) [self.recordings removePictureNamed:name ofReception:rec];
+    }
+    [self.gallery removeObjectIdenticalTo:picture];
+    [self forgetThumbnailOf:picture];
+    [self.removedPictures addObject:picture];
+    NSString *done = file ? @"Removed from the gallery; its PNG is in the Trash." : @"Removed from the gallery.";
+    BOOL offline = self.reviewPicture == picture;
+    if (offline) {
+        self.reviewPicture = nil;
+        self.reviewPictureView.image = [[NSImage alloc] initWithSize:NSMakeSize(320, 256)];
+        self.reviewExportButton.enabled = NO;
+        self.reviewLabel.stringValue = done;
+    }
+    // the live one stays in sight: it is the radio's last picture, and Export… saves it from memory
+    if (self.shownPicture == picture)
+        self.progressLabel.stringValue = [done stringByAppendingString:@" The live picture stays here until the next one; Export… still saves it."];
+    else if (!offline) self.progressLabel.stringValue = done;
+    [self refreshDraftInfo];                                        // a form that logs it says so at once
+    if (file) [self reloadRecordings];                              // the row, its count and the lamp
+    return YES;
 }
 
 - (BOOL)exportPicture:(TX500SSTVPicture *)picture toURL:(NSURL *)url error:(NSError **)error {

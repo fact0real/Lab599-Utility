@@ -21,6 +21,7 @@ FOUNDATION_EXPORT NSString *const TXStationRadioChanged;
 - (BOOL)tune:(uint64_t)hz mode:(NSInteger)mode owner:(NSString *)owner error:(NSError **)error;
 - (BOOL)releaseOwnedTX:(NSError **)error;
 - (BOOL)suspend:(NSError **)error;
+- (void)forceCloseTransport;
 - (id<TX500VoiceRadio>)voiceAdapter;
 @end
 NS_ASSUME_NONNULL_END

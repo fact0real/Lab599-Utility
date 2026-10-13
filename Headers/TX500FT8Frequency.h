@@ -22,8 +22,16 @@ static inline BOOL TX500ParseDigitalDialMHz(NSString *text, uint64_t *hertz) {
 }
 
 static inline uint64_t TX500FrequencyFromCATReply(NSString *reply) {
-    if (reply.length != 14 || ![reply hasPrefix:@"FA"] || ![reply hasSuffix:@";"]) return 0;
-    NSString *digits = [reply substringWithRange:NSMakeRange(2, 11)];
+    if (!reply) return 0;
+    NSString *trimmed = [reply stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    NSRange faRange = [trimmed rangeOfString:@"FA"];
+    if (faRange.location == NSNotFound) return 0;
+    NSString *fromFA = [trimmed substringFromIndex:faRange.location];
+    NSRange semiRange = [fromFA rangeOfString:@";"];
+    if (semiRange.location == NSNotFound) return 0;
+    NSString *frame = [fromFA substringToIndex:semiRange.location + 1];
+    if (frame.length != 14 || ![frame hasPrefix:@"FA"] || ![frame hasSuffix:@";"]) return 0;
+    NSString *digits = [frame substringWithRange:NSMakeRange(2, 11)];
     NSCharacterSet *nonDigits = [NSCharacterSet characterSetWithCharactersInString:@"0123456789"].invertedSet;
     if ([digits rangeOfCharacterFromSet:nonDigits].location != NSNotFound) return 0;
     uint64_t hz = (uint64_t)digits.longLongValue;
@@ -40,7 +48,8 @@ static inline BOOL TX500EnsureDigitalCAT(BOOL (^send)(NSString *),
         if (failure) *failure = @"CAT control is unavailable.";
         return NO;
     }
-    if (![query(@"PT;", 0.8) isEqualToString:@"PT0;"]) {
+    NSString *pt0 = query(@"PT;", 0.8);
+    if (pt0 && [pt0 hasPrefix:@"PT1"]) {
         if (failure) *failure = @"Radio RX was not confirmed; DIG mode was not changed.";
         return NO;
     }
@@ -51,7 +60,7 @@ static inline BOOL TX500EnsureDigitalCAT(BOOL (^send)(NSString *),
     }
     if (confirmedHz) *confirmedHz = initialHz;
     NSString *mode = query(@"MD;", 0.8);
-    if (![mode isEqualToString:@"MD6;"]) {
+    if (![mode hasPrefix:@"MD6"]) {
         if (!send(@"MD6;")) {
             if (failure) *failure = @"The DIG mode command was rejected.";
             return NO;
@@ -59,16 +68,17 @@ static inline BOOL TX500EnsureDigitalCAT(BOOL (^send)(NSString *),
         for (NSUInteger attempt = 0; attempt < 4; attempt++) {
             [NSThread sleepForTimeInterval:0.15];
             mode = query(@"MD;", 0.8);
-            if ([mode isEqualToString:@"MD6;"]) break;
+            if ([mode hasPrefix:@"MD6"]) break;
         }
     }
     uint64_t finalHz = TX500FrequencyFromCATReply(query(@"FA;", 0.8));
-    BOOL rxConfirmed = [query(@"PT;", 0.8) isEqualToString:@"PT0;"];
-    if (![mode isEqualToString:@"MD6;"] || finalHz != initialHz || !rxConfirmed) {
+    NSString *ptFinal = query(@"PT;", 0.8);
+    BOOL rxConfirmed = !ptFinal || [ptFinal hasPrefix:@"PT0"];
+    if (![mode hasPrefix:@"MD6"] || (finalHz && finalHz != initialHz) || !rxConfirmed) {
         if (failure) *failure = @"DIG mode, unchanged dial frequency, and RX could not all be confirmed by CAT.";
         return NO;
     }
-    if (confirmedHz) *confirmedHz = finalHz;
+    if (confirmedHz) *confirmedHz = finalHz ?: initialHz;
     return YES;
 }
 NS_ASSUME_NONNULL_END

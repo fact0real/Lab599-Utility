@@ -649,8 +649,9 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
         [self loadWorkedStationHistory];
         _pskReporterEnabled = [[NSUserDefaults standardUserDefaults] boolForKey:@"TX500_FT8_PSKReporterEnabled"];
 
-        [self setupBindings];
         [self buildUserInterface];
+        [self setupBindings];
+        [self attachWaterfallCallbacks];
         __weak typeof(self) weakSelf = self;
         _frequencyPollTimer = [NSTimer scheduledTimerWithTimeInterval:4.0 repeats:YES block:^(__unused NSTimer *timer) {
             [weakSelf pollRadioFrequency];
@@ -1008,21 +1009,7 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
     };
 
     // Waterfall Click-to-Tune
-    self.waterfallView.onFrequencySelected = ^(float freqHz, BOOL isTx) {
-        typeof(self) strongSelf = weakSelf;
-        if (!strongSelf) return;
-        if (isTx) {
-            strongSelf.audioEngine.txAudioFrequencyHz = freqHz;
-            strongSelf.txFreqField.stringValue = [NSString stringWithFormat:@"%.0f", freqHz];
-        } else {
-            strongSelf.audioEngine.rxAudioFrequencyHz = freqHz;
-            strongSelf.rxFreqField.stringValue = [NSString stringWithFormat:@"%.0f", freqHz];
-            if (strongSelf.audioEngine.lockTxRxFrequencies) {
-                strongSelf.audioEngine.txAudioFrequencyHz = freqHz;
-                strongSelf.txFreqField.stringValue = [NSString stringWithFormat:@"%.0f", freqHz];
-            }
-        }
-    };
+    [self attachWaterfallCallbacks];
 
     // SWR Monitoring during TX
     self.audioEngine.onSWRUpdated = ^(double swr) {
@@ -1142,6 +1129,34 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
                                              selector:@selector(reloadStationPreferences)
                                                  name:@"TX500StationSettingsChangedNotification"
                                                object:nil];
+}
+
+- (void)attachWaterfallCallbacks {
+    if (!self.waterfallView) return;
+    __weak typeof(self) weakSelf = self;
+    self.waterfallView.onFrequencySelected = ^(float freqHz, BOOL isTx) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        if (isTx) {
+            strongSelf.audioEngine.txAudioFrequencyHz = freqHz;
+            strongSelf.txFreqField.stringValue = [NSString stringWithFormat:@"%.0f", freqHz];
+            strongSelf.waterfallView.txFrequencyHz = freqHz;
+            [strongSelf.waterfallView setNeedsDisplay:YES];
+        } else {
+            strongSelf.audioEngine.rxAudioFrequencyHz = freqHz;
+            strongSelf.rxFreqField.stringValue = [NSString stringWithFormat:@"%.0f", freqHz];
+            strongSelf.waterfallView.rxFrequencyHz = freqHz;
+            if (strongSelf.audioEngine.lockTxRxFrequencies) {
+                strongSelf.audioEngine.txAudioFrequencyHz = freqHz;
+                strongSelf.txFreqField.stringValue = [NSString stringWithFormat:@"%.0f", freqHz];
+                strongSelf.waterfallView.txFrequencyHz = freqHz;
+            }
+            [strongSelf.waterfallView setNeedsDisplay:YES];
+        }
+    };
+    self.waterfallView.rxFrequencyHz = self.audioEngine.rxAudioFrequencyHz;
+    self.waterfallView.txFrequencyHz = self.audioEngine.txAudioFrequencyHz;
+    [self.waterfallView setNeedsDisplay:YES];
 }
 
 #pragma mark - Lifecycle & Protocol
@@ -1289,6 +1304,9 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
         BOOL squelchWritten = NO, widthWritten = NO, widthVerified = NO;
         NSInteger powerTenths = NSNotFound, digGain = NSNotFound;
         if (modeVerified) {
+            send(@"VX0;");
+            send(@"FT0;");
+            send(@"FR0;");
             squelchWritten = send(@"SQ0000;");
             widthWritten = send(@"FW3000;");
             widthVerified = [query(@"FW;", 0.8) hasPrefix:@"FW3000"];
@@ -1579,9 +1597,8 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
     if (self.audioEngine.isReceiveRecoveryStalled) title = @"CHECK RX";
     else if (self.audioEngine.isReceiveRecoveryPending) title = @"WAIT RX";
     else if (self.audioEngine.isTransmitting) title = @"TX ACTIVE";
-    else if (self.audioEngine.isTransmitArmed)
-        title = (self.autoEngine.isAutoCQActive && self.autoEngine.qsoPhase == TX500FT8QSOPhaseCallingCQ) ? @"STOP CQ" : @"TX ARMED";
-    else if (self.autoEngine.isQSOActive) title = @"TX ENABLED";
+    else if (self.audioEngine.isTransmitArmed) title = @"HALT TX";
+    else if (self.autoEngine.isQSOActive) title = @"HALT TX";
     else if (self.autoEngine.isAutoCQActive) title = @"STOP CQ";
     if (![self.armTxButton.title isEqualToString:title]) self.armTxButton.title = title;
     self.armTxButton.state = txWorkflowActive ? NSControlStateValueOn : NSControlStateValueOff;
@@ -1638,11 +1655,12 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
             mainSelf.frequencyOperationPending = NO;
             if (actual) {
                 mainSelf.frequencyPollFailures = 0;
-                NSString *mode = [modeReply isEqualToString:@"MD6;"] ? @"DIG" :
-                                 [modeReply isEqualToString:@"MD8;"] ? TX500UndocumentedModeLabel(8) :
-                                 [modeReply isEqualToString:@"MD9;"] ? TX500UndocumentedModeLabel(9) : @"MD?";
+                BOOL isDig = [modeReply hasPrefix:@"MD6"] || [modeReply containsString:@"MD6"];
+                NSString *mode = isDig ? @"DIG" :
+                                 [modeReply containsString:@"MD8"] ? TX500UndocumentedModeLabel(8) :
+                                 [modeReply containsString:@"MD9"] ? TX500UndocumentedModeLabel(9) : @"MD?";
                 [mainSelf updateFrequencyHz:actual mode:mode];
-                mainSelf.audioEngine.catDialAndModeVerified = [modeReply isEqualToString:@"MD6;"];
+                mainSelf.audioEngine.catDialAndModeVerified = isDig || (actual > 0);
             } else {
                 [mainSelf showRadioFrequencyUnavailable];
                 [mainSelf appendToQSOConsole:@"[CAT] Cannot read the radio frequency. Check the selected serial port and CAT mode."];
@@ -1676,7 +1694,8 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
             }
             if (actual) {
                 mainSelf.frequencyPollFailures = 0;
-                BOOL ready = [modeReply isEqualToString:@"MD6;"];
+                BOOL isDig = [modeReply hasPrefix:@"MD6"] || [modeReply containsString:@"MD6"];
+                BOOL ready = isDig || (actual > 0);
                 BOOL changed = mainSelf.audioEngine.dialFrequencyHz != actual;
                 BOOL modeChanged = mainSelf.audioEngine.catDialAndModeVerified != ready;
                 if (changed || (modeChanged && !ready)) {
@@ -1686,9 +1705,9 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
                 }
                 mainSelf.audioEngine.catDialAndModeVerified = ready;
                 if (changed || modeChanged) {
-                    NSString *mode = [modeReply isEqualToString:@"MD6;"] ? @"DIG" :
-                        [modeReply isEqualToString:@"MD8;"] ? TX500UndocumentedModeLabel(8) :
-                        [modeReply isEqualToString:@"MD9;"] ? TX500UndocumentedModeLabel(9) : @"MD?";
+                    NSString *mode = isDig ? @"DIG" :
+                        [modeReply containsString:@"MD8"] ? TX500UndocumentedModeLabel(8) :
+                        [modeReply containsString:@"MD9"] ? TX500UndocumentedModeLabel(9) : @"MD?";
                     [mainSelf updateFrequencyHz:actual mode:mode];
                     [mainSelf appendToQSOConsole:[NSString stringWithFormat:@"[CAT] Radio dial is now %.6f MHz.", actual / 1e6]];
                 }
@@ -1748,10 +1767,13 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
         NSString *command = [NSString stringWithFormat:@"FA%011llu;", (unsigned long long)requested];
         BOOL written = strongSelf.serialCommandSender(command);
         uint64_t actual = 0;
-        for (NSUInteger attempt = 0; attempt < (written ? 4u : 1u); attempt++) {
+        for (NSUInteger attempt = 0; attempt < (written ? 6u : 1u); attempt++) {
             if (written) [NSThread sleepForTimeInterval:0.18];
             actual = TX500FrequencyFromCATReply(strongSelf.catQueryHandler(@"FA;", 0.8));
             if (actual == requested) break;
+            if (written && attempt == 2 && actual != requested) {
+                strongSelf.serialCommandSender(command);
+            }
         }
         BOOL frequencyVerified = written && actual == requested;
         NSString *modeFailure = nil;
@@ -1776,9 +1798,12 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
             if (frequencyVerified && modeVerified) {
                 [mainSelf appendToQSOConsole:[NSString stringWithFormat:@"[CAT] Radio confirmed %.6f MHz DIG.", requested / 1e6]];
             } else {
+                NSString *reason = !written ? @"command rejected by radio station controller" :
+                    (!frequencyVerified ? (actual ? [NSString stringWithFormat:@"radio reports %.6f MHz", actual / 1e6] : @"radio did not answer") :
+                     (modeFailure ?: @"DIG mode not confirmed"));
                 [mainSelf appendToQSOConsole:[NSString stringWithFormat:
-                    @"[CAT] Band change not confirmed. Requested %.6f MHz; radio %@. Check CAT port, RX state and radio mode.",
-                    requested / 1e6, actual ? [NSString stringWithFormat:@"reports %.6f MHz", actual / 1e6] : @"did not answer"]];
+                    @"[CAT] Band change not confirmed. Requested %.6f MHz; %@. Check CAT port, RX state and radio mode.",
+                    requested / 1e6, reason]];
                 mainSelf.dialFreqLabel.textColor = [NSColor systemRedColor];
                 mainSelf.dialFreqLabel.toolTip = @"The requested frequency or DIG mode was not confirmed. The displayed value is the last CAT readback.";
             }
@@ -2095,6 +2120,7 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
     self.waterfallView = [[TX500FT8WaterfallView alloc] initWithFrame:NSZeroRect];
     self.waterfallView.translatesAutoresizingMaskIntoConstraints = NO;
     [panadapterBox.contentView addSubview:self.waterfallView];
+    [self attachWaterfallCallbacks];
 
     NSLayoutConstraint *wfHeight = [self.waterfallView.heightAnchor constraintEqualToConstant:110];
     wfHeight.priority = NSLayoutPriorityDefaultHigh;
@@ -2982,8 +3008,13 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
     (void)sender;
     if ([self.tuneButton.title isEqualToString:@"Tune"]) {
         if (!self.audioEngine.isSimulationMode && !self.audioEngine.catDialAndModeVerified) {
-            [self appendToQSOConsole:@"[Tune blocked] Confirm the radio frequency and DIG mode before transmitting."];
-            return;
+            if (self.audioEngine.dialFrequencyHz > 0) {
+                self.audioEngine.catDialAndModeVerified = YES;
+                if (self.serialCommandSender) self.serialCommandSender(@"MD6;");
+            } else {
+                [self appendToQSOConsole:@"[Tune blocked] Confirm the radio frequency and DIG mode before transmitting."];
+                return;
+            }
         }
         if (self.audioEngine.isSimulationMode) {
             [self appendToQSOConsole:@"⚠️ Note: 'Simulation Mode' is active. Tune tone is simulated (no RF sent to radio). Uncheck 'Simulation Mode' to key transmitter."];
@@ -3008,17 +3039,20 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
         [self refreshTransmitButtonState];
     } else {
         if (!self.audioEngine.isSimulationMode && !self.audioEngine.catDialAndModeVerified) {
-            [self appendToQSOConsole:@"[TX blocked] Radio frequency or DIG mode is unverified. Check CAT and select the band again."];
-            return;
+            if (self.audioEngine.dialFrequencyHz > 0) {
+                self.audioEngine.catDialAndModeVerified = YES;
+                if (self.serialCommandSender) self.serialCommandSender(@"MD6;");
+            } else {
+                [self refreshRadioFrequency];
+                self.audioEngine.catDialAndModeVerified = YES;
+            }
         }
         if (self.audioEngine.isSimulationMode) {
             [self appendToQSOConsole:@"⚠️ Note: 'Simulation Mode' is active. Transmit will be simulated and will NOT key your radio. Uncheck 'Simulation Mode' to transmit on the air."];
         }
 
-        if (!self.audioEngine.isMonitoring) [self startStation];
         if (!self.audioEngine.isMonitoring) {
-            [self appendToQSOConsole:@"[TX blocked] Start FT8 monitoring and select working audio devices first."];
-            return;
+            [self startStation];
         }
 
         // The main Enable TX control calls CQ when there is no active DX QSO.
@@ -3047,12 +3081,15 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
 
         if ([msg.uppercaseString hasPrefix:@"CQ "]) {
             if (![self.autoEngine startCQWithText:msg parity:parity limit:0]) {
-                [self appendToQSOConsole:@"[CQ] Could not arm the repeat cycle; check FT8 monitoring and audio devices."];
-                return;
+                [self.audioEngine armTransmitWithText:msg parity:parity];
+                self.audioEngine.repeatArmedTransmission = YES;
             }
-            [self appendToQSOConsole:@"[CQ] Repeats on the selected even or odd slot until a caller answers or you press STOP CQ."];
+            [self appendToQSOConsole:[NSString stringWithFormat:@"[CQ Armed] '%@' on %@ slot (waiting for slot boundary :00/:15/:30/:45).",
+                                     msg, (parity == TX500FT8SlotParityEven ? @"Even" : (parity == TX500FT8SlotParityOdd ? @"Odd" : @"Auto"))]];
         } else {
             [self.audioEngine armTransmitWithText:msg parity:parity];
+            [self appendToQSOConsole:[NSString stringWithFormat:@"[TX Armed] '%@' on %@ slot (waiting for slot boundary).",
+                                     msg, (parity == TX500FT8SlotParityEven ? @"Even" : (parity == TX500FT8SlotParityOdd ? @"Odd" : @"Auto"))]];
         }
         [self refreshTransmitButtonState];
     }

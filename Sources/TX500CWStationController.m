@@ -476,7 +476,9 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
     [self stopAutoCQTimer];
     [self.decoder stopListening];
     [self.decoder stopSimulation];
-    [self.keyer abortTransmission];
+    if (self.keyer.isTransmitting) {
+        [self.keyer abortTransmission];
+    }
     [self.keyer stopAutoCQ];
     self.startStopDecoderButton.title = @"START DECODER";
     self.startStopDecoderButton.contentTintColor = [NSColor systemGreenColor];

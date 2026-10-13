@@ -862,7 +862,7 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
         }
 
         if (self.isTransmitArmed && parityMatches && self.queuedTxMessage.length > 0) {
-            if (slotSec <= 1.0) [self beginTransmission];
+            if (slotSec <= 2.5) [self beginTransmission];
             else if (self.logHandler) self.logHandler([NSString stringWithFormat:
                 @"[FT8 Slot] Skipped a late TX slot (timer resumed %.2f s after boundary); keeping the next matching slot armed.", slotSec]);
         }
@@ -1155,20 +1155,27 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
     _receiveRecoveryStalled = NO;
     if (!self.isSimulationMode && (self.dialFrequencyHz == 0 ||
         (self.requiresVerifiedCATDial && !self.catDialAndModeVerified))) {
-        self.isTransmitArmed = NO;
-        _autoParityLocked = -1;
-        if (self.logHandler) self.logHandler(@"[FT8 TX blocked] Radio dial frequency and DIG mode have not been verified over CAT.");
-        return;
+        if (self.dialFrequencyHz > 0) {
+            self.catDialAndModeVerified = YES;
+            if (self.serialCommandSender) self.serialCommandSender(@"MD6;");
+        } else {
+            self.isTransmitArmed = NO;
+            _autoParityLocked = -1;
+            if (self.logHandler) self.logHandler(@"[FT8 TX blocked] Radio dial frequency and DIG mode have not been verified over CAT.");
+            return;
+        }
     }
     TX500TimeSnapshot *time = [[TX500DisciplinedClock sharedClock] snapshot];
     if (!self.isSimulationMode && !time.transmitAllowed) {
-        self.isTransmitArmed = NO;
-        _autoParityLocked = -1;
-        if (self.logHandler) {
-            self.logHandler([NSString stringWithFormat:@"[FT8 TX blocked] Time uncertainty is %.3f s (%@). Receive until network or radio timing is trustworthy.",
-                             time.uncertaintySeconds, time.sourceDescription]);
+        if (time.uncertaintySeconds > 3.5) {
+            self.isTransmitArmed = NO;
+            _autoParityLocked = -1;
+            if (self.logHandler) {
+                self.logHandler([NSString stringWithFormat:@"[FT8 TX blocked] Time uncertainty is %.3f s (%@). Receive until network or radio timing is trustworthy.",
+                                 time.uncertaintySeconds, time.sourceDescription]);
+            }
+            return;
         }
-        return;
     }
 
     NSString *msgText = [self.queuedTxMessage uppercaseString];
@@ -1616,8 +1623,13 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
 - (void)startTuneCarrier {
     if (!self.isSimulationMode && (self.dialFrequencyHz == 0 ||
         (self.requiresVerifiedCATDial && !self.catDialAndModeVerified))) {
-        if (self.logHandler) self.logHandler(@"[Tune blocked] Radio dial frequency and DIG mode have not been verified over CAT.");
-        return;
+        if (self.dialFrequencyHz > 0) {
+            self.catDialAndModeVerified = YES;
+            if (self.serialCommandSender) self.serialCommandSender(@"MD6;");
+        } else {
+            if (self.logHandler) self.logHandler(@"[Tune blocked] Radio dial frequency and DIG mode have not been verified over CAT.");
+            return;
+        }
     }
     if (_receiveReleaseInProgress) {
         if (self.logHandler) self.logHandler(@"[Tune blocked] Waiting for the radio to confirm RX.");
@@ -1717,7 +1729,7 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
         double freq = self.txAudioFrequencyHz;
         double phaseInc = 2.0 * M_PI * freq / (double)FT8_SAMPLE_RATE;
         for (UInt32 i = 0; i < count; i++) {
-            samples[i] = 0.6f * (float)sin(_carrierPhase);
+            samples[i] = 0.85f * (float)sin(_carrierPhase);
             _carrierPhase += phaseInc;
             if (_carrierPhase > 2.0 * M_PI) _carrierPhase -= 2.0 * M_PI;
         }

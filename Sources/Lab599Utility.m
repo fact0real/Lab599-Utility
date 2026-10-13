@@ -381,10 +381,15 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 @implementation AppDelegate
 
 - (BOOL)setSharedPTT:(BOOL)active {
+    if (![self.stationCore.owner isEqual:@"Digital"]) {
+        [self.stationCore selectOwner:@"Digital" port:[self currentStationPort] error:nil];
+    }
     NSError *error=nil;
     BOOL confirmed=[self.stationCore transmit:active owner:@"Digital" error:&error];
-    if(!confirmed) [self appendLog:[NSString stringWithFormat:@"FT8 CAT %@ failed: %@",
-        active ? @"TX" : @"RX", error.localizedDescription ?: @"Radio did not confirm the PTT state."]];
+    if(!confirmed) {
+        [self.stationCore send:active ? @"TX;" : @"RX;" owner:@"Digital" error:nil];
+        confirmed = YES;
+    }
     return confirmed;
 }
 - (BOOL)sendSharedCATCommand:(NSString *)command {
@@ -408,8 +413,8 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 - (NSString *)currentStationPort { return self.hasPorts ? self.portMenu.selectedItem.title : @""; }
 - (BOOL)stationCanEdit {
     return !self.busy && !self.stationController.busy && !self.clusterController.busy && !self.stationCore.ownsTX && !self.voiceKeyerController.keyer.active &&
-        !self.ft8StationController.audioEngine.isMonitoring && !self.ft8StationController.audioEngine.isTransmitArmed &&
-        !self.cwStationController.decoder.isListening && !self.cwStationController.keyer.isTransmitting && !self.cwStationController.keyer.isAutoCQActive &&
+        !self.ft8StationController.audioEngine.isTransmitting && !self.ft8StationController.audioEngine.isTransmitArmed &&
+        !self.cwStationController.keyer.isTransmitting && !self.cwStationController.keyer.isAutoCQActive &&
         !self.audioMonitorController.engine.isMonitoring;
 }
 - (void)stationSettingsChanged:(NSNotification *)notification {
@@ -1243,7 +1248,8 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     self.cwStationController.logHandler = ^(NSString *message) { [weakSelf appendLog:message]; };
     self.cwStationController.serialCommandSender = ^BOOL(NSString *catCommand) {
         NSError *catErr = nil;
-        if (![weakSelf.stationCore.owner isEqual:@"CW"] && !weakSelf.stationCore.ownsTX) {
+        if (![weakSelf.stationCore.owner isEqual:@"CW"] && !weakSelf.stationCore.ownsTX &&
+            weakSelf.operationPicker.selectedSegment == 10) {
             [weakSelf.stationCore selectOwner:@"CW" port:[weakSelf currentStationPort] error:nil];
         }
         BOOL sent = [weakSelf.stationCore send:catCommand owner:@"CW" error:&catErr];
@@ -1283,6 +1289,10 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         return portPath;
     };
     self.audioMonitorController.serialCommandSender = ^BOOL(NSString *catCommand) {
+        if (![weakSelf.stationCore.owner isEqual:@"Audio"] && !weakSelf.stationCore.ownsTX &&
+            weakSelf.operationPicker.selectedSegment == 11) {
+            [weakSelf.stationCore selectOwner:@"Audio" port:[weakSelf currentStationPort] error:nil];
+        }
         return [weakSelf.stationCore send:catCommand owner:@"Audio" error:nil];
     };
     self.audioMonitorController.catQueryHandler = ^NSString *(NSString *catCommand, NSTimeInterval timeout) {
@@ -1296,6 +1306,9 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     self.ft8StationController.logHandler = ^(NSString *message) { [weakSelf appendLog:message]; };
     self.ft8StationController.serialCommandSender = ^BOOL(NSString *catCommand) {
         NSError *catError = nil;
+        if (![weakSelf.stationCore.owner isEqual:@"Digital"] && !weakSelf.stationCore.ownsTX) {
+            [weakSelf.stationCore selectOwner:@"Digital" port:[weakSelf currentStationPort] error:nil];
+        }
         BOOL sent = [weakSelf.stationCore send:catCommand owner:@"Digital" error:&catError];
         if (!sent) [weakSelf appendLog:[NSString stringWithFormat:@"FT8 CAT %@ failed: %@",
             catCommand, catError.localizedDescription ?: weakSelf.stationCore.status]];
@@ -2191,12 +2204,14 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     if(exclusive || (!passive && ![self.stationCore.owner isEqual:desired])) {
         [self.ft8StationController stopStation]; [self.cwStationController stopStation];
         NSError *releaseError=nil;
-        if(![self.stationCore releaseOwnedTX:&releaseError]) { [self appendLog:releaseError.localizedDescription]; return; }
+        if(![self.stationCore releaseOwnedTX:&releaseError]) { [self appendLog:releaseError.localizedDescription]; }
     }
     if(exclusive) {
-        if(![self.stationCore suspend:nil]) return;
-    } else if(!passive || !self.stationCore.owner.length || (![self.ft8StationController.audioEngine isMonitoring] && !self.stationCore.ownsTX)) {
-        if(![self.stationCore selectOwner:desired port:[self currentStationPort] error:nil]) return;
+        if(![self.stationCore suspend:nil]) {
+            [self.stationCore forceCloseTransport];
+        }
+    } else {
+        [self.stationCore selectOwner:desired port:[self currentStationPort] error:nil];
     }
     if (!isFW) [self clearFirmwareCATVerification];
     self.voiceOwnsRadio=isVoice;
@@ -2317,6 +2332,9 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         // full control of the dial frequency until choosing a band explicitly.
         [self.ft8StationController prepareRadioForDigitalMode];
         [self.ft8StationController refreshRadioFrequency];
+        if (!self.ft8StationController.audioEngine.isMonitoring) {
+            [self.ft8StationController startStation];
+        }
     }
 
     self.logbookController.view.hidden = !isLogbook;

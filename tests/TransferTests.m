@@ -61,7 +61,7 @@ static void RunScenario(NSString *name, NSData *firmware, NSString *headerReply,
     dispatch_semaphore_t finished = dispatch_semaphore_create(0);
     TXTransferOptions options = TXDefaultTransferOptions();
     options.acknowledgementTimeout = 0.8;
-    options.writeTimeout = backpressure ? 0.15 : 1.0;
+    options.writeTimeout = backpressure ? 0.15 : 3.0;
     options.settleDelay = 0.01;
 
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{

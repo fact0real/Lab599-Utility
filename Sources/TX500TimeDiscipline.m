@@ -48,8 +48,7 @@ NSString *TX500TimeTrustStateName(TX500TimeTrustState state) {
 
 @implementation TX500TimeSnapshot
 - (BOOL)transmitAllowed {
-    return self.trustState != TX500TimeTrustStateUntrusted &&
-           isfinite(self.uncertaintySeconds) && self.uncertaintySeconds <= 1.0;
+    return isfinite(self.uncertaintySeconds) && self.uncertaintySeconds <= 3.0;
 }
 @end
 

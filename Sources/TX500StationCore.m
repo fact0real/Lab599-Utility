@@ -34,7 +34,14 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
 - (BOOL)reject:(NSString *)text error:(NSError **)error { if(error) *error=TXVoiceError(text); [self publish:text]; return NO; }
 - (BOOL)selectOwner:(NSString *)owner port:(NSString *)path error:(NSError **)error {
     [_lock lock];
-    if(_ownsTX && (![_owner isEqual:owner] || ![_port isEqual:path])) { BOOL r=[self reject:@"Stop the current transmission before changing radio control." error:error]; [self cacheState]; [_lock unlock]; return r; }
+    if(_ownsTX && (![_owner isEqual:owner] || ![_port isEqual:path])) {
+        NSString *pt=[_transport query:@"PT;" error:nil];
+        if(!pt || [pt isEqual:@"PT0;"]) {
+            _ownsTX=NO; _faulted=NO;
+        } else {
+            BOOL r=[self reject:@"Stop the current transmission before changing radio control." error:error]; [self cacheState]; [_lock unlock]; return r;
+        }
+    }
     if(![_port isEqual:path]) { [_transport close]; _transport=nil; _snapshot=@{}; _port=[path copy] ?: @""; _receiveFailureStreak=0; }
     _owner=[owner copy];
     if(!_transport && path.length) _transport=self.transportFactory ? self.transportFactory(path) : [[TX500VoiceCATRadio alloc] initWithPort:path];
@@ -75,15 +82,18 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
         // leave the transceiver keyed even though the caller has already
         // unwound its TX state. Confirm PT0 and force RX when necessary.
         NSString *pt=[_transport query:@"PT;" error:error];
-        if([pt isEqual:@"PT0;"]) { _faulted=NO; [self cacheState]; [_lock unlock]; return YES; }
-        _ownsTX=YES;
+        if(pt && [pt hasPrefix:@"PT1"]) {
+            _ownsTX=YES;
+        } else {
+            _faulted=NO; [self cacheState]; [_lock unlock]; return YES;
+        }
     }
     if(active && !_ownsTX) {
         NSDictionary *s=[self readState:nil];
         BOOL isAlreadyTX = NO;
         if(s) {
             isAlreadyTX = [s[@"tx"] boolValue];
-            if(![owner isEqual:@"CW"] && [s[@"vox"] boolValue]) {
+            if(![owner isEqual:@"CW"] && ![owner isEqual:@"Digital"] && [s[@"vox"] boolValue]) {
                 [self reject:@"TX blocked: turn VOX off before transmitting." error:error];
                 [self cacheState]; [_lock unlock]; return NO;
             }
@@ -99,7 +109,16 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
     }
     BOOL ok=[_transport setTransmit:active error:error];
     if(ok) { NSMutableDictionary *s=[_snapshot mutableCopy]; s[@"tx"]=@(active); _snapshot=[s copy]; }
-    if(ok && !active) { _ownsTX=NO; _faulted=NO; _receiveFailureStreak=0; }
+    if(!active) {
+        if(ok) {
+            _ownsTX=NO; _faulted=NO; _receiveFailureStreak=0;
+        } else {
+            NSString *ptCheck=[_transport query:@"PT;" error:nil];
+            if(ptCheck && [ptCheck isEqual:@"PT0;"]) {
+                _ownsTX=NO; _faulted=NO; _receiveFailureStreak=0; ok=YES;
+            }
+        }
+    }
     if(!ok) _faulted=YES;
     if(!ok) _failureCount++;
     if(!ok && !active) {
@@ -144,7 +163,7 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
             if(!ok) _faulted=YES;
         } else {
             if(_ownsTX) { ok=[self reject:@"Stop TX before changing radio settings." error:error]; break; }
-            BOOL valid=[part rangeOfString:@"^(FA[0-9]{11}|FB[0-9]{11}|MD[1-79]|KS[0-9]{3}|PC[0-9]{3}|MA[0-9]{3}|FW[0-9]{4}|FL[0-3][0-1]|SQ0[0-9]{3})$" options:NSRegularExpressionSearch].location!=NSNotFound;
+            BOOL valid=[part rangeOfString:@"^(FA[0-9]{11}|FB[0-9]{11}|MD[1-79]|KS[0-9]{3}|PC[0-9]{3}|MA[0-9]{3}|FW[0-9]{4}|FL[0-3][0-1]|SQ0[0-9]{3}|VX[0-1]|FT[0-1]|FR[0-1])$" options:NSRegularExpressionSearch].location!=NSNotFound;
             if(!valid) { ok=[self reject:@"This setting command is not supported by station control." error:error]; break; }
             if([part hasPrefix:@"FA"] || [part hasPrefix:@"FB"]) { uint64_t hz=[[part substringFromIndex:2] longLongValue]; if(hz<500000 || hz>56000000) { ok=[self reject:@"Frequency is outside the radio range." error:error]; break; } }
             if([part hasPrefix:@"PC"] && ([[part substringFromIndex:2] integerValue]<10 || [[part substringFromIndex:2] integerValue]>100)) { ok=[self reject:@"RF power must be between 1 and 10 watts." error:error]; break; }
@@ -209,8 +228,43 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
         return YES;
     } @finally { [self cacheState]; [_lock unlock]; }
 }
-- (BOOL)releaseOwnedTX:(NSError **)error { [_lock lock]; BOOL ok=YES; if(_ownsTX) { if([_owner isEqual:@"CW"]) [_transport send:@"KY ;" error:nil]; ok=[self transmit:NO owner:_owner error:error]; } [self cacheState]; [_lock unlock]; return ok; }
-- (BOOL)suspend:(NSError **)error { [_lock lock]; BOOL ok=[self releaseOwnedTX:error]; if(ok) { [_transport close]; _transport=nil; _owner=@""; _snapshot=@{}; [self publish:@"Disconnected"]; } [self cacheState]; [_lock unlock]; return ok; }
+- (BOOL)releaseOwnedTX:(NSError **)error {
+    [_lock lock];
+    BOOL ok=YES;
+    if(_ownsTX) {
+        if([_owner isEqual:@"CW"]) [_transport send:@"KY ;" error:nil];
+        ok=[self transmit:NO owner:_owner error:error];
+        if(!ok) {
+            [_transport send:@"RX;" error:nil];
+            NSString *pt=[_transport query:@"PT;" error:nil];
+            if(!pt || [pt isEqual:@"PT0;"]) {
+                _ownsTX=NO; _faulted=NO; ok=YES;
+            }
+        }
+    }
+    [self cacheState]; [_lock unlock]; return ok;
+}
+- (BOOL)suspend:(NSError **)error {
+    [_lock lock];
+    BOOL ok=[self releaseOwnedTX:error];
+    if(ok || !_ownsTX) {
+        [_transport close]; _transport=nil; _owner=@""; _snapshot=@{}; [self publish:@"Disconnected"];
+        ok=YES;
+    }
+    [self cacheState]; [_lock unlock]; return ok;
+}
+- (void)forceCloseTransport {
+    [_lock lock];
+    [_transport close];
+    _transport=nil;
+    _owner=@"";
+    _snapshot=@{};
+    _ownsTX=NO;
+    _faulted=NO;
+    [self publish:@"Disconnected"];
+    [self cacheState];
+    [_lock unlock];
+}
 - (id<TX500VoiceRadio>)voiceAdapter { TX500StationVoiceAdapter *a=[TX500StationVoiceAdapter new]; a.core=self; return a; }
 @end
 @implementation TX500StationVoiceAdapter

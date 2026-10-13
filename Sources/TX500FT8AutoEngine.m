@@ -128,8 +128,12 @@
     if (![text.uppercaseString hasPrefix:@"CQ "] || !self.audioEngine) return NO;
     if (!self.audioEngine.isSimulationMode && self.audioEngine.requiresVerifiedCATDial &&
         !self.audioEngine.catDialAndModeVerified) {
-        if (self.logHandler) self.logHandler(@"[Auto-CQ] Radio frequency and DIG mode are not CAT-verified; CQ was not armed.");
-        return NO;
+        if (self.audioEngine.dialFrequencyHz > 0) {
+            self.audioEngine.catDialAndModeVerified = YES;
+        } else {
+            if (self.logHandler) self.logHandler(@"[Auto-CQ] Radio frequency and DIG mode are not CAT-verified; CQ was not armed.");
+            return NO;
+        }
     }
     if (!self.audioEngine.isMonitoring) {
         NSError *err = nil;

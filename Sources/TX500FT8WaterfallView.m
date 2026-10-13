@@ -547,13 +547,26 @@ static inline uint32_t ColorForTransmitMagnitude(float magnitude) {
 
 - (void)mouseDown:(NSEvent *)event {
     NSPoint loc = [self convertPoint:event.locationInWindow fromView:nil];
-    BOOL isTx = (event.modifierFlags & NSEventModifierFlagShift) || (event.modifierFlags & NSEventModifierFlagOption);
+    NSUInteger flags = event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
+    BOOL isTx = (flags & NSEventModifierFlagShift) != 0 || (flags & NSEventModifierFlagOption) != 0;
+    [self handleTuneAtPoint:loc isTx:isTx];
+}
+
+- (void)mouseDragged:(NSEvent *)event {
+    NSPoint loc = [self convertPoint:event.locationInWindow fromView:nil];
+    NSUInteger flags = event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;
+    BOOL isTx = (flags & NSEventModifierFlagShift) != 0 || (flags & NSEventModifierFlagOption) != 0;
     [self handleTuneAtPoint:loc isTx:isTx];
 }
 
 - (void)rightMouseDown:(NSEvent *)event {
     NSPoint loc = [self convertPoint:event.locationInWindow fromView:nil];
     [self handleTuneAtPoint:loc isTx:YES]; // Right-click sets TX
+}
+
+- (void)rightMouseDragged:(NSEvent *)event {
+    NSPoint loc = [self convertPoint:event.locationInWindow fromView:nil];
+    [self handleTuneAtPoint:loc isTx:YES];
 }
 
 - (void)handleTuneAtPoint:(NSPoint)loc isTx:(BOOL)isTx {
@@ -573,5 +586,4 @@ static inline uint32_t ColorForTransmitMagnitude(float magnitude) {
         self.onFrequencySelected(freq, isTx);
     }
 }
-
 @end

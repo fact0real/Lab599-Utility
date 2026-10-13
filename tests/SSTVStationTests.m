@@ -183,6 +183,27 @@ static NSBitmapImageRep *ReadPNG(NSURL *u) {
     return d ? [NSBitmapImageRep imageRepWithData:d] : nil;
 }
 
+/// Whether a PNG holds exactly this chart's greys.
+static BOOL PNGIsChart(NSURL *png, TX500FaxChart *ch) {
+    NSBitmapImageRep *ref = ReadPNG(png);
+    if (!ref || !ch || ref.pixelsWide != ch.width || ref.pixelsHigh != ch.height || ch.gray.length < (NSUInteger)(ch.width * ch.height)) return NO;
+    const uint8_t *g = ch.gray.bytes;
+    for (NSInteger y = 0; y < ch.height; y++)
+        for (NSInteger x = 0; x < ch.width; x++) {
+            NSUInteger px[4] = {0};
+            [ref getPixel:px atX:x y:y];
+            if (px[0] != g[y * ch.width + x]) return NO;
+        }
+    return YES;
+}
+
+// the thumbnails of the fax strip, in their order
+static NSArray<NSButton *> *StripButtons(TX500FaxStationController *f) {
+    NSMutableArray<NSButton *> *b = [NSMutableArray array];
+    for (NSView *v in f.sessionStrip.arrangedSubviews) if ([v isKindOfClass:NSButton.class]) [b addObject:(NSButton *)v];
+    return b;
+}
+
 /// The same pixels as the core's own command line wrote for the same WAV.
 static BOOL SamePixels(TX500SSTVPicture *p, NSURL *png) {
     NSBitmapImageRep *ref = ReadPNG(png);
@@ -2195,6 +2216,120 @@ int main(int argc, const char *argv[]) {
                 if ([TX500SSTVEngine textForKind:(TX500SSTVNoticeKind)k mode:@"Martin M1" vis:44 offset:0].length == 0) allSaid = NO;
             Check(allSaid && [[TX500SSTVEngine textForKind:TX500SSTVNoticeSlantNominal mode:@"Martin M1" vis:44 offset:0] containsString:@"line period"],
                   @"Notices: every notice of the receiver has its words on the screen, the new one too (the slant fit fell back to the mode's period)");
+        }
+
+        // 10b. this session's charts: a strip of every chart decoded, from every file opened, each held by the
+        // strip itself (an earlier file's charts are no longer in the engine); the margin moves only on the open
+        // file's charts (the receiver lets the samples go at the next file); and nothing piles up past the cap
+        {
+            TX500FaxStationController *fs = [TX500FaxStationController new];
+            BOOL openA = [fs openFileAtURL:Fixture(@"FAX-12000.wav")];
+            TX500FaxChart *chartA = fs.engine.charts.firstObject;
+            NSData *grayA = chartA.gray;
+            BOOL openB = [fs openFileAtURL:Fixture(@"FAX-two.wav")];
+            NSArray<TX500FaxChart *> *chartsB = fs.engine.charts;
+            NSArray<NSButton *> *thumbs = StripButtons(fs);
+            NSArray<TX500FaxChart *> *strip = fs.sessionCharts;
+            BOOL threeIn = openA && openB && chartA && chartsB.count == 2 && strip.count == 3 && thumbs.count == 3 &&
+                           strip[0] == chartA && strip[1] == chartsB[0] && strip[2] == chartsB[1] && ![chartA.gray isEqualToData:chartsB[0].gray];
+            Check(threeIn && fs.galleryInMemory == 12 && fs.displayedChart == chartsB[0] && fs.marginSlider.enabled && fs.marginNote.hidden &&
+                  NSEqualSizes(thumbs[0].image.size, NSMakeSize(90, 60)) &&
+                  [thumbs[0].accessibilityLabel isEqualToString:@"Chart 1 of FAX-12000.wav, 120 lines"] &&
+                  [thumbs[1].accessibilityLabel isEqualToString:[NSString stringWithFormat:@"Chart 1 of FAX-two.wav, %ld lines", (long)chartsB[0].height]] &&
+                  [thumbs[2].accessibilityLabel isEqualToString:[NSString stringWithFormat:@"Chart 2 of FAX-two.wav, %ld lines", (long)chartsB[1].height]],
+                  [NSString stringWithFormat:@"Fax screen: this session's charts in a strip, newest last, from both files opened (12 at most), each a small "
+                   @"picture with its name for VoiceOver (%@)", thumbs.count ? thumbs[0].accessibilityLabel : @"no thumbnail"]);
+            {
+                NSStackView *rootS = [fs.view isKindOfClass:NSStackView.class] ? (NSStackView *)fs.view : nil;
+                NSView *leftS = ArrangedHolding(rootS, fs.pictureView), *rightS = ArrangedHolding(rootS, fs.deviationPopup);
+                NSStackView *leftSt = [leftS isKindOfClass:NSStackView.class] ? (NSStackView *)leftS : nil;
+                NSUInteger iStrip = PlaceInStack(leftSt, fs.sessionStrip), iNotices = PlaceInStack(leftSt, fs.noticeLabel);
+                NSView *above = (iStrip != NSNotFound && iStrip > 0) ? leftSt.arrangedSubviews[iStrip - 1] : nil;
+                Check(leftSt && iStrip != NSNotFound && iNotices != NSNotFound && iNotices < iStrip && !Holds(rightS, fs.sessionStrip) &&
+                      [above isKindOfClass:NSTextField.class] && [((NSTextField *)above).stringValue isEqualToString:@"This session's charts"] &&
+                      PlaceInStack(leftSt, fs.marginNote) == PlaceInStack(leftSt, fs.marginSlider) + 1,
+                      @"Fax screen: the strip «This session's charts» under the chart's column, and the margin's line right under the margin");
+            }
+            // a chart of the earlier file, picked in the strip
+            if (thumbs.count == 3) [thumbs[0] performClick:nil];
+            NSURL *pngA = [NSURL fileURLWithPath:[root stringByAppendingPathComponent:@"session-chart-A.png"]];
+            BOOL exportedA = [fs exportShownToURL:pngA error:nil];
+            Check(threeIn && fs.displayedChart == chartA && fs.shownChart == -1 && !fs.marginSlider.enabled && !fs.marginNote.hidden &&
+                  [fs.marginNote.stringValue isEqualToString:@"The margin can be moved only on the charts of the file open now."] &&
+                  NSEqualSizes(fs.pictureView.image.size, NSMakeSize(chartA.width, chartA.height)) &&
+                  fs.exportButton.enabled && exportedA && PNGIsChart(pngA, chartA) && fs.chartPopup.indexOfSelectedItem == -1 &&
+                  [fs.fileURL.lastPathComponent isEqualToString:@"FAX-two.wav"],
+                  @"Fax screen: a chart of the earlier file, picked in the strip, is shown and Export… writes its own picture; its margin control is off, "
+                  @"with the line that says why; the open file is still the second, and the list shows none of its charts");
+            NSString *nameA = fs.exportName;
+            if (thumbs.count == 3) [thumbs[2] performClick:nil];
+            NSString *nameB2 = fs.exportName;
+            if (thumbs.count == 3) [thumbs[0] performClick:nil];
+            Check(threeIn && [nameA isEqualToString:@"FAX-12000-chart-1.png"] && [nameB2 isEqualToString:@"FAX-two-chart-2.png"] && fs.displayedChart == chartA,
+                  [NSString stringWithFormat:@"Fax screen: Export… proposes the name of the file the chart shown came from, and its number there (%@, %@)", nameA, nameB2]);
+            NSArray<NSData *> *graysB = threeIn ? @[chartsB[0].gray, chartsB[1].gray] : @[];
+            [fs setMarginPoints:45];
+            NSArray<TX500FaxChart *> *chartsB2 = fs.engine.charts;
+            Check(threeIn && chartsB2.count == 2 && chartsB2[0] == chartsB[0] && chartsB2[1] == chartsB[1] &&
+                  [chartsB2[0].gray isEqualToData:graysB[0]] && [chartsB2[1].gray isEqualToData:graysB[1]] &&
+                  fs.displayedChart == chartA && [chartA.gray isEqualToData:grayA] && fs.sessionCharts[0] == chartA &&
+                  [fs.marginLabel.stringValue isEqualToString:@"0 points"],
+                  @"Fax screen: moving the margin with the earlier file's chart shown changes no chart of the file open now, nor the chart shown");
+            // a chart of the file open now, picked in the strip: its margin moves, on that chart only
+            if (thumbs.count == 3) [thumbs[2] performClick:nil];
+            BOOL shownB = threeIn && fs.displayedChart == chartsB[1] && fs.shownChart == 1 && fs.marginSlider.enabled && fs.marginNote.hidden && fs.chartPopup.indexOfSelectedItem == 1;
+            [fs setMarginPoints:30];
+            TX500FaxChart *movedB = fs.engine.charts.count == 2 ? fs.engine.charts[1] : nil;
+            Check(shownB && movedB && movedB != chartsB[1] && ![movedB.gray isEqualToData:graysB[1]] && fs.displayedChart == movedB &&
+                  fs.sessionCharts.count == 3 && fs.sessionCharts[2] == movedB && [fs.marginLabel.stringValue isEqualToString:@"30 points"] &&
+                  [fs.engine.charts[0].gray isEqualToData:graysB[0]] && [chartA.gray isEqualToData:grayA],
+                  @"Fax screen: a chart of the file open now, picked in the strip, keeps its margin control; the margin moves on that chart only, and the strip holds it as moved");
+            // the list and the strip show the same chart
+            if (thumbs.count == 3) [thumbs[0] performClick:nil];
+            [fs.chartPopup selectItemAtIndex:0];
+            [fs.chartPopup sendAction:fs.chartPopup.action to:fs.chartPopup.target];
+            BOOL listFirst = threeIn && fs.sessionCharts.count == 3 && fs.displayedChart == chartsB[0] && fs.sessionCharts[1] == fs.displayedChart &&
+                             fs.marginSlider.enabled && fs.marginNote.hidden;
+            if (thumbs.count == 3) [thumbs[2] performClick:nil];
+            BOOL stripSecond = fs.displayedChart == movedB && fs.chartPopup.indexOfSelectedItem == 1;
+            Check(threeIn && listFirst && stripSecond, @"Fax screen: the chart list (the open file's charts) and the strip show the same chart");
+            // Decode again, with the earlier file's chart shown: the file open now, as before
+            if (thumbs.count == 3) [thumbs[0] performClick:nil];
+            BOOL again = [fs decodeAgain:nil];
+            NSArray<TX500FaxChart *> *chartsB3 = fs.engine.charts;
+            BOOL againShown = again && chartsB3.count == 2 && fs.displayedChart == chartsB3[0] && fs.marginSlider.enabled &&
+                              [fs.fileURL.lastPathComponent isEqualToString:@"FAX-two.wav"] && fs.sessionCharts.count == 5 && fs.sessionCharts[0] == chartA;
+            if (thumbs.count == 3) [thumbs[2] performClick:nil];
+            Check(againShown && fs.displayedChart == movedB && !fs.marginSlider.enabled && !fs.marginNote.hidden,
+                  @"Fax screen: Decode again decodes the file open now, also with an earlier file's chart shown; the charts of the decode before stay in the strip, without their margin control");
+            // the chart list, unchanged: hidden for a file of one chart
+            Check([fs openFileAtURL:Fixture(@"FAX-12000.wav")] && fs.chartPopup.hidden && fs.chartPopup.numberOfItems == 1 &&
+                  fs.displayedChart == fs.engine.charts.firstObject && fs.sessionCharts.count == 6,
+                  @"Fax screen: with a file of one chart the list is hidden again, and the strip goes on");
+            // a cap lowered takes effect at once: the oldest leave, the newest stay
+            NSArray<TX500FaxChart *> *before = fs.sessionCharts;
+            fs.galleryInMemory = 2;
+            Check(before.count == 6 && fs.sessionCharts.count == 2 && StripButtons(fs).count == 2 &&
+                  fs.sessionCharts[0] == before[4] && fs.sessionCharts[1] == before[5] && fs.displayedChart == before[5],
+                  @"Fax screen: the strip's cap lowered takes effect at once, the oldest charts leaving first");
+            // memory: 20 small files with a strip of 3; only those 3 charts stay alive (and the open file's)
+            TX500FaxStationController *fm = [TX500FaxStationController new];
+            fm.galleryInMemory = 3;
+            NSPointerArray *aliveF = [NSPointerArray weakObjectsPointerArray];
+            NSArray<NSString *> *small = @[@"FAX-8000.wav", @"FAX-12000.wav", @"FAX-two.wav"];
+            NSUInteger openedF = 0;
+            for (NSUInteger k = 0; k < 20; k++) {
+                @autoreleasepool {
+                    if ([fm openFileAtURL:Fixture(small[k % small.count])]) openedF++;
+                    for (TX500FaxChart *ch in fm.engine.charts) [aliveF addPointer:(__bridge void *)ch];
+                }
+            }
+            NSUInteger liveF = 0, openOutside = 0;
+            for (NSUInteger i = 0; i < aliveF.count; i++) if ([aliveF pointerAtIndex:i]) liveF++;
+            for (TX500FaxChart *ch in fm.engine.charts) if ([fm.sessionCharts indexOfObjectIdenticalTo:ch] == NSNotFound) openOutside++;
+            Check(openedF == 20 && aliveF.count >= 20 && fm.sessionCharts.count == 3 && StripButtons(fm).count == 3 && liveF <= 3 + openOutside,
+                  [NSString stringWithFormat:@"Fax screen: 20 small files opened with a strip of 3: only %lu of their %lu charts are still in memory "
+                   @"(the strip keeps 3, plus the open file's not in it: %lu)", (unsigned long)liveF, (unsigned long)aliveF.count, (unsigned long)openOutside]);
         }
 
         [NSUserDefaults.standardUserDefaults removePersistentDomainForName:suite];

@@ -7,10 +7,14 @@
 @property (nonatomic, readwrite) NSView *view;
 @property (nonatomic, readwrite) TX500FaxEngine *engine;
 @property (nonatomic, readwrite, copy, nullable) NSURL *fileURL;
+@property (nonatomic, readwrite, nullable) TX500FaxChart *displayedChart;
 @property (nonatomic, readwrite) NSInteger shownChart;
 @property (nonatomic, readwrite) NSPopUpButton *deviationPopup, *lpmPopup, *iocPopup, *widthPopup, *lineStartPopup, *chartPopup;
 @property (nonatomic, readwrite) NSTextField *deviationNote, *lpmNote, *iocNote, *widthNote, *lineStartNote;
-@property (nonatomic, readwrite) NSTextField *infoLabel, *noticeLabel, *practiceLabel, *marginLabel, *errorLabel;
+@property (nonatomic, readwrite) NSTextField *infoLabel, *noticeLabel, *practiceLabel, *marginLabel, *errorLabel, *marginNote;
+@property (nonatomic, readwrite) NSStackView *sessionStrip;
+@property (nonatomic) NSMutableDictionary<NSNumber *, TX500FaxChart *> *stripCharts;   // a thumbnail's tag -> its chart
+@property (nonatomic) NSInteger stripSerial;
 @property (nonatomic, readwrite) NSSlider *marginSlider;
 @property (nonatomic, readwrite) NSImageView *pictureView;
 @property (nonatomic, readwrite) NSButton *openButton, *againButton, *exportButton;
@@ -43,11 +47,31 @@ static NSStackView *FaxColumn(NSArray<NSView *> *v, CGFloat spacing) {
     return s;
 }
 
+// a small copy for the strip, drawn once from the chart, as the SSTV gallery's: never the full chart a second time
+static NSImage *FaxThumbnail(TX500FaxChart *c) {
+    NSImage *t = [[NSImage alloc] initWithSize:NSMakeSize(90, 60)];
+    if (c.width <= 0 || c.height <= 0) return t;
+    NSImage *full = [c image];
+    CGFloat k = MIN(90.0 / (CGFloat)c.width, 60.0 / (CGFloat)c.height);
+    CGFloat w = MAX(1.0, (CGFloat)c.width * k), h = MAX(1.0, (CGFloat)c.height * k);
+    [t lockFocus];
+    [full drawInRect:NSMakeRect((90 - w) / 2, (60 - h) / 2, w, h) fromRect:NSZeroRect operation:NSCompositingOperationCopy fraction:1.0];
+    [t unlockFocus];
+    return t;
+}
+
+// what VoiceOver and the tooltip say of a thumbnail
+static NSString *FaxThumbnailName(TX500FaxChart *c) {
+    return [NSString stringWithFormat:@"Chart %ld of %@, %ld lines", (long)c.index + 1, c.fileName, (long)c.height];
+}
+
 @implementation TX500FaxStationController
 
 - (instancetype)init {
     if ((self = [super init])) {
         _engine = [TX500FaxEngine new];
+        _galleryInMemory = 12;
+        _stripCharts = [NSMutableDictionary dictionary];
         [self buildView];
     }
     return self;
@@ -89,6 +113,16 @@ static NSStackView *FaxColumn(NSArray<NSView *> *v, CGFloat spacing) {
     [self.marginSlider.widthAnchor constraintEqualToConstant:260].active = YES;
     self.marginSlider.enabled = NO;
     self.marginLabel = [NSTextField labelWithString:@"0 points"];
+    // the samples that move a margin are those of the file open now: the receiver lets them go at the next file
+    self.marginNote = FaxNote();
+    self.marginNote.stringValue = @"The margin can be moved only on the charts of the file open now.";
+    self.marginNote.hidden = YES;
+    self.sessionStrip = FaxRow(@[]);
+    NSScrollView *stripScroll = [NSScrollView new];
+    stripScroll.hasHorizontalScroller = YES;
+    stripScroll.documentView = self.sessionStrip;
+    [stripScroll.heightAnchor constraintEqualToConstant:80].active = YES;
+    [stripScroll.widthAnchor constraintEqualToConstant:604].active = YES;
 
     self.deviationPopup = [self popupFor:@"deviation"]; self.deviationNote = FaxNote();
     self.lpmPopup = [self popupFor:@"lpm"]; self.lpmNote = FaxNote();
@@ -100,7 +134,8 @@ static NSStackView *FaxColumn(NSArray<NSView *> *v, CGFloat spacing) {
     NSStackView *left = FaxColumn(@[FaxTitle(@"Offline decoding (a WAV file)"), intro, self.errorLabel, self.practiceLabel, self.pictureView,
                                     FaxRow(@[self.openButton, self.exportButton, self.chartPopup]),
                                     FaxRow(@[[NSTextField labelWithString:@"Margin, after receiving:"], self.marginSlider, self.marginLabel]),
-                                    self.infoLabel, self.noticeLabel], 8);
+                                    self.marginNote, self.infoLabel, self.noticeLabel,
+                                    [NSTextField labelWithString:@"This session's charts"], stripScroll], 8);
     NSStackView *right = FaxColumn(@[
         [NSTextField labelWithString:@"Options (each with what it is good and not good for)"],
         FaxRow(@[[NSTextField labelWithString:@"Deviation:"], self.deviationPopup]), self.deviationNote,
@@ -179,7 +214,8 @@ static NSStackView *FaxColumn(NSArray<NSView *> *v, CGFloat spacing) {
     for (TX500FaxNotice *n in self.engine.notices) [lines addObject:n.text];
     self.noticeLabel.stringValue = [lines componentsJoinedByString:@"\n"];
     if (self.logHandler) for (NSString *t in lines) self.logHandler([@"[Fax] " stringByAppendingString:t]);
-    [self showChart:0];
+    for (TX500FaxChart *chart in charts) [self addToStrip:chart];
+    [self showChart:charts.firstObject];
     return YES;
 }
 
@@ -188,17 +224,27 @@ static NSStackView *FaxColumn(NSArray<NSView *> *v, CGFloat spacing) {
     return [self decodeFileAtURL:self.fileURL error:error];
 }
 
-- (void)showChart:(NSInteger)i {
-    NSArray<TX500FaxChart *> *charts = self.engine.charts;
-    self.shownChart = i;
+// the place of a chart among the open file's, by the object itself (NSNotFound for an earlier file's)
+- (NSUInteger)placeInOpenFile:(nullable TX500FaxChart *)c {
+    if (!c || c.decode != self.engine.decodes) return NSNotFound;
+    return [self.engine.charts indexOfObjectIdenticalTo:c];
+}
+
+// a chart of the open file or of an earlier one: the same chart from the list and from the strip
+- (void)showChart:(nullable TX500FaxChart *)c {
+    self.displayedChart = c;
+    self.shownChart = -1;
     self.marginSlider.doubleValue = 0; self.marginLabel.stringValue = @"0 points";
-    if (i < 0 || i >= (NSInteger)charts.count) {
+    if (!c) {
         self.pictureView.image = [[NSImage alloc] initWithSize:NSMakeSize(604, 400)];
         self.infoLabel.stringValue = @"No chart in this file.";
-        self.exportButton.enabled = NO; self.marginSlider.enabled = NO;
+        self.exportButton.enabled = NO; self.marginSlider.enabled = NO; self.marginNote.hidden = YES;
         return;
     }
-    TX500FaxChart *c = charts[(NSUInteger)i];
+    NSUInteger place = [self placeInOpenFile:c];
+    self.shownChart = place != NSNotFound ? (NSInteger)place : -1;
+    if (place != NSNotFound) [self.chartPopup selectItemAtIndex:(NSInteger)place];
+    else [self.chartPopup selectItem:nil];                // the list holds the open file's charts only
     self.pictureView.image = [c image];
     NSString *phasing = c.phasingKind == 0 ? @"no phasing" : [NSString stringWithFormat:@"phasing %@%@, %ld lines",
                         c.phasingKind == 2 ? @"symmetric" : @"5/95", c.phasingInverted ? @" inverted" : @"", (long)c.phasingLines];
@@ -207,20 +253,93 @@ static NSStackView *FaxColumn(NSArray<NSView *> *v, CGFloat spacing) {
                                   c.offsetHz, c.marginSource,
                                   c.lostLines ? [NSString stringWithFormat:@" · %ld lines lost in cuts, in grey", (long)c.lostLines] : @""];
     self.exportButton.enabled = YES;
-    self.marginSlider.enabled = YES;
+    self.marginSlider.enabled = place != NSNotFound;
+    self.marginNote.hidden = place != NSNotFound;
 }
 
+// only a chart of the file open now: an earlier file's has no samples left, and another chart is never touched
 - (void)setMarginPoints:(double)points {
-    if (![self.engine moveMarginOfChart:self.shownChart byPoints:points]) return;
+    TX500FaxChart *old = self.displayedChart;
+    NSUInteger place = [self placeInOpenFile:old];
+    if (place == NSNotFound || ![self.engine moveMarginOfChart:(NSInteger)place byPoints:points]) return;
+    TX500FaxChart *moved = self.engine.charts[place];
+    [self replaceInStrip:old with:moved];
+    self.displayedChart = moved;
     self.marginSlider.doubleValue = points;
     self.marginLabel.stringValue = [NSString stringWithFormat:@"%.0f points", points];
-    self.pictureView.image = [self.engine.charts[(NSUInteger)self.shownChart] image];
+    self.pictureView.image = [moved image];
 }
 
 - (BOOL)exportShownToURL:(NSURL *)url error:(NSError **)error {
-    NSArray<TX500FaxChart *> *charts = self.engine.charts;
-    if (self.shownChart < 0 || self.shownChart >= (NSInteger)charts.count) return NO;
-    return [charts[(NSUInteger)self.shownChart] writePNGToURL:url error:error];
+    if (!self.displayedChart) return NO;
+    return [self.displayedChart writePNGToURL:url error:error];
+}
+
+// the file the chart shown came from, and its number there: an earlier file's chart is not named after the open file
+- (NSString *)exportName {
+    TX500FaxChart *shown = self.displayedChart;
+    NSString *from = shown.fileName.length ? shown.fileName : self.fileURL.lastPathComponent;
+    NSString *stem = from.stringByDeletingPathExtension.length ? from.stringByDeletingPathExtension : @"fax";
+    return [NSString stringWithFormat:@"%@-chart-%ld.png", stem, (long)(shown ? shown.index : 0) + 1];
+}
+
+#pragma mark - this session's charts
+
+- (NSArray<TX500FaxChart *> *)sessionCharts {
+    NSMutableArray<TX500FaxChart *> *all = [NSMutableArray array];
+    for (NSView *v in self.sessionStrip.arrangedSubviews) {
+        TX500FaxChart *c = [v isKindOfClass:NSButton.class] ? self.stripCharts[@(((NSButton *)v).tag)] : nil;
+        if (c) [all addObject:c];
+    }
+    return all;
+}
+
+// newest last; the strip keeps its own reference to the chart (its greys never change), and the oldest leave first
+- (void)addToStrip:(TX500FaxChart *)c {
+    NSButton *b = [NSButton buttonWithImage:FaxThumbnail(c) target:self action:@selector(thumbnailClicked:)];
+    b.imageScaling = NSImageScaleProportionallyUpOrDown;
+    b.bordered = NO;
+    b.tag = ++self.stripSerial;
+    self.stripCharts[@(b.tag)] = c;
+    b.toolTip = FaxThumbnailName(c);
+    b.accessibilityLabel = FaxThumbnailName(c);
+    [b.widthAnchor constraintEqualToConstant:90].active = YES;
+    [b.heightAnchor constraintEqualToConstant:60].active = YES;
+    [self.sessionStrip addArrangedSubview:b];
+    [self trimStrip];
+}
+
+// a cap lowered takes effect at once, not at the next file
+- (void)setGalleryInMemory:(NSUInteger)galleryInMemory {
+    _galleryInMemory = galleryInMemory;
+    [self trimStrip];
+}
+
+- (void)trimStrip {
+    while (self.sessionStrip.arrangedSubviews.count > MAX(self.galleryInMemory, (NSUInteger)1)) {
+        NSView *first = self.sessionStrip.arrangedSubviews.firstObject;
+        if ([first isKindOfClass:NSButton.class]) [self.stripCharts removeObjectForKey:@(((NSButton *)first).tag)];
+        [self.sessionStrip removeArrangedSubview:first];
+        [first removeFromSuperview];
+    }
+}
+
+// a margin moved: the engine gives the chart anew, and its thumbnail is drawn again from it
+- (void)replaceInStrip:(TX500FaxChart *)old with:(TX500FaxChart *)moved {
+    for (NSView *v in self.sessionStrip.arrangedSubviews) {
+        if (![v isKindOfClass:NSButton.class]) continue;
+        NSButton *b = (NSButton *)v;
+        if (self.stripCharts[@(b.tag)] != old) continue;
+        self.stripCharts[@(b.tag)] = moved;
+        b.image = FaxThumbnail(moved);
+        b.toolTip = FaxThumbnailName(moved);
+        b.accessibilityLabel = FaxThumbnailName(moved);
+    }
+}
+
+- (void)thumbnailClicked:(NSButton *)sender {
+    TX500FaxChart *c = self.stripCharts[@(sender.tag)];
+    if (c) [self showChart:c];
 }
 
 #pragma mark - actions
@@ -246,15 +365,19 @@ static NSStackView *FaxColumn(NSArray<NSView *> *v, CGFloat spacing) {
     if (![self decodeAgain:&err]) [self sayError:err.localizedDescription ?: @"It could not be decoded again."];
 }
 
-- (void)chartChosen:(NSPopUpButton *)sender { [self showChart:sender.indexOfSelectedItem]; }
+// the list holds the open file's charts, in their order
+- (void)chartChosen:(NSPopUpButton *)sender {
+    NSArray<TX500FaxChart *> *charts = self.engine.charts;
+    NSInteger i = sender.indexOfSelectedItem;
+    [self showChart:(i >= 0 && i < (NSInteger)charts.count) ? charts[(NSUInteger)i] : nil];
+}
 
 - (void)marginMoved:(NSSlider *)sender { [self setMarginPoints:round(sender.doubleValue)]; }
 
 - (void)exportClicked:(id)sender {
     (void)sender;
     NSSavePanel *panel = [NSSavePanel savePanel];
-    panel.nameFieldStringValue = [NSString stringWithFormat:@"%@-chart-%ld.png",
-                                  self.fileURL.lastPathComponent.stringByDeletingPathExtension ?: @"fax", (long)self.shownChart + 1];
+    panel.nameFieldStringValue = self.exportName;
     panel.allowedContentTypes = @[UTTypePNG];
     if ([panel runModal] != NSModalResponseOK || !panel.URL) return;
     NSError *err = nil;

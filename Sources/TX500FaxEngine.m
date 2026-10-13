@@ -45,6 +45,8 @@ static NSString *FaxNoteName(wefax_note n) {
 @property (nonatomic, readwrite, copy) NSData *gray;
 @property (nonatomic, readwrite) double linePeriodMs, slantPPM, offsetHz, deviationMeasuredHz;
 @property (nonatomic, readwrite, copy) NSString *marginSource;
+@property (nonatomic, readwrite) NSUInteger decode;
+@property (nonatomic, readwrite, copy) NSString *fileName;
 @end
 
 @implementation TX500FaxChart
@@ -80,6 +82,8 @@ static NSString *FaxNoteName(wefax_note n) {
     wefax_rx *_rx;
     NSMutableArray<TX500FaxChart *> *_charts;
     NSMutableArray<TX500FaxNotice *> *_notices;
+    NSUInteger _decodes;
+    NSString *_fileName;
 }
 
 - (instancetype)init {
@@ -96,6 +100,7 @@ static NSString *FaxNoteName(wefax_note n) {
 
 - (NSArray<TX500FaxChart *> *)charts { return [_charts copy]; }
 - (NSArray<TX500FaxNotice *> *)notices { return [_notices copy]; }
+- (NSUInteger)decodes { return _decodes; }
 
 + (NSString *)textForNote:(NSString *)note value:(double)v chosenDeviation:(double)dev chosenLPM:(double)lpm {
     NSDictionary<NSString *, NSString *> *t = @{
@@ -175,6 +180,8 @@ static NSString *FaxNoteName(wefax_note n) {
     }
     if (_rx) wefax_rx_free(_rx);
     _rx = rx;
+    _decodes++;                                // the charts of an earlier file keep their own number
+    _fileName = [url.lastPathComponent copy] ?: @"";
     [_charts removeAllObjects];
     [_notices removeAllObjects];
     wefax_rx_finish(_rx);
@@ -205,6 +212,7 @@ static NSString *FaxNoteName(wefax_note n) {
     const wefax_image *im = wefax_rx_image(_rx, i);
     TX500FaxChart *c = [TX500FaxChart new];
     c.index = i; c.width = im->width; c.height = im->height; c.complete = im->complete != 0;
+    c.decode = _decodes; c.fileName = _fileName ?: @"";
     c.gray = im->gray ? [NSData dataWithBytes:im->gray length:(NSUInteger)(im->width * im->height)] : [NSData data];
     c.linePeriodMs = im->line_period_s * 1e3; c.slantPPM = im->slant_ppm; c.offsetHz = im->offset_hz;
     c.deviationMeasuredHz = im->deviation_measured_hz;

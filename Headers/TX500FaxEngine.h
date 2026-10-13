@@ -25,6 +25,11 @@ typedef NS_ENUM(NSInteger, TX500FaxLineStart) {
 /// Where its margin came from, in words: "the phasing", "the dead sector", "the picture's seam",
 /// "the phasing, fldigi's way" or "nothing known".
 @property (nonatomic, readonly, copy) NSString *marginSource;
+/// The decode it came from (the engine's decodes then): its margin can be moved only while it is of
+/// the last one, whose samples the receiver still keeps.
+@property (nonatomic, readonly) NSUInteger decode;
+/// The name of the file it came from.
+@property (nonatomic, readonly, copy) NSString *fileName;
 - (NSBitmapImageRep *)bitmap;
 - (NSImage *)image;
 - (BOOL)writePNGToURL:(NSURL *)url error:(NSError **)error;
@@ -45,6 +50,9 @@ typedef NS_ENUM(NSInteger, TX500FaxLineStart) {
 @property (nonatomic) TX500FaxLineStart lineStart;
 @property (nonatomic, readonly, copy) NSArray<TX500FaxChart *> *charts;
 @property (nonatomic, readonly, copy) NSArray<TX500FaxNotice *> *notices;
+/// How many files it has decoded (a file refused does not count); the charts of the last one carry
+/// this number as their decode.
+@property (nonatomic, readonly) NSUInteger decodes;
 /// Decodes a WAV file, with the settings above (the same as the core's command line: the same
 /// picture, bit for bit). Replaces what an earlier file gave.
 - (BOOL)decodeFileAtURL:(NSURL *)url error:(NSError **)error;

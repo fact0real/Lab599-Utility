@@ -23,6 +23,7 @@
 
 @interface TX500SSTVStationController (SSTVTests)
 @property (nonatomic) BOOL choiceWaiting;
+- (NSButton *)openButton;
 - (void)refreshDraftInfo;
 @end
 
@@ -95,6 +96,54 @@ static NSUInteger FaxViewSays(NSView *v, NSString *what) {
         n += [((NSTextField *)v).stringValue rangeOfString:what options:NSCaseInsensitiveSearch].location != NSNotFound;
     for (NSView *s in v.subviews) n += FaxViewSays(s, what);
     return n;
+}
+
+// whether v is inside container, through its subviews or, for a stack, its arranged views: a stack
+// detaches a hidden arranged view (detachesHiddenViews), which then has no superview but stays arranged
+static BOOL Holds(NSView *container, NSView *v) {
+    if (!container || !v) return NO;
+    if (container == v) return YES;
+    for (NSView *s in container.subviews) if (Holds(s, v)) return YES;
+    if ([container isKindOfClass:NSStackView.class])
+        for (NSView *a in ((NSStackView *)container).arrangedSubviews) if (Holds(a, v)) return YES;
+    return NO;
+}
+
+// the view of a stack's arranged ones that holds v (v itself or one of its superviews), found through
+// the stack's arranged views, never through superview == stack
+static NSView *ArrangedHolding(NSStackView *stack, NSView *v) {
+    if (!stack || !v) return nil;
+    NSArray<NSView *> *arranged = stack.arrangedSubviews;
+    for (NSView *w = v; w; w = w.superview) if ([arranged containsObject:w]) return w;
+    // a hidden view, or one inside a hidden one, may be detached: look into each arranged view
+    for (NSView *a in arranged) if (Holds(a, v)) return a;
+    return nil;
+}
+
+static NSUInteger PlaceInStack(NSStackView *stack, NSView *v) {
+    NSView *held = ArrangedHolding(stack, v);
+    return held ? [stack.arrangedSubviews indexOfObject:held] : NSNotFound;
+}
+
+// the nearest stack that holds both views
+static NSStackView *StackHoldingBoth(NSView *a, NSView *b) {
+    for (NSView *w = a.superview; w; w = w.superview)
+        if ([w isKindOfClass:NSStackView.class] && [b isDescendantOf:w]) return (NSStackView *)w;
+    return nil;
+}
+
+// the first label of a view whose text is exactly this
+static NSTextField *LabelSaying(NSView *v, NSString *text) {
+    if ([v isKindOfClass:NSTextField.class] && [((NSTextField *)v).stringValue isEqualToString:text]) return (NSTextField *)v;
+    for (NSView *s in v.subviews) { NSTextField *f = LabelSaying(s, text); if (f) return f; }
+    return nil;
+}
+
+// the first label of a view whose text begins with this
+static NSTextField *LabelBeginning(NSView *v, NSString *text) {
+    if ([v isKindOfClass:NSTextField.class] && [((NSTextField *)v).stringValue hasPrefix:text]) return (NSTextField *)v;
+    for (NSView *s in v.subviews) { NSTextField *f = LabelBeginning(s, text); if (f) return f; }
+    return nil;
 }
 
 static NSURL *fixtures;
@@ -1460,6 +1509,67 @@ int main(int argc, const char *argv[]) {
                   [cn.modeNote.stringValue isEqualToString:[TX500SSTVOptionNotes noteForMode:TX500SSTVModeAuto]] &&
                   [cn.againScaleNote.stringValue isEqualToString:[TX500SSTVOptionNotes noteForColourScale:TX500SSTVColourScaleFull]],
                   @"Screen: Decode again's notes follow its own choices (Martin M1, Full range), not the ones above");
+        }
+
+        // 9c. the order of the SSTV screen: the disk share with the other choices, its lamp, then the two
+        // pictures side by side, each with a title that says what it shows and its own buttons; the log form
+        // and the gallery under them. Found through the stacks' arranged views, never by a fixed place
+        {
+            NSUserDefaults *defsO = [[NSUserDefaults alloc] initWithSuiteName:[suite stringByAppendingString:@".order"]];
+            TX500SSTVStationController *co = NewController(defsO, [NSURL fileURLWithPath:[root stringByAppendingPathComponent:@"gallery-order"] isDirectory:YES], lb);
+            NSMutableArray<NSString *> *wrong = [NSMutableArray array];
+            NSStackView *pane = StackHoldingBoth(co.layoutPopup, co.pictureView);
+            NSTextField *galleryTitle = LabelBeginning(co.view, @"Gallery (");
+            NSUInteger iLayout = PlaceInStack(pane, co.layoutPopup), iLayoutNote = PlaceInStack(pane, co.layoutNote),
+                       iDisk = PlaceInStack(pane, co.diskPopup), iDiskNote = PlaceInStack(pane, co.diskNote),
+                       iLamp = PlaceInStack(pane, co.diskSummaryLabel), iLive = PlaceInStack(pane, co.pictureView),
+                       iOffline = PlaceInStack(pane, co.reviewPictureView), iForm = PlaceInStack(pane, co.recordPanel),
+                       iGallery = galleryTitle ? PlaceInStack(pane, galleryTitle) : NSNotFound;
+            if (!pane || pane.orientation != NSUserInterfaceLayoutOrientationVertical) [wrong addObject:@"no SSTV column"];
+            if (iLayout == NSNotFound || iDisk == NSNotFound || !(iLayout < iDisk)) [wrong addObject:@"Scottie timing not before the disk share"];
+            // just below Scottie timing: its note, then the disk row, the disk note, the lamp and the pictures, one after the other
+            if (iLayoutNote == NSNotFound || iDisk != iLayoutNote + 1) [wrong addObject:@"the disk share not right after the Scottie timing note"];
+            if (iDisk == NSNotFound || iDiskNote != iDisk + 1) [wrong addObject:@"the disk note not right after the disk share"];
+            if (iDiskNote == NSNotFound || iLamp != iDiskNote + 1) [wrong addObject:@"the lamp not right after the disk note"];
+            if (iLamp == NSNotFound || iLive != iLamp + 1) [wrong addObject:@"the pictures not right after the lamp"];
+            if (iOffline != iLive) [wrong addObject:@"the two pictures not in one row"];
+            NSStackView *row = iLive != NSNotFound && [pane.arrangedSubviews[iLive] isKindOfClass:NSStackView.class] ? (NSStackView *)pane.arrangedSubviews[iLive] : nil;
+            if (!row || row.orientation != NSUserInterfaceLayoutOrientationHorizontal || row.arrangedSubviews.count != 2)
+                [wrong addObject:@"the pictures' row is not a horizontal row of two"];
+            else {
+                NSView *left = row.arrangedSubviews[0], *right = row.arrangedSubviews[1];
+                if (!Holds(left, co.pictureView) || !LabelSaying(left, @"Live, from the radio"))
+                    [wrong addObject:@"the first window is not the live one with its title"];
+                if (!Holds(right, co.reviewPictureView) || !LabelSaying(right, @"Offline decoding (a WAV file or Decode again)"))
+                    [wrong addObject:@"the second window is not the offline one with its title"];
+                // each column begins with its title
+                NSView *leftFirst = [left isKindOfClass:NSStackView.class] ? ((NSStackView *)left).arrangedSubviews.firstObject : nil;
+                NSView *rightFirst = [right isKindOfClass:NSStackView.class] ? ((NSStackView *)right).arrangedSubviews.firstObject : nil;
+                if (![leftFirst isKindOfClass:NSTextField.class] || ![((NSTextField *)leftFirst).stringValue isEqualToString:@"Live, from the radio"])
+                    [wrong addObject:@"the live column does not begin with its title"];
+                if (![rightFirst isKindOfClass:NSTextField.class] ||
+                    ![((NSTextField *)rightFirst).stringValue isEqualToString:@"Offline decoding (a WAV file or Decode again)"])
+                    [wrong addObject:@"the offline column does not begin with its title"];
+                // each picture's own buttons under it: Export in the live one; Open WAV and Export in the offline one
+                if (!Holds(left, co.exportButton) || Holds(right, co.exportButton)) [wrong addObject:@"the live Export not in the live column"];
+                if (!Holds(right, co.openButton) || Holds(left, co.openButton)) [wrong addObject:@"Open WAV not in the offline column"];
+                if (!Holds(right, co.reviewExportButton) || Holds(left, co.reviewExportButton))
+                    [wrong addObject:@"the offline Export not in the offline column"];
+            }
+            if (iForm == NSNotFound || !(iLive < iForm)) [wrong addObject:@"the log form not under the pictures"];
+            if (iGallery == NSNotFound || !(iLive < iGallery)) [wrong addObject:@"the gallery not under the pictures"];
+            if (FaxViewSays(co.view, @"Files and Decode again")) [wrong addObject:@"the old title is still there"];
+            if (![co.pictureView.accessibilityLabel isEqualToString:@"Live picture from the radio"] ||
+                ![co.reviewPictureView.accessibilityLabel isEqualToString:@"Offline decoding picture"])
+                [wrong addObject:@"a picture has no name for VoiceOver"];
+            if (co.progressLabel.preferredMaxLayoutWidth != 480 || co.reviewLabel.preferredMaxLayoutWidth != 320 ||
+                co.progressLabel.maximumNumberOfLines != 0 || co.reviewLabel.maximumNumberOfLines != 0 ||
+                co.progressLabel.lineBreakMode != NSLineBreakByWordWrapping || co.reviewLabel.lineBreakMode != NSLineBreakByWordWrapping)
+                [wrong addObject:@"a line under a picture does not wrap by words within its width, or is cut"];
+            Check(wrong.count == 0, [NSString stringWithFormat:@"Screen: Scottie timing, the disk share and its lamp, then the live and offline pictures side by side "
+                                     @"with their titles and names, the log form and the gallery under them%@",
+                                     wrong.count ? [@"; wrong: " stringByAppendingString:[wrong componentsJoinedByString:@", "]] : @""]);
+            [NSUserDefaults.standardUserDefaults removePersistentDomainForName:[suite stringByAppendingString:@".order"]];
         }
 
         // 10. the fax, files only (FX1, FX2, FX4, FX30)

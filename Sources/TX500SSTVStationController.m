@@ -172,6 +172,21 @@ static NSTextField *SSTVNote(void) {
     return f;
 }
 
+// the title over each of the two pictures
+static NSTextField *SSTVTitle(NSString *text) {
+    NSTextField *f = [NSTextField labelWithString:text];
+    f.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
+    return f;
+}
+
+// a line under a picture that wraps within the picture's width, so a long text never widens its column;
+// as many lines as it needs, so nothing is cut without a word
+static void SSTVWrapUnder(NSTextField *f, CGFloat width) {
+    f.preferredMaxLayoutWidth = width;
+    f.lineBreakMode = NSLineBreakByWordWrapping;
+    f.maximumNumberOfLines = 0;
+}
+
 static NSStackView *SSTVRow(NSArray<NSView *> *views) {
     NSStackView *s = [NSStackView stackViewWithViews:views];
     s.orientation = NSUserInterfaceLayoutOrientationHorizontal;
@@ -227,8 +242,10 @@ static NSStackView *SSTVColumn(NSArray<NSView *> *views, CGFloat spacing) {
     self.pictureView.imageFrameStyle = NSImageFrameGrayBezel;
     [self.pictureView.widthAnchor constraintEqualToConstant:480].active = YES;
     [self.pictureView.heightAnchor constraintEqualToConstant:384].active = YES;
+    self.pictureView.accessibilityLabel = @"Live picture from the radio";
     self.progressLabel = [NSTextField labelWithString:@"No picture yet."];
     self.progressLabel.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightRegular];
+    SSTVWrapUnder(self.progressLabel, 480);
     // a view of its own for a WAV and for Decode again, so the live one stays the radio's and a picture
     // can be decoded again while another arrives (SEG-22)
     self.reviewPictureView = [NSImageView imageViewWithImage:[[NSImage alloc] initWithSize:NSMakeSize(320, 256)]];
@@ -236,8 +253,10 @@ static NSStackView *SSTVColumn(NSArray<NSView *> *views, CGFloat spacing) {
     self.reviewPictureView.imageFrameStyle = NSImageFrameGrayBezel;
     [self.reviewPictureView.widthAnchor constraintEqualToConstant:320].active = YES;
     [self.reviewPictureView.heightAnchor constraintEqualToConstant:256].active = YES;
-    self.reviewLabel = [NSTextField labelWithString:@"A WAV file, Decode again and the gallery show here; the live picture above is the radio's."];
+    self.reviewPictureView.accessibilityLabel = @"Offline decoding picture";
+    self.reviewLabel = [NSTextField labelWithString:@"A WAV file, Decode again and the gallery show here; the live picture on the left is the radio's."];
     self.reviewLabel.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightRegular];
+    SSTVWrapUnder(self.reviewLabel, 320);
     self.reviewExportButton = [NSButton buttonWithTitle:@"Export…" target:self action:@selector(exportReview:)];
     self.reviewExportButton.enabled = NO;
 
@@ -322,24 +341,32 @@ static NSStackView *SSTVColumn(NSArray<NSView *> *views, CGFloat spacing) {
         self.againGoButton], 4);
     self.againPanel.hidden = YES;
 
+    // the two pictures side by side, each with what it shows: the radio's on the left, a WAV file's
+    // and Decode again's on the right
+    NSStackView *liveColumn = SSTVColumn(@[SSTVTitle(@"Live, from the radio"), self.pictureView, self.progressLabel,
+                                           SSTVRow(@[self.exportButton])], 8);
+    NSStackView *offlineColumn = SSTVColumn(@[SSTVTitle(@"Offline decoding (a WAV file or Decode again)"), self.reviewPictureView,
+                                              self.reviewLabel, SSTVRow(@[self.openButton, self.reviewExportButton])], 8);
+    NSStackView *pictures = SSTVRow(@[liveColumn, offlineColumn]);
+    pictures.alignment = NSLayoutAttributeTop;
+    pictures.spacing = 16;
+
+    // the disk share with the other choices, above the pictures; its lamp right above them
     NSStackView *root = SSTVColumn(@[
         SSTVRow(@[self.enableSwitch, self.statusLabel]),
         SSTVRow(@[[NSTextField labelWithString:@"Input:"], self.inputPopup]), self.inputNote, intro,
         SSTVRow(@[[NSTextField labelWithString:@"Mode:"], self.modePopup]), self.modeNote,
         SSTVRow(@[[NSTextField labelWithString:@"Colour scale:"], self.scalePopup]), self.scaleNote,
         SSTVRow(@[[NSTextField labelWithString:@"Scottie timing:"], self.layoutPopup]), self.layoutNote,
-        self.diskSummaryLabel, self.pictureView, self.progressLabel,
-        SSTVRow(@[self.exportButton]),
+        SSTVRow(@[[NSTextField labelWithString:@"Keep recordings on disk:"], self.diskPopup]), self.diskNote,
+        self.diskSummaryLabel,
+        pictures,
         self.recordPanel,
-        [NSTextField labelWithString:@"Files and Decode again (a view of their own: the picture above is only the radio's):"],
-        self.reviewPictureView, self.reviewLabel,
-        SSTVRow(@[self.openButton, self.reviewExportButton]),
         [NSTextField labelWithString:@"Gallery (the last pictures; those from the radio are also kept as PNGs, within the disk share):"], galleryScroll,
-        [NSTextField labelWithString:@"Recent receptions (the last ones in memory; the recent ones also on disk, within the share below):"],
+        [NSTextField labelWithString:@"Recent receptions (the last ones in memory; the recent ones also on disk, within the share above):"],
         recScroll,
         SSTVRow(@[self.decodeAgainButton, self.keepCheckbox, self.exportRecordingButton, self.recordRowButton, self.discardRowButton]),
-        self.againPanel,
-        SSTVRow(@[[NSTextField labelWithString:@"Keep recordings on disk:"], self.diskPopup]), self.diskNote
+        self.againPanel
     ], 8);
     // the fax, files only for now, on the same screen: a switch shows one part or the other
     self.sstvPane = root;

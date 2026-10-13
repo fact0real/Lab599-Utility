@@ -24,6 +24,13 @@ static NSTextField *FaxNote(void) {
     return f;
 }
 
+// the title over the chart, as the SSTV pictures have theirs
+static NSTextField *FaxTitle(NSString *text) {
+    NSTextField *f = [NSTextField labelWithString:text];
+    f.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
+    return f;
+}
+
 static NSStackView *FaxRow(NSArray<NSView *> *v) {
     NSStackView *s = [NSStackView stackViewWithViews:v];
     s.orientation = NSUserInterfaceLayoutOrientationHorizontal; s.alignment = NSLayoutAttributeCenterY; s.spacing = 8;
@@ -89,8 +96,9 @@ static NSStackView *FaxColumn(NSArray<NSView *> *v, CGFloat spacing) {
     self.widthPopup = [self popupFor:@"width"]; self.widthNote = FaxNote();
     self.lineStartPopup = [self popupFor:@"lineStart"]; self.lineStartNote = FaxNote();
 
-    NSStackView *left = FaxColumn(@[intro, FaxRow(@[self.openButton, self.againButton, self.exportButton, self.chartPopup]),
-                                    self.errorLabel, self.practiceLabel, self.pictureView,
+    // the chart with its title, and its own buttons under it; Decode again goes with the options it applies
+    NSStackView *left = FaxColumn(@[FaxTitle(@"Offline decoding (a WAV file)"), intro, self.errorLabel, self.practiceLabel, self.pictureView,
+                                    FaxRow(@[self.openButton, self.exportButton, self.chartPopup]),
                                     FaxRow(@[[NSTextField labelWithString:@"Margin, after receiving:"], self.marginSlider, self.marginLabel]),
                                     self.infoLabel, self.noticeLabel], 8);
     NSStackView *right = FaxColumn(@[
@@ -99,7 +107,8 @@ static NSStackView *FaxColumn(NSArray<NSView *> *v, CGFloat spacing) {
         FaxRow(@[[NSTextField labelWithString:@"Lines per minute:"], self.lpmPopup]), self.lpmNote,
         FaxRow(@[[NSTextField labelWithString:@"Index of cooperation:"], self.iocPopup]), self.iocNote,
         FaxRow(@[[NSTextField labelWithString:@"Saved width:"], self.widthPopup]), self.widthNote,
-        FaxRow(@[[NSTextField labelWithString:@"Line start:"], self.lineStartPopup]), self.lineStartNote], 6);
+        FaxRow(@[[NSTextField labelWithString:@"Line start:"], self.lineStartPopup]), self.lineStartNote,
+        self.againButton], 6);
     NSStackView *root = FaxRow(@[left, right]);
     root.alignment = NSLayoutAttributeTop;
     root.spacing = 18;

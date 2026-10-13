@@ -2138,6 +2138,52 @@ int main(int argc, const char *argv[]) {
                 [pp sendAction:pp.action to:pp.target];
             }
             Check(faxNotes, @"Fax screen: every option says Good for / Not good for, the default too, and the text follows the choice");
+            // the order of the fax screen: the chart on the left under its title, its own buttons in one row under
+            // it; the options on the right, and Decode again under them (it applies them). Found through the
+            // stacks' arranged views, never by a fixed place (the chart list may be hidden, and so detached)
+            {
+                NSMutableArray<NSString *> *wrongF = [NSMutableArray array];
+                NSStackView *rootF = [fx.view isKindOfClass:NSStackView.class] ? (NSStackView *)fx.view : nil;
+                NSView *leftV = ArrangedHolding(rootF, fx.pictureView), *rightV = ArrangedHolding(rootF, fx.deviationPopup);
+                NSStackView *leftF = [leftV isKindOfClass:NSStackView.class] ? (NSStackView *)leftV : nil;
+                NSStackView *rightF = [rightV isKindOfClass:NSStackView.class] ? (NSStackView *)rightV : nil;
+                if (!rootF || rootF.orientation != NSUserInterfaceLayoutOrientationHorizontal || !leftF || !rightF || leftF == rightF ||
+                    leftF.orientation != NSUserInterfaceLayoutOrientationVertical || rightF.orientation != NSUserInterfaceLayoutOrientationVertical ||
+                    [rootF.arrangedSubviews indexOfObject:leftF] > [rootF.arrangedSubviews indexOfObject:rightF])
+                    [wrongF addObject:@"not a chart column on the left and an options column on the right"];
+                else {
+                    NSView *firstF = leftF.arrangedSubviews.firstObject;
+                    NSTextField *titleF = [firstF isKindOfClass:NSTextField.class] ? (NSTextField *)firstF : nil;
+                    if (![titleF.stringValue isEqualToString:@"Offline decoding (a WAV file)"])
+                        [wrongF addObject:@"the chart column does not begin with its title"];
+                    else if (titleF.font.pointSize != 13 || ![titleF.font.fontName isEqualToString:[NSFont systemFontOfSize:13 weight:NSFontWeightSemibold].fontName])
+                        [wrongF addObject:@"the title is not semibold 13 points"];
+                    NSUInteger iChart = PlaceInStack(leftF, fx.pictureView), iOpen = PlaceInStack(leftF, fx.openButton),
+                               iExport = PlaceInStack(leftF, fx.exportButton), iList = PlaceInStack(leftF, fx.chartPopup),
+                               iMargin = PlaceInStack(leftF, fx.marginSlider), iPractice = PlaceInStack(leftF, fx.practiceLabel);
+                    BOOL w604 = NO, h400 = NO;
+                    for (NSLayoutConstraint *k in fx.pictureView.constraints)
+                        if (k.active && k.firstItem == fx.pictureView && !k.secondItem && k.relation == NSLayoutRelationEqual) {
+                            if (k.firstAttribute == NSLayoutAttributeWidth && k.constant == 604) w604 = YES;
+                            if (k.firstAttribute == NSLayoutAttributeHeight && k.constant == 400) h400 = YES;
+                        }
+                    if (!w604 || !h400) [wrongF addObject:@"the chart is not 604 by 400"];
+                    if (iPractice == NSNotFound || iChart == NSNotFound || !(iPractice < iChart)) [wrongF addObject:@"the practice line not above the chart"];
+                    if (iOpen == NSNotFound || iChart == NSNotFound || !(iChart < iOpen)) [wrongF addObject:@"Open WAV not under the chart"];
+                    if (iExport != iOpen || iList != iOpen) [wrongF addObject:@"Open WAV, Export and the chart list not in one row"];
+                    if (iMargin == NSNotFound || iOpen == NSNotFound || !(iOpen < iMargin)) [wrongF addObject:@"the margin not under the buttons' row"];
+                    if (Holds(leftF, fx.againButton)) [wrongF addObject:@"Decode again still with the chart"];
+                    NSUInteger iNote = PlaceInStack(rightF, fx.lineStartNote), iAgain = PlaceInStack(rightF, fx.againButton);
+                    if (iNote == NSNotFound || iAgain == NSNotFound || !(iNote < iAgain)) [wrongF addObject:@"Decode again not under the Line start note"];
+                    for (NSPopUpButton *pf in @[fx.deviationPopup, fx.lpmPopup, fx.iocPopup, fx.widthPopup, fx.lineStartPopup])
+                        if (!Holds(rightF, pf) || Holds(leftF, pf)) { [wrongF addObject:@"an option not in the right column"]; break; }
+                    for (NSTextField *nf in notes10)
+                        if (!Holds(rightF, nf) || Holds(leftF, nf)) { [wrongF addObject:@"an option's note not in the right column"]; break; }
+                }
+                Check(wrongF.count == 0, [NSString stringWithFormat:@"Fax screen: the chart under its title «Offline decoding (a WAV file)», Open WAV, Export and the chart list "
+                                          @"in one row under it; the options on the right, with Decode again under the last note%@",
+                                          wrongF.count ? [@"; wrong: " stringByAppendingString:[wrongF componentsJoinedByString:@", "]] : @""]);
+            }
             c.paneSwitch.selectedSegment = 1;
             [c.paneSwitch sendAction:c.paneSwitch.action to:c.paneSwitch.target];
             BOOL faxShown = !fx.view.hidden;

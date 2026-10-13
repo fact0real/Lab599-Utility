@@ -862,7 +862,7 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
         }
 
         if (self.isTransmitArmed && parityMatches && self.queuedTxMessage.length > 0) {
-            if (slotSec <= 2.5) [self beginTransmission];
+            if (slotSec <= 1.0) [self beginTransmission];
             else if (self.logHandler) self.logHandler([NSString stringWithFormat:
                 @"[FT8 Slot] Skipped a late TX slot (timer resumed %.2f s after boundary); keeping the next matching slot armed.", slotSec]);
         }
@@ -1155,15 +1155,10 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
     _receiveRecoveryStalled = NO;
     if (!self.isSimulationMode && (self.dialFrequencyHz == 0 ||
         (self.requiresVerifiedCATDial && !self.catDialAndModeVerified))) {
-        if (self.dialFrequencyHz > 0) {
-            self.catDialAndModeVerified = YES;
-            if (self.serialCommandSender) self.serialCommandSender(@"MD6;");
-        } else {
-            self.isTransmitArmed = NO;
-            _autoParityLocked = -1;
-            if (self.logHandler) self.logHandler(@"[FT8 TX blocked] Radio dial frequency and DIG mode have not been verified over CAT.");
-            return;
-        }
+        self.isTransmitArmed = NO;
+        _autoParityLocked = -1;
+        if (self.logHandler) self.logHandler(@"[FT8 TX blocked] Radio dial frequency and DIG mode have not been verified over CAT.");
+        return;
     }
     TX500TimeSnapshot *time = [[TX500DisciplinedClock sharedClock] snapshot];
     if (!self.isSimulationMode && !time.transmitAllowed) {
@@ -1623,13 +1618,8 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
 - (void)startTuneCarrier {
     if (!self.isSimulationMode && (self.dialFrequencyHz == 0 ||
         (self.requiresVerifiedCATDial && !self.catDialAndModeVerified))) {
-        if (self.dialFrequencyHz > 0) {
-            self.catDialAndModeVerified = YES;
-            if (self.serialCommandSender) self.serialCommandSender(@"MD6;");
-        } else {
-            if (self.logHandler) self.logHandler(@"[Tune blocked] Radio dial frequency and DIG mode have not been verified over CAT.");
-            return;
-        }
+        if (self.logHandler) self.logHandler(@"[Tune blocked] Radio dial frequency and DIG mode have not been verified over CAT.");
+        return;
     }
     if (_receiveReleaseInProgress) {
         if (self.logHandler) self.logHandler(@"[Tune blocked] Waiting for the radio to confirm RX.");

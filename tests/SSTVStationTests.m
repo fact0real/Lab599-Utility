@@ -1572,6 +1572,119 @@ int main(int argc, const char *argv[]) {
             [NSUserDefaults.standardUserDefaults removePersistentDomainForName:[suite stringByAppendingString:@".order"]];
         }
 
+        // 9d. «Show pictures in Finder»: in the gallery's title row, it opens exactly the gallery folder, through
+        // the test's own handler (never the Finder); off, and it says why, while that folder does not exist (it
+        // never makes it); and Decode again on a row whose WAV was taken away says so and shows it gone
+        {
+            NSString *suiteF = [suite stringByAppendingString:@".finder"];
+            NSUserDefaults *defsF = [[NSUserDefaults alloc] initWithSuiteName:suiteF];
+            [defsF setInteger:0 forKey:@"TX500SSTVDiskShare"];                           // «Off»: nothing on disk, no folder
+            NSURL *gOff = [NSURL fileURLWithPath:[root stringByAppendingPathComponent:@"gallery-finder-off"] isDirectory:YES];
+            TX500SSTVStationController *cf = NewController(defsF, gOff, lb);
+            NSMutableArray<NSURL *> *opened = [NSMutableArray array];
+            cf.revealFolderHandler = ^(NSURL *folder) { [opened addObject:folder]; };
+            [cf activate];
+            NSButton *show = cf.showPicturesButton;
+            NSTextField *gTitle = LabelBeginning(cf.view, @"Gallery (");
+            NSStackView *gRow = [show.superview isKindOfClass:NSStackView.class] ? (NSStackView *)show.superview : nil;
+            Check(show && [show.title isEqualToString:@"Show pictures in Finder"] && gTitle && gRow &&
+                  gRow.orientation == NSUserInterfaceLayoutOrientationHorizontal &&
+                  [gRow.arrangedSubviews isEqualToArray:@[gTitle, show]],
+                  @"Gallery: «Show pictures in Finder» is in the gallery's title row, right after its title");
+            [NSApp sendAction:show.action to:show.target from:show];                       // even asked, with no folder
+            Check(!show.enabled && [show.toolTip isEqualToString:@"Nothing saved yet"] && opened.count == 0 &&
+                  ![NSFileManager.defaultManager fileExistsAtPath:gOff.path],
+                  @"Gallery: with the disk Off and nothing saved, «Show pictures in Finder» is off and says «Nothing saved yet»; "
+                  @"it opens nothing and never makes the folder");
+            [NSUserDefaults.standardUserDefaults removePersistentDomainForName:suiteF];
+
+            // the disk share on (the default): once a picture from the radio is written, it opens that folder
+            NSString *suiteG = [suite stringByAppendingString:@".finder-on"];
+            NSUserDefaults *defsG = [[NSUserDefaults alloc] initWithSuiteName:suiteG];
+            NSURL *gOn = [NSURL fileURLWithPath:[root stringByAppendingPathComponent:@"gallery-finder-on"] isDirectory:YES];
+            TX500SSTVStationController *cg = NewController(defsG, gOn, lb);
+            NSMutableArray<NSURL *> *openedG = [NSMutableArray array];
+            cg.revealFolderHandler = ^(NSURL *folder) { [openedG addObject:folder]; };
+            cg.radioSourceFactory = ^id<TX500SSTVAudioSource> {
+                SSTVTestRadio *r = [SSTVTestRadio new];
+                r.file = [[TX500SSTVFileSource alloc] initWithURL:Fixture(@"M1.wav") error:nil];
+                return r;
+            };
+            [cg activate];
+            BOOL offBefore = ![NSFileManager.defaultManager fileExistsAtPath:gOn.path] && !cg.showPicturesButton.enabled &&
+                             [cg.showPicturesButton.toolTip isEqualToString:@"Nothing saved yet"];
+            [cg setEnabled:YES error:nil];
+            [cg setEnabled:NO error:nil];
+            TX500SSTVPicture *radioPic = cg.pictures.lastObject;
+            BOOL written = radioPic && !radioPic.fromFile && radioPic.savedURL &&
+                           [NSFileManager.defaultManager fileExistsAtPath:radioPic.savedURL.path];
+            Check(offBefore && written && cg.showPicturesButton.enabled && cg.showPicturesButton.toolTip == nil,
+                  @"Gallery: with the disk share on and nothing received yet it is off; once a picture from the radio is written "
+                  @"to the folder, «Show pictures in Finder» is on");
+            [cg.showPicturesButton performClick:nil];
+            Check(openedG.count == 1 && [openedG[0] isEqual:cg.galleryDirectory] && [openedG[0].path isEqualToString:gOn.path],
+                  @"Gallery: «Show pictures in Finder» opens exactly the gallery folder, once (the test's own handler, never the Finder)");
+            [cg discardQSO];
+
+            // its WAV taken away by hand (moved, as in the Finder), and no copy left in memory: Decode again says so
+            TX500SSTVStoredReception *gone = cg.recordings.receptions.firstObject;
+            cg.recordings.memoryCount = 0;
+            NSURL *wav = [cg.recordings.directory URLByAppendingPathComponent:[gone.identifier stringByAppendingString:@".wav"]];
+            NSURL *away = [NSURL fileURLWithPath:[root stringByAppendingPathComponent:@"moved-away.wav"]];
+            [cg reloadRecordings];
+            [cg.recordingsTable selectRowIndexes:[NSIndexSet indexSetWithIndex:1] byExtendingSelection:NO];
+            BOOL movedAway = gone && !gone.inMemory && gone.onDisk && [NSFileManager.defaultManager moveItemAtURL:wav toURL:away error:nil];
+            BOOL exportWasOn = cg.exportRecordingButton.enabled;                        // not refreshed yet: the row still looks kept
+            NSUInteger picsBefore = cg.pictures.count;
+            NSArray *againPics = [cg decodeAgainReception:gone mode:TX500SSTVModeAuto colourScale:TX500SSTVColourScaleStudio
+                                            scottieLayout:TX500SSTVScottieLayoutAuto fitSlant:YES slantPPM:0];
+            NSString *said = @"Its audio is no longer in the folder.";
+            Check(movedAway && againPics.count == 0 && cg.pictures.count == picsBefore &&
+                  [cg.progressLabel.stringValue isEqualToString:said] && [cg.reviewLabel.stringValue isEqualToString:said],
+                  @"Decode again: on a row whose WAV was taken away from the folder, it says «Its audio is no longer in the folder» "
+                  @"(no empty decode)");
+            Check(exportWasOn && !cg.exportRecordingButton.enabled && [[cg textForRow:1 column:@"audio"] isEqualToString:@"gone"],
+                  @"Decode again: the list is read again, and that row shows its audio gone");
+            [NSUserDefaults.standardUserDefaults removePersistentDomainForName:suiteG];
+
+            // the folder made and taken away by hand, as in the Finder: showing the screen and reading the list
+            // again turn the button on and off; a click after it has gone opens nothing and never makes it again
+            NSString *suiteH = [suite stringByAppendingString:@".finder-hand"];
+            NSUserDefaults *defsH = [[NSUserDefaults alloc] initWithSuiteName:suiteH];
+            NSURL *gHand = [NSURL fileURLWithPath:[root stringByAppendingPathComponent:@"gallery-finder-hand"] isDirectory:YES];
+            NSURL *gHandAway = [NSURL fileURLWithPath:[root stringByAppendingPathComponent:@"gallery-finder-hand-away"] isDirectory:YES];
+            TX500SSTVStationController *ch = NewController(defsH, gHand, lb);
+            NSMutableArray<NSURL *> *openedH = [NSMutableArray array];
+            ch.revealFolderHandler = ^(NSURL *folder) { [openedH addObject:folder]; };
+            [ch activate];
+            BOOL offFirst = !ch.showPicturesButton.enabled;
+            BOOL made = [NSFileManager.defaultManager createDirectoryAtURL:gHand withIntermediateDirectories:YES attributes:nil error:nil];
+            [ch activate];
+            BOOL onActivate = ch.showPicturesButton.enabled && ch.showPicturesButton.toolTip == nil;
+            BOOL away1 = [NSFileManager.defaultManager moveItemAtURL:gHand toURL:gHandAway error:nil];
+            [ch activate];
+            BOOL offActivate = !ch.showPicturesButton.enabled && [ch.showPicturesButton.toolTip isEqualToString:@"Nothing saved yet"];
+            BOOL back = [NSFileManager.defaultManager moveItemAtURL:gHandAway toURL:gHand error:nil];
+            [ch reloadRecordings];
+            BOOL onReload = ch.showPicturesButton.enabled && ch.showPicturesButton.toolTip == nil;
+            BOOL away2 = [NSFileManager.defaultManager moveItemAtURL:gHand toURL:gHandAway error:nil];
+            [ch reloadRecordings];
+            BOOL offReload = !ch.showPicturesButton.enabled && [ch.showPicturesButton.toolTip isEqualToString:@"Nothing saved yet"];
+            Check(offFirst && made && onActivate && away1 && offActivate && back && onReload && away2 && offReload,
+                  @"Gallery: with the folder made and then taken away by hand, showing the screen and reading the list again "
+                  @"turn «Show pictures in Finder» on and off");
+            BOOL back2 = [NSFileManager.defaultManager moveItemAtURL:gHandAway toURL:gHand error:nil];
+            [ch reloadRecordings];
+            BOOL onAgain = ch.showPicturesButton.enabled;
+            BOOL away3 = [NSFileManager.defaultManager moveItemAtURL:gHand toURL:gHandAway error:nil];
+            [NSApp sendAction:ch.showPicturesButton.action to:ch.showPicturesButton.target from:ch.showPicturesButton];
+            Check(back2 && onAgain && away3 && openedH.count == 0 && !ch.showPicturesButton.enabled &&
+                  ![NSFileManager.defaultManager fileExistsAtPath:gHand.path],
+                  @"Gallery: a click on «Show pictures in Finder» after its folder has gone opens nothing, turns it off, "
+                  @"and never makes the folder");
+            [NSUserDefaults.standardUserDefaults removePersistentDomainForName:suiteH];
+        }
+
         // 10. the fax, files only (FX1, FX2, FX4, FX30)
         {
             TX500FaxEngine *fe = [TX500FaxEngine new];

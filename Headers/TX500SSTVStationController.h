@@ -40,6 +40,9 @@ FOUNDATION_EXPORT NSString *const TX500SSTVEnabledDefaultsKey;
 /// Asked before the Mac's own input is opened: YES opens it. By default a question on
 /// the screen, with Cancel as the default answer; the tests give their own answer.
 @property (nonatomic, copy, nullable) BOOL (^confirmBuiltInInput)(NSString *deviceName);
+/// Opens the gallery folder for «Show pictures in Finder». By default the Finder opens it
+/// (NSWorkspace openURL:); the tests give their own, so no Finder window opens.
+@property (nonatomic, copy, nullable) void (^revealFolderHandler)(NSURL *folder);
 
 @property (nonatomic, readonly) BOOL enabled;
 /// The fax, files only for now: the second part of this screen (one sidebar entry, «SSTV»).
@@ -112,6 +115,9 @@ FOUNDATION_EXPORT NSString *const TX500SSTVEnabledDefaultsKey;
 @property (nonatomic, readonly) NSImageView *draftPictureView;
 @property (nonatomic, readonly) BOOL draftShowsPicture;
 @property (nonatomic, readonly) NSButton *uploadCheckbox, *recordButton, *discardButton, *exportButton;
+/// «Show pictures in Finder», in the gallery's title row: it opens galleryDirectory. Off, with the
+/// tooltip «Nothing saved yet», while that folder does not exist; it never makes the folder.
+@property (nonatomic, readonly) NSButton *showPicturesButton;
 
 /// Showing the screen: refreshes it; never opens the audio.
 - (void)activate;

@@ -28,6 +28,7 @@ static NSString *const TX500SSTVDiskShareDefaultsKey = @"TX500SSTVDiskShare";   
 @property (nonatomic, readwrite) NSView *recordPanel;
 @property (nonatomic, readwrite) NSTextField *callField, *frequencyField, *bandLabel, *rsvField, *draftProblemLabel, *draftInfoLabel;
 @property (nonatomic, readwrite) NSTextField *uploadNote, *recordNote;
+@property (nonatomic, readwrite) NSButton *showPicturesButton;
 @property (nonatomic, strong) NSStackView *galleryStack;
 @property (nonatomic, strong, nullable) TX500SSTVRecordingStore *store;
 @property (nonatomic, strong) NSMutableArray<TX500SSTVLogDraft *> *waitingDrafts;   // one form at a time; none lost
@@ -306,6 +307,8 @@ static NSStackView *SSTVColumn(NSArray<NSView *> *views, CGFloat spacing) {
     galleryScroll.documentView = self.galleryStack;
     [galleryScroll.heightAnchor constraintEqualToConstant:80].active = YES;
     [galleryScroll.widthAnchor constraintEqualToConstant:520].active = YES;
+    self.showPicturesButton = [NSButton buttonWithTitle:@"Show pictures in Finder" target:self action:@selector(showPicturesClicked:)];
+    [self refreshShowPicturesButton];
 
     // the recent receptions, and what can be done with the selected one
     self.recordingsTable = [[NSTableView alloc] initWithFrame:NSZeroRect];
@@ -362,7 +365,8 @@ static NSStackView *SSTVColumn(NSArray<NSView *> *views, CGFloat spacing) {
         self.diskSummaryLabel,
         pictures,
         self.recordPanel,
-        [NSTextField labelWithString:@"Gallery (the last pictures; those from the radio are also kept as PNGs, within the disk share):"], galleryScroll,
+        SSTVRow(@[[NSTextField labelWithString:@"Gallery (the last pictures; those from the radio are also kept as PNGs, within the disk share):"],
+                  self.showPicturesButton]), galleryScroll,
         [NSTextField labelWithString:@"Recent receptions (the last ones in memory; the recent ones also on disk, within the share above):"],
         recScroll,
         SSTVRow(@[self.decodeAgainButton, self.keepCheckbox, self.exportRecordingButton, self.recordRowButton, self.discardRowButton]),
@@ -727,7 +731,7 @@ static NSString *SSTVSize(double bytes) {
     // Export… when the operator wants it
     if (!picture.fromFile && self.recordings.effectiveCapBytes > 0 &&
         [self.recordings newPictureFitsShare:(unsigned long long)(picture.width * picture.height * 3)]) {
-        if ([picture writePNGToURL:u error:&err]) picture.savedURL = u;
+        if ([picture writePNGToURL:u error:&err]) { picture.savedURL = u; [self refreshShowPicturesButton]; }
         else [self log:[NSString stringWithFormat:@"Could not keep the picture in the gallery: %@", err.localizedDescription]];
     }
     if (live) [self showPicture:picture]; else [self showReviewPicture:picture];
@@ -857,8 +861,17 @@ static NSString *SSTVSize(double bytes) {
 - (NSArray<TX500SSTVPicture *> *)decodeAgainReception:(TX500SSTVStoredReception *)reception mode:(TX500SSTVModeChoice)mode
                                           colourScale:(TX500SSTVColourScale)scale scottieLayout:(TX500SSTVScottieLayout)layout
                                              fitSlant:(BOOL)fitSlant slantPPM:(double)ppm {
-    TX500SSTVRecording *audio = [self.recordings recordingForReception:reception];
-    if (!audio) { self.reviewLabel.stringValue = @"The audio of that reception is no longer kept."; return @[]; }
+    NSError *why = nil;
+    TX500SSTVRecording *audio = [self.recordings recordingForReception:reception error:&why];
+    if (!audio) {
+        // its WAV taken away by hand, in the Finder: said, and the list shows it gone (never an empty decode)
+        if (why.code == 32 && [why.domain isEqualToString:@"TX500SSTVErrorDomain"]) {
+            self.progressLabel.stringValue = why.localizedDescription;
+            self.reviewLabel.stringValue = why.localizedDescription;
+            [self reloadRecordings];
+        } else self.reviewLabel.stringValue = @"The audio of that reception is no longer kept.";
+        return @[];
+    }
     NSArray<TX500SSTVPicture *> *pics = [TX500SSTVRecordingStore decodeAgain:audio mode:mode colourScale:scale scottieLayout:layout
                                                                     fitSlant:fitSlant slantPPM:ppm];
     for (TX500SSTVPicture *p in pics) {
@@ -1148,6 +1161,24 @@ static NSString *SSTVUTC(NSDate *d) {
     [self.recordingsTable reloadData];
     [self updateRowButtons];
     [self refreshDiskSummary];
+    [self refreshShowPicturesButton];
+}
+
+// «Show pictures in Finder» only once the gallery folder exists: it is never made here
+- (void)refreshShowPicturesButton {
+    BOOL dir = NO;
+    BOOL there = self.galleryDirectory && [NSFileManager.defaultManager fileExistsAtPath:self.galleryDirectory.path isDirectory:&dir] && dir;
+    self.showPicturesButton.enabled = there;
+    self.showPicturesButton.toolTip = there ? nil : @"Nothing saved yet";
+}
+
+- (void)showPicturesClicked:(id)sender {
+    (void)sender;
+    [self refreshShowPicturesButton];                               // it may have gone since
+    if (!self.showPicturesButton.enabled) return;
+    NSURL *folder = self.galleryDirectory;
+    if (self.revealFolderHandler) self.revealFolderHandler(folder);
+    else [[NSWorkspace sharedWorkspace] openURL:folder];
 }
 
 - (void)updateRowButtons {

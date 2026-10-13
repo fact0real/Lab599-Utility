@@ -536,9 +536,20 @@ static NSURL *SSTVExisting(NSURL *u) {
 }
 
 - (nullable TX500SSTVRecording *)recordingForReception:(TX500SSTVStoredReception *)reception {
+    return [self recordingForReception:reception error:nil];
+}
+
+- (nullable TX500SSTVRecording *)recordingForReception:(TX500SSTVStoredReception *)reception error:(NSError **)error {
     if (reception.memory) return reception.memory;
-    if (!reception.onDisk) return nil;
-    TX500SSTVRecording *r = [TX500SSTVRecording recordingFromWAVAtURL:reception.file error:nil];
+    if (!reception.onDisk) {
+        // the store forgets the file of what it removes itself: a file still named here was taken away by hand
+        if (reception.file && error)
+            *error = [NSError errorWithDomain:@"TX500SSTVErrorDomain" code:32
+                                     userInfo:@{NSLocalizedDescriptionKey: @"Its audio is no longer in the folder."}];
+        return nil;
+    }
+    TX500SSTVRecording *r = [TX500SSTVRecording recordingFromWAVAtURL:reception.file error:error];
+    if (!r) return nil;
     r.modeKey = reception.modeKey; r.endUTC = reception.endUTC; r.fromFile = reception.fromFile; r.keep = reception.keep;
     r.timeAnchors = reception.timeAnchors;
     r.fileURL = reception.file;

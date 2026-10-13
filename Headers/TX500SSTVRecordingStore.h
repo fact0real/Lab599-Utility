@@ -100,6 +100,9 @@ NS_ASSUME_NONNULL_BEGIN
 - (NSUInteger)keptCount;
 /// Its audio, from memory or from disk; nil if it has gone.
 - (nullable TX500SSTVRecording *)recordingForReception:(TX500SSTVStoredReception *)reception;
+/// The same, and why when it is nil: code 32 when its WAV was on disk and is no longer in the folder
+/// (removed by hand, in the Finder); the WAV's own error when it is there but cannot be read.
+- (nullable TX500SSTVRecording *)recordingForReception:(TX500SSTVStoredReception *)reception error:(NSError **)error;
 /// Decodes a recording again with other choices, in an engine of its own. The pictures keep where
 /// the audio came from (the radio, or a file: practice) and the time it was received; the screen
 /// sees that Record QSO is offered only once per reception.

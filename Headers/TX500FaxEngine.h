@@ -30,6 +30,8 @@ typedef NS_ENUM(NSInteger, TX500FaxLineStart) {
 @property (nonatomic, readonly) NSUInteger decode;
 /// The name of the file it came from.
 @property (nonatomic, readonly, copy) NSString *fileName;
+/// Its PNG in the Fax folder, once the operator saved it there with «Save to the Fax folder» (nil: not saved).
+@property (nonatomic, copy, nullable) NSURL *savedURL;
 - (NSBitmapImageRep *)bitmap;
 - (NSImage *)image;
 - (BOOL)writePNGToURL:(NSURL *)url error:(NSError **)error;

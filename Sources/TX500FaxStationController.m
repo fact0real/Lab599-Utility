@@ -17,7 +17,95 @@
 @property (nonatomic) NSInteger stripSerial;
 @property (nonatomic, readwrite) NSSlider *marginSlider;
 @property (nonatomic, readwrite) NSImageView *pictureView;
-@property (nonatomic, readwrite) NSButton *openButton, *againButton, *exportButton;
+@property (nonatomic, readwrite) NSButton *openButton, *againButton, *exportButton, *saveButton, *showChartsButton;
+@property (nonatomic, readwrite) NSTextField *folderLabel;
+@end
+
+// Whether a chart has its PNG in the Fax folder now. What its X does depends on this alone: a chart saved and
+// then taken away by hand, in the Finder, has none.
+static BOOL FaxHasFile(TX500FaxChart *_Nullable c) {
+    BOOL dir = NO;
+    return c.savedURL && [NSFileManager.defaultManager fileExistsAtPath:c.savedURL.path isDirectory:&dir] && !dir;
+}
+
+static NSString *FaxRemoveTitle(TX500FaxChart *_Nullable c) { return FaxHasFile(c) ? @"Move to Trash" : @"Remove from this session's charts"; }
+
+/// A thumbnail of the strip: a click shows its chart. A discreet X at its top right, in sight only while the
+/// pointer is over it, the Delete key while it has the focus (a click or Tab gives it the focus), its menu and
+/// its VoiceOver action take it out of the strip: each sends removeAction to its target, with its tag. It never
+/// holds its chart.
+@interface FaxThumbnailButton : NSButton <NSMenuDelegate>
+@property (nonatomic, weak, nullable) TX500FaxChart *chart;
+@property (nonatomic, strong) NSButton *removeButton;
+@property (nonatomic) SEL removeAction;
+@end
+
+@implementation FaxThumbnailButton
+
++ (instancetype)thumbnailWithImage:(NSImage *)image chart:(TX500FaxChart *)chart tag:(NSInteger)tag
+                            target:(id)target action:(SEL)action removeAction:(SEL)removeAction {
+    FaxThumbnailButton *b = [self buttonWithImage:image target:target action:action];
+    b.imageScaling = NSImageScaleProportionallyUpOrDown;
+    b.bordered = NO;
+    b.tag = tag;
+    b.chart = chart;
+    b.removeAction = removeAction;
+    NSImage *x = [NSImage imageWithSystemSymbolName:@"xmark.circle.fill" accessibilityDescription:nil];
+    b.removeButton = x ? [NSButton buttonWithImage:x target:target action:removeAction] : [NSButton buttonWithTitle:@"×" target:target action:removeAction];
+    b.removeButton.bordered = NO;
+    b.removeButton.tag = tag;
+    b.removeButton.contentTintColor = NSColor.secondaryLabelColor;
+    b.removeButton.hidden = YES;
+    b.removeButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [b addSubview:b.removeButton];
+    [b.removeButton.widthAnchor constraintEqualToConstant:16].active = YES;
+    [b.removeButton.heightAnchor constraintEqualToConstant:16].active = YES;
+    [b.removeButton.topAnchor constraintEqualToAnchor:b.topAnchor constant:2].active = YES;
+    [b.removeButton.trailingAnchor constraintEqualToAnchor:b.trailingAnchor constant:-2].active = YES;
+    [b addTrackingArea:[[NSTrackingArea alloc] initWithRect:NSZeroRect
+                                                    options:NSTrackingMouseEnteredAndExited | NSTrackingActiveInActiveApp | NSTrackingInVisibleRect
+                                                      owner:b userInfo:nil]];
+    NSMenu *menu = [NSMenu new];
+    NSMenuItem *item = [menu addItemWithTitle:@"" action:removeAction keyEquivalent:@""];
+    item.target = target;
+    item.tag = tag;
+    menu.delegate = b;
+    b.menu = menu;
+    [b refreshRemoveTitle];
+    return b;
+}
+
+// the words follow the chart: «Move to Trash» while its PNG is in the folder, otherwise «Remove from this session's charts»
+- (void)refreshRemoveTitle {
+    NSString *t = FaxRemoveTitle(self.chart);
+    self.removeButton.toolTip = t;
+    self.removeButton.accessibilityLabel = t;
+    self.menu.itemArray.firstObject.title = t;
+    // VoiceOver never finds the X, hidden until the pointer is over it: the same action is the thumbnail's own
+    __weak FaxThumbnailButton *weakSelf = self;
+    self.accessibilityCustomActions = @[[[NSAccessibilityCustomAction alloc] initWithName:t handler:^BOOL {
+        FaxThumbnailButton *b = weakSelf;
+        return b && b.enabled && [NSApp sendAction:b.removeAction to:b.target from:b];
+    }]];
+}
+
+// the keyboard reaches a thumbnail by a click or by Tab, with its focus ring, so that the Delete key can act on it
+- (BOOL)acceptsFirstResponder { return self.enabled; }
+- (BOOL)canBecomeKeyView { return self.enabled; }
+
+- (void)menuNeedsUpdate:(NSMenu *)menu { (void)menu; [self refreshRemoveTitle]; }
+- (void)mouseEntered:(NSEvent *)event { (void)event; [self refreshRemoveTitle]; self.removeButton.hidden = NO; }
+- (void)mouseExited:(NSEvent *)event { (void)event; self.removeButton.hidden = YES; }
+
+- (void)keyDown:(NSEvent *)event {
+    NSString *k = event.charactersIgnoringModifiers;
+    unichar ch = k.length ? [k characterAtIndex:0] : 0;
+    if (ch == NSDeleteCharacter || ch == NSBackspaceCharacter || ch == NSDeleteFunctionKey) {
+        [NSApp sendAction:self.removeAction to:self.target from:self];
+        return;
+    }
+    [super keyDown:event];
+}
 @end
 
 static NSTextField *FaxNote(void) {
@@ -60,9 +148,10 @@ static NSImage *FaxThumbnail(TX500FaxChart *c) {
     return t;
 }
 
-// what VoiceOver and the tooltip say of a thumbnail
+// what VoiceOver and the tooltip say of a thumbnail, and where it was saved, once it was
 static NSString *FaxThumbnailName(TX500FaxChart *c) {
-    return [NSString stringWithFormat:@"Chart %ld of %@, %ld lines", (long)c.index + 1, c.fileName, (long)c.height];
+    NSString *name = [NSString stringWithFormat:@"Chart %ld of %@, %ld lines", (long)c.index + 1, c.fileName, (long)c.height];
+    return c.savedURL ? [name stringByAppendingFormat:@", saved as %@", c.savedURL.lastPathComponent] : name;
 }
 
 @implementation TX500FaxStationController
@@ -72,6 +161,9 @@ static NSString *FaxThumbnailName(TX500FaxChart *c) {
         _engine = [TX500FaxEngine new];
         _galleryInMemory = 12;
         _stripCharts = [NSMutableDictionary dictionary];
+        NSURL *support = [NSFileManager.defaultManager URLsForDirectory:NSApplicationSupportDirectory inDomains:NSUserDomainMask].firstObject;
+        _faxDirectory = [[support URLByAppendingPathComponent:@"Lab599 Utility" isDirectory:YES]
+                         URLByAppendingPathComponent:@"Fax" isDirectory:YES];
         [self buildView];
     }
     return self;
@@ -92,7 +184,12 @@ static NSString *FaxThumbnailName(TX500FaxChart *c) {
     self.openButton = [NSButton buttonWithTitle:@"Open WAV…" target:self action:@selector(openClicked:)];
     self.againButton = [NSButton buttonWithTitle:@"Decode again" target:self action:@selector(againClicked:)];
     self.exportButton = [NSButton buttonWithTitle:@"Export…" target:self action:@selector(exportClicked:)];
-    self.againButton.enabled = NO; self.exportButton.enabled = NO;
+    self.saveButton = [NSButton buttonWithTitle:@"Save to the Fax folder" target:self action:@selector(saveClicked:)];
+    self.againButton.enabled = NO; self.exportButton.enabled = NO; self.saveButton.enabled = NO;
+    self.showChartsButton = [NSButton buttonWithTitle:@"Show charts in Finder" target:self action:@selector(showChartsClicked:)];
+    // what Save and the X did
+    self.folderLabel = FaxNote();
+    self.folderLabel.hidden = YES;
     self.practiceLabel = FaxNote();
     // what could not be done, apart from the file's own lines (N2-fax-app-17)
     self.errorLabel = FaxNote();
@@ -132,10 +229,10 @@ static NSString *FaxThumbnailName(TX500FaxChart *c) {
 
     // the chart with its title, and its own buttons under it; Decode again goes with the options it applies
     NSStackView *left = FaxColumn(@[FaxTitle(@"Offline decoding (a WAV file)"), intro, self.errorLabel, self.practiceLabel, self.pictureView,
-                                    FaxRow(@[self.openButton, self.exportButton, self.chartPopup]),
+                                    FaxRow(@[self.openButton, self.exportButton, self.saveButton, self.chartPopup]), self.folderLabel,
                                     FaxRow(@[[NSTextField labelWithString:@"Margin, after receiving:"], self.marginSlider, self.marginLabel]),
                                     self.marginNote, self.infoLabel, self.noticeLabel,
-                                    [NSTextField labelWithString:@"This session's charts"], stripScroll], 8);
+                                    FaxRow(@[[NSTextField labelWithString:@"This session's charts"], self.showChartsButton]), stripScroll], 8);
     NSStackView *right = FaxColumn(@[
         [NSTextField labelWithString:@"Options (each with what it is good and not good for)"],
         FaxRow(@[[NSTextField labelWithString:@"Deviation:"], self.deviationPopup]), self.deviationNote,
@@ -150,6 +247,7 @@ static NSString *FaxThumbnailName(TX500FaxChart *c) {
     root.translatesAutoresizingMaskIntoConstraints = NO;
     self.view = root;
     [self refreshNotes];
+    [self refreshShowChartsButton];
 }
 
 - (void)refreshNotes {
@@ -178,6 +276,11 @@ static NSString *FaxThumbnailName(TX500FaxChart *c) {
     self.errorLabel.hidden = text.length == 0;
 }
 
+- (void)sayDone:(nullable NSString *)text {
+    self.folderLabel.stringValue = text ?: @"";
+    self.folderLabel.hidden = text.length == 0;
+}
+
 - (nullable NSTextField *)noteForPopup:(NSPopUpButton *)popup {
     NSArray *pairs = @[@[self.deviationPopup, self.deviationNote], @[self.lpmPopup, self.lpmNote], @[self.iocPopup, self.iocNote],
                        @[self.widthPopup, self.widthNote], @[self.lineStartPopup, self.lineStartNote]];
@@ -202,6 +305,7 @@ static NSString *FaxThumbnailName(TX500FaxChart *c) {
     [self applyChoices];
     if (![self.engine decodeFileAtURL:url error:error]) return NO;
     [self sayError:nil];
+    [self sayDone:nil];
     self.fileURL = url;
     [self.chartPopup removeAllItems];
     NSArray<TX500FaxChart *> *charts = self.engine.charts;
@@ -238,7 +342,7 @@ static NSString *FaxThumbnailName(TX500FaxChart *c) {
     if (!c) {
         self.pictureView.image = [[NSImage alloc] initWithSize:NSMakeSize(604, 400)];
         self.infoLabel.stringValue = @"No chart in this file.";
-        self.exportButton.enabled = NO; self.marginSlider.enabled = NO; self.marginNote.hidden = YES;
+        self.exportButton.enabled = NO; self.saveButton.enabled = NO; self.marginSlider.enabled = NO; self.marginNote.hidden = YES;
         return;
     }
     NSUInteger place = [self placeInOpenFile:c];
@@ -252,7 +356,7 @@ static NSString *FaxThumbnailName(TX500FaxChart *c) {
                                   (long)c.height, c.complete ? @"" : @" (incomplete)", phasing, c.linePeriodMs, c.slantPPM,
                                   c.offsetHz, c.marginSource,
                                   c.lostLines ? [NSString stringWithFormat:@" · %ld lines lost in cuts, in grey", (long)c.lostLines] : @""];
-    self.exportButton.enabled = YES;
+    self.exportButton.enabled = YES; self.saveButton.enabled = YES;
     self.marginSlider.enabled = place != NSNotFound;
     self.marginNote.hidden = place != NSNotFound;
 }
@@ -283,6 +387,151 @@ static NSString *FaxThumbnailName(TX500FaxChart *c) {
     return [NSString stringWithFormat:@"%@-chart-%ld.png", stem, (long)(shown ? shown.index : 0) + 1];
 }
 
+#pragma mark - the Fax folder
+
+- (void)setFaxDirectory:(NSURL *)faxDirectory {
+    _faxDirectory = [faxDirectory copy];
+    [self refreshShowChartsButton];
+}
+
+// one click, no dialog: the operator's own copy, never within the disk share, never over another file
+- (nullable NSURL *)saveShownToFaxFolder:(NSError **)error {
+    TX500FaxChart *c = self.displayedChart;
+    NSURL *folder = self.faxDirectory;
+    if (!c || !folder) {
+        if (error) *error = [NSError errorWithDomain:@"TX500FaxErrorDomain" code:5 userInfo:@{NSLocalizedDescriptionKey: @"No chart is shown."}];
+        return nil;
+    }
+    NSData *png = [[c bitmap] representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+    if (!png) {
+        if (error) *error = [NSError errorWithDomain:@"TX500FaxErrorDomain" code:2 userInfo:@{NSLocalizedDescriptionKey: @"The chart could not be made into a PNG."}];
+        return nil;
+    }
+    NSFileManager *fm = NSFileManager.defaultManager;
+    if (![fm createDirectoryAtURL:folder withIntermediateDirectories:YES attributes:nil error:error]) return nil;
+    NSString *stem = self.exportName.stringByDeletingPathExtension;
+    for (int k = 1; k < 1000; k++) {
+        NSString *name = k == 1 ? [stem stringByAppendingString:@".png"] : [NSString stringWithFormat:@"%@-%d.png", stem, k];
+        NSURL *u = [folder URLByAppendingPathComponent:name];
+        if ([fm fileExistsAtPath:u.path]) continue;
+        NSError *err = nil;
+        // never over a file, even one that came between the look and the write
+        if ([png writeToURL:u options:NSDataWritingWithoutOverwriting error:&err]) {
+            c.savedURL = u;
+            [self refreshThumbnailOf:c];
+            [self refreshShowChartsButton];
+            [self sayError:nil];
+            [self sayDone:[NSString stringWithFormat:@"Saved as %@ in the Fax folder.", name]];
+            if (self.logHandler) self.logHandler([NSString stringWithFormat:@"[Fax] Saved %@ in the Fax folder.", name]);
+            return u;
+        }
+        if ([err.domain isEqualToString:NSCocoaErrorDomain] && err.code == NSFileWriteFileExistsError) continue;
+        if (error) *error = err;
+        return nil;
+    }
+    if (error) *error = [NSError errorWithDomain:@"TX500FaxErrorDomain" code:6 userInfo:@{NSLocalizedDescriptionKey: @"Every name for this chart is taken in the Fax folder."}];
+    return nil;
+}
+
+// «Show charts in Finder» only once the Fax folder exists: it is never made here
+- (void)refreshShowChartsButton {
+    BOOL dir = NO;
+    BOOL there = self.faxDirectory && [NSFileManager.defaultManager fileExistsAtPath:self.faxDirectory.path isDirectory:&dir] && dir;
+    self.showChartsButton.enabled = there;
+    self.showChartsButton.toolTip = there ? nil : @"Nothing saved yet";
+}
+
+- (void)showChartsClicked:(id)sender {
+    (void)sender;
+    [self refreshShowChartsButton];                                 // it may have gone since
+    if (!self.showChartsButton.enabled) return;
+    NSURL *folder = self.faxDirectory;
+    if (self.revealFolderHandler) self.revealFolderHandler(folder);
+    else [[NSWorkspace sharedWorkspace] openURL:folder];
+}
+
+- (void)saveClicked:(id)sender {
+    (void)sender;
+    NSError *err = nil;
+    if (![self saveShownToFaxFolder:&err]) [self sayError:err.localizedDescription ?: @"The chart could not be saved."];
+}
+
+// the question itself; Cancel is the default answer
+- (BOOL)askBeforeTrashing:(NSString *)text {
+    NSAlert *a = [NSAlert new];
+    a.messageText = @"Move this chart to the Trash?";
+    a.informativeText = text;
+    [a addButtonWithTitle:@"Cancel"];
+    [a addButtonWithTitle:@"Move to Trash"];
+    return [a runModal] == NSAlertSecondButtonReturn;
+}
+
+- (BOOL)removeChartFromSession:(TX500FaxChart *)chart {
+    if ([self.sessionCharts indexOfObjectIdenticalTo:chart] == NSNotFound) return NO;
+    BOOL file = FaxHasFile(chart);
+    if (file) {
+        NSURL *png = chart.savedURL;
+        NSString *name = png.lastPathComponent;
+        NSString *text = [NSString stringWithFormat:@"%@ goes to the Trash, and the chart leaves this session's charts.", name];
+        if (!(self.confirmMoveToTrash ? self.confirmMoveToTrash(text) : [self askBeforeTrashing:text])) return NO;
+        // to the Trash, never removed for good; when it cannot go, it says so and nothing changes
+        NSError *err = nil;
+        BOOL moved = self.trashHandler ? self.trashHandler(png, &err)
+                                       : [NSFileManager.defaultManager trashItemAtURL:png resultingItemURL:nil error:&err];
+        if (!moved) {
+            [self sayError:[NSString stringWithFormat:@"The chart could not be moved to the Trash: %@", err.localizedDescription ?: @"unknown error"]];
+            return NO;
+        }
+        if (self.logHandler) self.logHandler([NSString stringWithFormat:@"[Fax] Moved %@ to the Trash (removed from this session's charts).", name]);
+        chart.savedURL = nil;                                       // no copy of it in the folder any more
+    }
+    [self forgetThumbnailOf:chart];
+    NSString *done = file ? @"Removed from this session's charts; its PNG is in the Trash." : @"Removed from this session's charts.";
+    [self sayError:nil];
+    [self sayDone:done];
+    if (self.displayedChart == chart) {
+        self.displayedChart = nil;
+        self.shownChart = -1;
+        [self.chartPopup selectItem:nil];
+        self.pictureView.image = [[NSImage alloc] initWithSize:NSMakeSize(604, 400)];
+        self.infoLabel.stringValue = done;
+        self.exportButton.enabled = NO; self.saveButton.enabled = NO;
+        self.marginSlider.enabled = NO; self.marginNote.hidden = YES;
+        self.marginSlider.doubleValue = 0; self.marginLabel.stringValue = @"0 points";
+    }
+    [self refreshShowChartsButton];
+    return YES;
+}
+
+// its thumbnail leaves the strip; it lives on until this event is over, as its own X may be what was clicked
+- (void)forgetThumbnailOf:(TX500FaxChart *)chart {
+    for (NSView *v in self.sessionStrip.arrangedSubviews.copy) {
+        if (![v isKindOfClass:NSButton.class]) continue;
+        NSNumber *k = @(((NSButton *)v).tag);
+        if (self.stripCharts[k] != chart) continue;
+        [self.stripCharts removeObjectForKey:k];
+        (void)CFAutorelease(CFBridgingRetain(v));
+        [self.sessionStrip removeArrangedSubview:v];
+        [v removeFromSuperview];
+    }
+}
+
+// a chart saved: its thumbnail says where
+- (void)refreshThumbnailOf:(TX500FaxChart *)chart {
+    for (NSView *v in self.sessionStrip.arrangedSubviews) {
+        if (![v isKindOfClass:NSButton.class] || self.stripCharts[@(((NSButton *)v).tag)] != chart) continue;
+        v.toolTip = FaxThumbnailName(chart);
+        v.accessibilityLabel = FaxThumbnailName(chart);
+        if ([v isKindOfClass:FaxThumbnailButton.class]) [(FaxThumbnailButton *)v refreshRemoveTitle];
+    }
+}
+
+// the X of a thumbnail, the Delete key on it and its menu: the same action
+- (void)removeThumbnailClicked:(id)sender {
+    TX500FaxChart *c = self.stripCharts[@([sender tag])];
+    if (c) [self removeChartFromSession:c];
+}
+
 #pragma mark - this session's charts
 
 - (NSArray<TX500FaxChart *> *)sessionCharts {
@@ -296,10 +545,8 @@ static NSString *FaxThumbnailName(TX500FaxChart *c) {
 
 // newest last; the strip keeps its own reference to the chart (its greys never change), and the oldest leave first
 - (void)addToStrip:(TX500FaxChart *)c {
-    NSButton *b = [NSButton buttonWithImage:FaxThumbnail(c) target:self action:@selector(thumbnailClicked:)];
-    b.imageScaling = NSImageScaleProportionallyUpOrDown;
-    b.bordered = NO;
-    b.tag = ++self.stripSerial;
+    FaxThumbnailButton *b = [FaxThumbnailButton thumbnailWithImage:FaxThumbnail(c) chart:c tag:++self.stripSerial target:self
+                                                            action:@selector(thumbnailClicked:) removeAction:@selector(removeThumbnailClicked:)];
     self.stripCharts[@(b.tag)] = c;
     b.toolTip = FaxThumbnailName(c);
     b.accessibilityLabel = FaxThumbnailName(c);
@@ -334,6 +581,10 @@ static NSString *FaxThumbnailName(TX500FaxChart *c) {
         b.image = FaxThumbnail(moved);
         b.toolTip = FaxThumbnailName(moved);
         b.accessibilityLabel = FaxThumbnailName(moved);
+        if ([b isKindOfClass:FaxThumbnailButton.class]) {
+            ((FaxThumbnailButton *)b).chart = moved;
+            [(FaxThumbnailButton *)b refreshRemoveTitle];
+        }
     }
 }
 

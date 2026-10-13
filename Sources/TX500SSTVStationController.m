@@ -1404,6 +1404,7 @@ static NSString *SSTVUTC(NSDate *d) {
     BOOL fax = sender.selectedSegment == 1;
     self.sstvPane.hidden = fax;
     self.faxController.view.hidden = !fax;
+    if (fax) [self.faxController refreshShowChartsButton];          // its folder may have come or gone in the Finder
 }
 
 - (void)toggleAgainPanel:(id)sender { (void)sender; self.againPanel.hidden = !self.againPanel.hidden; }

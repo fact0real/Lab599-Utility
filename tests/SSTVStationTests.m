@@ -204,6 +204,26 @@ static NSArray<NSButton *> *StripButtons(TX500FaxStationController *f) {
     return b;
 }
 
+// the X of a fax thumbnail: the button inside it
+static NSButton *FaxXOf(NSView *thumb) {
+    for (NSView *s in thumb.subviews) if ([s isKindOfClass:NSButton.class]) return (NSButton *)s;
+    return nil;
+}
+
+// every file under a folder, with its size and modification time: what is on disk there
+static NSArray<NSString *> *FaxDiskSnapshot(NSURL *dir) {
+    NSMutableArray<NSString *> *out = [NSMutableArray array];
+    for (NSURL *u in [NSFileManager.defaultManager enumeratorAtURL:dir includingPropertiesForKeys:@[NSURLFileSizeKey, NSURLContentModificationDateKey]
+                                                           options:0 errorHandler:nil]) {
+        NSNumber *size = nil; NSDate *mod = nil;
+        [u getResourceValue:&size forKey:NSURLFileSizeKey error:nil];
+        [u getResourceValue:&mod forKey:NSURLContentModificationDateKey error:nil];
+        [out addObject:[NSString stringWithFormat:@"%@ %@ %.6f", u.path, size, mod.timeIntervalSince1970]];
+    }
+    [out sortUsingSelector:@selector(compare:)];
+    return out;
+}
+
 /// The same pixels as the core's own command line wrote for the same WAV.
 static BOOL SamePixels(TX500SSTVPicture *p, NSURL *png) {
     NSBitmapImageRep *ref = ReadPNG(png);
@@ -2245,6 +2265,9 @@ int main(int argc, const char *argv[]) {
                 NSStackView *leftSt = [leftS isKindOfClass:NSStackView.class] ? (NSStackView *)leftS : nil;
                 NSUInteger iStrip = PlaceInStack(leftSt, fs.sessionStrip), iNotices = PlaceInStack(leftSt, fs.noticeLabel);
                 NSView *above = (iStrip != NSNotFound && iStrip > 0) ? leftSt.arrangedSubviews[iStrip - 1] : nil;
+                // the strip's header: its title first (in a row, with «Show charts in Finder» after it)
+                if ([above isKindOfClass:NSStackView.class] && ((NSStackView *)above).orientation == NSUserInterfaceLayoutOrientationHorizontal)
+                    above = ((NSStackView *)above).arrangedSubviews.firstObject;
                 Check(leftSt && iStrip != NSNotFound && iNotices != NSNotFound && iNotices < iStrip && !Holds(rightS, fs.sessionStrip) &&
                       [above isKindOfClass:NSTextField.class] && [((NSTextField *)above).stringValue isEqualToString:@"This session's charts"] &&
                       PlaceInStack(leftSt, fs.marginNote) == PlaceInStack(leftSt, fs.marginSlider) + 1,
@@ -2330,6 +2353,222 @@ int main(int argc, const char *argv[]) {
             Check(openedF == 20 && aliveF.count >= 20 && fm.sessionCharts.count == 3 && StripButtons(fm).count == 3 && liveF <= 3 + openOutside,
                   [NSString stringWithFormat:@"Fax screen: 20 small files opened with a strip of 3: only %lu of their %lu charts are still in memory "
                    @"(the strip keeps 3, plus the open file's not in it: %lu)", (unsigned long)liveF, (unsigned long)aliveF.count, (unsigned long)openOutside]);
+        }
+
+        // 10c. The Fax folder: «Save to the Fax folder» writes the chart shown there, with one click and no dialog, under
+        // its own name and never over a file; nothing is written without it. «Show charts in Finder» opens exactly that
+        // folder, through the test's own handler, and is off while the folder is not there (it never makes it). The X
+        // of a thumbnail: a saved chart goes to the test's Trash after a question (Cancel the default); one not saved
+        // only leaves the strip, with no question. The SSTV recordings, their share and their lamp never see any of it
+        {
+            NSFileManager *fm = NSFileManager.defaultManager;
+            NSURL *faxDir = [NSURL fileURLWithPath:[root stringByAppendingPathComponent:@"fax-folder"] isDirectory:YES];
+            NSURL *faxTrash = [NSURL fileURLWithPath:[root stringByAppendingPathComponent:@"fax-trash"] isDirectory:YES];
+            [fm createDirectoryAtURL:faxTrash withIntermediateDirectories:YES attributes:nil error:nil];
+            // the default: Application Support/Lab599 Utility/Fax, beside the SSTV folder, never inside it
+            TX500FaxStationController *fd = [TX500FaxStationController new];
+            TX500SSTVStationController *sd = [TX500SSTVStationController new];
+            NSString *sstvDefault = sd.galleryDirectory.path.stringByStandardizingPath;
+            NSString *faxDefault = fd.faxDirectory.path.stringByStandardizingPath, *faxOfSSTV = sd.faxController.faxDirectory.path.stringByStandardizingPath;
+            Check([faxDefault hasSuffix:@"/Application Support/Lab599 Utility/Fax"] && [faxOfSSTV isEqualToString:faxDefault] &&
+                  [faxDefault.stringByDeletingLastPathComponent isEqualToString:sstvDefault.stringByDeletingLastPathComponent] &&
+                  ![faxDefault isEqualToString:sstvDefault] && ![faxDefault hasPrefix:[sstvDefault stringByAppendingString:@"/"]],
+                  [NSString stringWithFormat:@"Fax folder: by default Application Support/Lab599 Utility/Fax, beside the SSTV folder and never inside it "
+                   @"(also the SSTV screen's fax part): %@", faxDefault]);
+
+            TX500FaxStationController *fz = [TX500FaxStationController new];
+            fz.faxDirectory = faxDir;
+            NSMutableArray<NSURL *> *opened = [NSMutableArray array];
+            NSMutableArray<NSString *> *asked = [NSMutableArray array];
+            NSMutableArray<NSURL *> *sentToTrash = [NSMutableArray array];       // what the test's Trash was given
+            __block BOOL answer = NO, trashFails = NO;
+            fz.revealFolderHandler = ^(NSURL *folder) { [opened addObject:folder]; };
+            fz.confirmMoveToTrash = ^BOOL(NSString *text) { [asked addObject:text]; return answer; };
+            fz.trashHandler = ^BOOL(NSURL *file, NSError **error) {
+                if (trashFails) {
+                    if (error) *error = [NSError errorWithDomain:@"FaxTests" code:1 userInfo:@{NSLocalizedDescriptionKey: @"the test's Trash is full"}];
+                    return NO;
+                }
+                [sentToTrash addObject:file];
+                return [fm moveItemAtURL:file toURL:[faxTrash URLByAppendingPathComponent:file.lastPathComponent] error:error];
+            };
+            NSButton *show = fz.showChartsButton;
+            NSStackView *headerRow = [show.superview isKindOfClass:NSStackView.class] ? (NSStackView *)show.superview : nil;
+            NSView *headerTitle = headerRow.arrangedSubviews.firstObject;
+            NSStackView *buttonsRow = [fz.saveButton.superview isKindOfClass:NSStackView.class] ? (NSStackView *)fz.saveButton.superview : nil;
+            Check([show.title isEqualToString:@"Show charts in Finder"] && headerRow && headerRow.orientation == NSUserInterfaceLayoutOrientationHorizontal &&
+                  [headerTitle isKindOfClass:NSTextField.class] && [((NSTextField *)headerTitle).stringValue isEqualToString:@"This session's charts"] &&
+                  [headerRow.arrangedSubviews isEqualToArray:@[headerTitle, show]] &&
+                  [fz.saveButton.title isEqualToString:@"Save to the Fax folder"] && buttonsRow && [buttonsRow.arrangedSubviews containsObject:fz.openButton] &&
+                  [buttonsRow.arrangedSubviews indexOfObject:fz.saveButton] == [buttonsRow.arrangedSubviews indexOfObject:fz.exportButton] + 1 &&
+                  !fz.saveButton.enabled && fz.folderLabel.hidden,
+                  @"Fax screen: «Save to the Fax folder» right after Export… under the chart (off with no chart), «Show charts in Finder» in the strip's "
+                  @"header, after its title");
+            [NSApp sendAction:show.action to:show.target from:show];                 // even asked, with no folder
+            BOOL offFirst = !show.enabled && [show.toolTip isEqualToString:@"Nothing saved yet"] && opened.count == 0 && ![fm fileExistsAtPath:faxDir.path];
+            // opening files, moving a margin, Decode again, picking charts: nothing on disk, not even the folder
+            BOOL openA = [fz openFileAtURL:Fixture(@"FAX-12000.wav")];
+            TX500FaxChart *chartA = fz.engine.charts.firstObject;
+            [fz setMarginPoints:20];
+            chartA = fz.engine.charts.firstObject;                                     // the chart as moved
+            BOOL openB = [fz openFileAtURL:Fixture(@"FAX-two.wav")] && [fz decodeAgain:nil];
+            NSArray<TX500FaxChart *> *chartsB = fz.engine.charts;
+            NSArray<NSButton *> *tz = StripButtons(fz);
+            if (tz.count == 5) [tz[0] performClick:nil];
+            Check(offFirst && openA && openB && chartsB.count == 2 && tz.count == 5 && fz.displayedChart == chartA && fz.saveButton.enabled &&
+                  ![fm fileExistsAtPath:faxDir.path] && !show.enabled && [show.toolTip isEqualToString:@"Nothing saved yet"] && chartA.savedURL == nil,
+                  @"Fax folder: before any Save it is not there, «Show charts in Finder» is off with «Nothing saved yet» (even clicked it opens "
+                  @"nothing and makes no folder), and opening files, a margin moved, Decode again and a chart picked write nothing at all");
+
+            // Save: the folder made now, the chart's own name, its picture; the strip says it is saved
+            NSError *se = nil;
+            NSURL *s1 = [fz saveShownToFaxFolder:&se];
+            NSURL *want1 = [faxDir URLByAppendingPathComponent:@"FAX-12000-chart-1.png"];
+            NSData *data1 = s1 ? [NSData dataWithContentsOfURL:s1] : nil;
+            Check(s1 && [s1.path isEqualToString:want1.path] && PNGIsChart(s1, chartA) && chartA.savedURL && [chartA.savedURL isEqual:s1] &&
+                  [tz[0].accessibilityLabel isEqualToString:@"Chart 1 of FAX-12000.wav, 120 lines, saved as FAX-12000-chart-1.png"] &&
+                  [tz[0].toolTip isEqualToString:tz[0].accessibilityLabel] &&
+                  [fz.folderLabel.stringValue isEqualToString:@"Saved as FAX-12000-chart-1.png in the Fax folder."] && !fz.folderLabel.hidden &&
+                  show.enabled && show.toolTip == nil,
+                  [NSString stringWithFormat:@"Fax folder: Save writes the chart shown into the folder (made now) as FAX-12000-chart-1.png, its own "
+                   @"picture; the strip marks it saved and «Show charts in Finder» is on: %@", s1.lastPathComponent ?: se.localizedDescription]);
+            // again: -2, -3; the first never written over
+            NSURL *s2 = [fz saveShownToFaxFolder:nil], *s3 = [fz saveShownToFaxFolder:nil];
+            // a file of the operator's own under the name the next chart would take
+            NSURL *own = [faxDir URLByAppendingPathComponent:@"FAX-two-chart-2.png"];
+            NSData *ownData = [@"the operator's own file" dataUsingEncoding:NSUTF8StringEncoding];
+            [ownData writeToURL:own atomically:YES];
+            if (tz.count == 5) [tz[4] performClick:nil];
+            TX500FaxChart *chartB2 = fz.displayedChart;
+            NSURL *s4 = [fz saveShownToFaxFolder:nil];
+            Check(s2 && s3 && s4 && [s2.lastPathComponent isEqualToString:@"FAX-12000-chart-1-2.png"] && [s3.lastPathComponent isEqualToString:@"FAX-12000-chart-1-3.png"] &&
+                  [[NSData dataWithContentsOfURL:want1] isEqualToData:data1] && PNGIsChart(s2, chartA) && PNGIsChart(s3, chartA) &&
+                  [chartA.savedURL isEqual:s3] && chartB2 == chartsB[1] && [s4.lastPathComponent isEqualToString:@"FAX-two-chart-2-2.png"] &&
+                  [[NSData dataWithContentsOfURL:own] isEqualToData:ownData] && PNGIsChart(s4, chartB2) && [chartB2.savedURL isEqual:s4],
+                  [NSString stringWithFormat:@"Fax folder: Save never writes over a file: the same chart again gives -2 and -3, and a name taken by "
+                   @"another file gives the next one, that file untouched (%@, %@, %@)", s2.lastPathComponent, s3.lastPathComponent, s4.lastPathComponent]);
+            [show performClick:nil];
+            Check(opened.count == 1 && [opened[0] isEqual:faxDir] && [opened[0].path isEqualToString:faxDir.path],
+                  @"Fax folder: «Show charts in Finder» opens exactly the Fax folder, once (the test's own handler, never the Finder)");
+
+            // the X, on a saved chart: the question; Cancel changes nothing
+            NSEvent *enter = [NSEvent enterExitEventWithType:NSEventTypeMouseEntered location:NSZeroPoint modifierFlags:0 timestamp:0
+                                                windowNumber:0 context:nil eventNumber:0 trackingNumber:0 userData:NULL];
+            NSEvent *leave = [NSEvent enterExitEventWithType:NSEventTypeMouseExited location:NSZeroPoint modifierFlags:0 timestamp:0
+                                                windowNumber:0 context:nil eventNumber:0 trackingNumber:0 userData:NULL];
+            NSString *delKey = [NSString stringWithFormat:@"%C", (unichar)NSDeleteCharacter];
+            NSEvent *del = [NSEvent keyEventWithType:NSEventTypeKeyDown location:NSZeroPoint modifierFlags:0 timestamp:0 windowNumber:0 context:nil
+                                          characters:delKey charactersIgnoringModifiers:delKey isARepeat:NO keyCode:51];
+            NSButton *xA = FaxXOf(tz[0]);
+            BOOL hidden0 = xA && xA.hidden;
+            [tz[0] mouseEntered:enter];
+            BOOL overA = xA && !xA.hidden && [xA.toolTip isEqualToString:@"Move to Trash"] && [xA.accessibilityLabel isEqualToString:@"Move to Trash"];
+            [tz[0] mouseExited:leave];
+            BOOL hiddenAfter = xA && xA.hidden;
+            [tz[1].menu.delegate menuNeedsUpdate:tz[1].menu];
+            NSString *menuNotSaved = tz[1].menu.itemArray.firstObject.title;
+            Check(hidden0 && overA && hiddenAfter && tz[0].acceptsFirstResponder && tz[0].canBecomeKeyView &&
+                  [tz[0].accessibilityCustomActions.firstObject.name isEqualToString:@"Move to Trash"] &&
+                  [menuNotSaved isEqualToString:@"Remove from this session's charts"],
+                  @"Fax screen: a thumbnail shows its X only while the pointer is over it («Move to Trash» for a saved chart, «Remove from this "
+                  @"session's charts» for one not saved, in its menu too), takes the keyboard's focus, and VoiceOver finds the same action on it");
+            if (tz.count == 5) [tz[0] performClick:nil];
+            NSArray<NSString *> *folderBefore = FaxDiskSnapshot(faxDir);
+            answer = NO;
+            [tz[0] mouseEntered:enter];
+            [xA performClick:nil];
+            Check(asked.count == 1 && [asked[0] containsString:@"FAX-12000-chart-1-3.png"] && sentToTrash.count == 0 &&
+                  [FaxDiskSnapshot(faxDir) isEqualToArray:folderBefore] && fz.sessionCharts.count == 5 && fz.sessionCharts[0] == chartA &&
+                  [chartA.savedURL isEqual:s3] && fz.displayedChart == chartA && fz.exportButton.enabled && fz.saveButton.enabled,
+                  [NSString stringWithFormat:@"Fax screen: the X on a saved chart asks first; Cancel changes nothing, on disk or on the screen: %@",
+                   asked.firstObject ?: @"no question"]);
+            // the test's Trash fails: said, and nothing changes
+            answer = YES; trashFails = YES;
+            [xA performClick:nil];
+            BOOL failSaid = [fz.errorLabel.stringValue containsString:@"could not be moved to the Trash"] && !fz.errorLabel.hidden &&
+                            [FaxDiskSnapshot(faxDir) isEqualToArray:folderBefore] && fz.sessionCharts.count == 5 && fz.displayedChart == chartA;
+            trashFails = NO;
+            // yes, through the Delete key: the PNG in the test's Trash, the chart out of the strip, the picture emptied
+            [tz[0] keyDown:del];
+            BOOL inTrash = [fm fileExistsAtPath:[faxTrash URLByAppendingPathComponent:@"FAX-12000-chart-1-3.png"].path] && ![fm fileExistsAtPath:s3.path];
+            Check(failSaid && asked.count == 3 && sentToTrash.count == 1 && [sentToTrash[0] isEqual:s3] && inTrash &&
+                  [fm fileExistsAtPath:want1.path] && [fm fileExistsAtPath:s2.path] && [fm fileExistsAtPath:s4.path] &&
+                  chartA.savedURL == nil && [fz.sessionCharts indexOfObjectIdenticalTo:chartA] == NSNotFound && fz.sessionCharts.count == 4 &&
+                  StripButtons(fz).count == 4 && fz.displayedChart == nil && !fz.exportButton.enabled && !fz.saveButton.enabled &&
+                  !fz.marginSlider.enabled && NSEqualSizes(fz.pictureView.image.size, NSMakeSize(604, 400)) &&
+                  fz.pictureView.image.representations.count == 0 && fz.errorLabel.hidden &&
+                  [fz.folderLabel.stringValue isEqualToString:@"Removed from this session's charts; its PNG is in the Trash."] &&
+                  [fz.infoLabel.stringValue isEqualToString:fz.folderLabel.stringValue],
+                  @"Fax screen: a failed move to the Trash is said and changes nothing; yes, by the Delete key: that PNG in the test's Trash (never "
+                  @"removed for good, the other saves still there), the chart out of the strip, and as it was shown the picture is emptied, "
+                  @"Export and Save are off, and the line says so");
+            // a chart not saved, by its menu: no question, nothing on disk, and the chart shown stays
+            if (StripButtons(fz).count == 4) [StripButtons(fz)[3] performClick:nil];
+            NSButton *tB1 = StripButtons(fz).count == 4 ? StripButtons(fz)[0] : nil;          // FAX-two's first chart, first decode
+            TX500FaxChart *notSaved = tB1 ? fz.sessionCharts[0] : nil;
+            NSArray<NSString *> *folderB = FaxDiskSnapshot(faxDir), *trashB = FaxDiskSnapshot(faxTrash);
+            NSUInteger askedB = asked.count;
+            if (tB1.menu.numberOfItems) [tB1.menu performActionForItemAtIndex:0];
+            Check(notSaved && notSaved.savedURL == nil && asked.count == askedB && sentToTrash.count == 1 &&
+                  [FaxDiskSnapshot(faxDir) isEqualToArray:folderB] && [FaxDiskSnapshot(faxTrash) isEqualToArray:trashB] &&
+                  [fz.sessionCharts indexOfObjectIdenticalTo:notSaved] == NSNotFound && fz.sessionCharts.count == 3 &&
+                  fz.displayedChart == chartsB[1] && fz.exportButton.enabled && fz.saveButton.enabled &&
+                  [fz.folderLabel.stringValue isEqualToString:@"Removed from this session's charts."],
+                  @"Fax screen: the X of a chart not saved (here by its menu) only takes it out of the strip: no question, nothing on disk, "
+                  @"and the chart shown stays with Export and Save");
+            // a saved chart whose PNG was taken away by hand: no question either
+            NSURL *away = [NSURL fileURLWithPath:[root stringByAppendingPathComponent:@"fax-moved-away.png"]];
+            BOOL movedAway = [fm moveItemAtURL:s4 toURL:away error:nil];
+            NSUInteger askedC = asked.count;
+            NSButton *tB2 = StripButtons(fz).lastObject;
+            [tB2.menu.delegate menuNeedsUpdate:tB2.menu];
+            NSString *menuGone = tB2.menu.itemArray.firstObject.title;
+            [FaxXOf(tB2) performClick:nil];
+            Check(movedAway && [menuGone isEqualToString:@"Remove from this session's charts"] && asked.count == askedC && sentToTrash.count == 1 &&
+                  [fz.sessionCharts indexOfObjectIdenticalTo:chartB2] == NSNotFound && fz.displayedChart == nil && !fz.saveButton.enabled,
+                  @"Fax screen: a saved chart whose PNG was taken away by hand leaves the strip with no question, and the Trash is not asked");
+            // the folder taken away by hand: the button off again; a click opens nothing and never makes it again
+            NSURL *dirAway = [NSURL fileURLWithPath:[root stringByAppendingPathComponent:@"fax-folder-away"] isDirectory:YES];
+            BOOL dirMoved = [fm moveItemAtURL:faxDir toURL:dirAway error:nil];
+            BOOL stillOn = show.enabled;                                              // not looked at again yet
+            [NSApp sendAction:show.action to:show.target from:show];
+            Check(dirMoved && stillOn && !show.enabled && [show.toolTip isEqualToString:@"Nothing saved yet"] && opened.count == 1 &&
+                  ![fm fileExistsAtPath:faxDir.path],
+                  @"Fax folder: a click on «Show charts in Finder» after the folder has gone opens nothing, turns it off, and never makes the folder");
+
+            // the SSTV recordings, their share and their lamp: untouched by Save and the X (the disk share Off, and on)
+            for (NSNumber *share in @[@0, @-1]) {
+                NSString *suiteV = [suite stringByAppendingFormat:@".fax-share%@", share];
+                NSUserDefaults *defsV = [[NSUserDefaults alloc] initWithSuiteName:suiteV];
+                if (share.integerValue >= 0) [defsV setInteger:share.integerValue forKey:@"TX500SSTVDiskShare"];
+                NSURL *gV = [NSURL fileURLWithPath:[root stringByAppendingPathComponent:[NSString stringWithFormat:@"gallery-fax-share%@", share]] isDirectory:YES];
+                NSURL *fV = [NSURL fileURLWithPath:[root stringByAppendingPathComponent:[NSString stringWithFormat:@"fax-folder-share%@", share]] isDirectory:YES];
+                TX500SSTVStationController *cv = NewController(defsV, gV, lb);
+                TX500FaxStationController *fv = cv.faxController;
+                fv.faxDirectory = fV;
+                fv.confirmMoveToTrash = ^BOOL(NSString *text) { (void)text; return YES; };
+                fv.trashHandler = ^BOOL(NSURL *file, NSError **error) {
+                    return [fm moveItemAtURL:file toURL:[faxTrash URLByAppendingPathComponent:[NSString stringWithFormat:@"share%@-%@", share, file.lastPathComponent]] error:error];
+                };
+                [cv activate];
+                NSString *lamp0 = cv.diskLampState, *summary0 = cv.diskSummaryLabel.stringValue;
+                unsigned long long used0 = cv.recordings.diskBytesUsed;
+                NSUInteger recs0 = cv.recordings.receptions.count;
+                NSArray<NSString *> *gallery0 = FaxDiskSnapshot(gV);
+                BOOL openedV = [fv openFileAtURL:Fixture(@"FAX-two.wav")];
+                NSURL *v1 = [fv saveShownToFaxFolder:nil], *v2 = [fv saveShownToFaxFolder:nil];
+                BOOL removed = fv.sessionCharts.count && [fv removeChartFromSession:fv.sessionCharts.firstObject];
+                [cv reloadRecordings];
+                [cv activate];
+                Check(openedV && v1 && v2 && removed && [v1.URLByDeletingLastPathComponent.path isEqualToString:fV.path] && [fm fileExistsAtPath:v1.path] &&
+                      [cv.diskLampState isEqualToString:lamp0] && [cv.diskSummaryLabel.stringValue isEqualToString:summary0] &&
+                      cv.recordings.diskBytesUsed == used0 && cv.recordings.receptions.count == recs0 &&
+                      [FaxDiskSnapshot(gV) isEqualToArray:gallery0] && (share.integerValue != 0 || ![fm fileExistsAtPath:gV.path]),
+                      [NSString stringWithFormat:@"Fax folder: with the SSTV disk share %@, Save still writes the chart, and the SSTV recordings, their "
+                       @"share, their folder and their lamp are untouched by Save and the X (%@: %@)", share.integerValue == 0 ? @"Off" : @"on",
+                       lamp0, summary0]);
+                [NSUserDefaults.standardUserDefaults removePersistentDomainForName:suiteV];
+            }
         }
 
         [NSUserDefaults.standardUserDefaults removePersistentDomainForName:suite];

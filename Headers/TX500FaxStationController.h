@@ -23,6 +23,20 @@ NS_ASSUME_NONNULL_BEGIN
 /// This session's charts in the strip, the oldest first: the strip's own references, never the
 /// engine's places (an earlier file's charts are no longer in the engine).
 @property (nonatomic, readonly, copy) NSArray<TX500FaxChart *> *sessionCharts;
+/// Where «Save to the Fax folder» writes: Application Support/Lab599 Utility/Fax (the tests give their own). It is
+/// made at the first save, never before. It is not within «Keep recordings on disk»: the operator saved what is
+/// there, so the app never removes or trims it; only the X of a saved chart moves its PNG to the Trash.
+@property (nonatomic, copy) NSURL *faxDirectory;
+/// Opens the Fax folder for «Show charts in Finder». By default the Finder opens it (NSWorkspace openURL:);
+/// the tests give their own, so no Finder window opens.
+@property (nonatomic, copy, nullable) void (^revealFolderHandler)(NSURL *folder);
+/// Asked before a saved chart's PNG goes to the Trash (the X on its thumbnail): YES moves it. By default a
+/// question on the screen, «Move this chart to the Trash?», with Cancel as the default answer; the tests give
+/// their own answer.
+@property (nonatomic, copy, nullable) BOOL (^confirmMoveToTrash)(NSString *text);
+/// How a PNG goes to the Trash: NSFileManager trashItemAtURL: by default (never removed for good); the tests
+/// give their own, so nothing reaches the Mac's Trash.
+@property (nonatomic, copy, nullable) BOOL (^trashHandler)(NSURL *file, NSError **error);
 
 // the controls, for the tests
 @property (nonatomic, readonly) NSPopUpButton *deviationPopup, *lpmPopup, *iocPopup, *widthPopup, *lineStartPopup, *chartPopup;
@@ -37,6 +51,13 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, readonly) NSSlider *marginSlider;
 @property (nonatomic, readonly) NSImageView *pictureView;
 @property (nonatomic, readonly) NSButton *openButton, *againButton, *exportButton;
+/// «Save to the Fax folder», in the row under the chart: off while no chart is shown.
+@property (nonatomic, readonly) NSButton *saveButton;
+/// «Show charts in Finder», in the strip's header: it opens faxDirectory. Off, with the tooltip «Nothing
+/// saved yet», while that folder does not exist; it never makes the folder.
+@property (nonatomic, readonly) NSButton *showChartsButton;
+/// What Save and the X did, under the chart's buttons; hidden when nothing.
+@property (nonatomic, readonly) NSTextField *folderLabel;
 
 /// The note under a choice, with its Good for / Not good for (nil for the list of charts, which is
 /// not a choice: it shows one of the charts the file gave).
@@ -55,6 +76,18 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)exportShownToURL:(NSURL *)url error:(NSError **)error;
 /// The name Export… proposes: the file the chart shown came from, and its number there.
 @property (nonatomic, readonly, copy) NSString *exportName;
+/// «Save to the Fax folder»: one click, no dialog. Writes the chart shown as a PNG into faxDirectory (made now
+/// if it is not there), under exportName, or with -2, -3… when that name is taken: never over a file. The
+/// chart keeps where it went (savedURL), and its thumbnail says so. Nil when nothing was written.
+- (nullable NSURL *)saveShownToFaxFolder:(NSError **)error;
+/// The X on a thumbnail of the strip (the Delete key on it, and its menu, too). A chart whose PNG is in the
+/// folder goes to the Trash, after the question; one with no PNG there only leaves this session's charts,
+/// with no question and nothing changed on disk. Shown, the picture shows the empty frame, Export and Save
+/// are off, and the line under the buttons says so. YES when it left the strip. A chart of the file open
+/// now stays in the chart list until the next file: picked there, it shows again (not saved).
+- (BOOL)removeChartFromSession:(TX500FaxChart *)chart;
+/// Turns «Show charts in Finder» on or off by whether the Fax folder is there now (the screen shown, a save).
+- (void)refreshShowChartsButton;
 @end
 
 NS_ASSUME_NONNULL_END

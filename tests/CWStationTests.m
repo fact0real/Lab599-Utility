@@ -635,6 +635,29 @@ int main(int argc, const char * argv[]) {
         AssertTrue([idleTransmitted containsString:@"CQ CQ DE EP2AES"], @"Transmitted CQ CQ DE EP2AES");
         NSLog(@"PASS: Idle state actionability and CQ initiation verified.");
 
+        // 11b. Before the Mac sleeps, CW Station stops everything on the air: a message, Auto-CQ and
+        // a Tune get their RX; at once, because the delayed release blocks and the Tune cutoff would
+        // not run until the Mac wakes. The workspace notification is posted here by hand.
+        TX500CWStationController *sleepStation = [TX500CWStationController new];
+        sleepStation.keyer.myCallsign = @"EA3JIC";
+        __block NSMutableArray<NSString *> *sleepCmds = [NSMutableArray array];
+        __block NSMutableArray<NSString *> *sleepLog = [NSMutableArray array];
+        sleepStation.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) { [sleepCmds addObject:catCommand]; return YES; };
+        sleepStation.logHandler = ^(NSString *line) { [sleepLog addObject:line]; };
+        [sleepStation toggleAutoCQ:nil];
+        AssertTrue(sleepStation.keyer.isAutoCQActive && sleepStation.keyer.isTransmitting && [sleepCmds containsObject:@"TX;"], @"Auto-CQ is on the air before sleep");
+        [sleepCmds removeAllObjects];
+        [NSWorkspace.sharedWorkspace.notificationCenter postNotificationName:NSWorkspaceWillSleepNotification object:nil];
+        AssertTrue(!sleepStation.keyer.isTransmitting && !sleepStation.keyer.isAutoCQActive && [sleepCmds containsObject:@"RX;"], @"Sleep stops the message and Auto-CQ and sends RX; at once");
+        AssertTrue([sleepLog.lastObject containsString:@"sleep"], @"The console says why the transmission stopped");
+        [sleepCmds removeAllObjects];
+        [sleepStation toggleManualTransmit];
+        AssertTrue(sleepStation.isManualTuneActive && [sleepCmds containsObject:@"TX;"], @"Tune is on the air before sleep");
+        [sleepCmds removeAllObjects];
+        [NSWorkspace.sharedWorkspace.notificationCenter postNotificationName:NSWorkspaceWillSleepNotification object:nil];
+        AssertTrue(!sleepStation.isManualTuneActive && [sleepCmds containsObject:@"RX;"], @"Sleep stops a Tune and sends RX; at once");
+        NSLog(@"PASS: CW Station stops every transmission before the Mac sleeps.");
+
         // 12. Test CW Station Controller Auto Mode Switching
         TX500CWStationController *stationController = [[TX500CWStationController alloc] init];
         __block NSMutableArray<NSString *> *controllerSentCmds = [NSMutableArray array];

@@ -167,6 +167,10 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
 
         [self buildUserInterface];
         [self setupBindings];
+        // Nothing may stay keyed while the Mac sleeps: the delayed RX; blocks and the Tune cutoff
+        // do not run until it wakes.
+        [NSWorkspace.sharedWorkspace.notificationCenter addObserver:self selector:@selector(workspaceWillSleep:)
+                                                               name:NSWorkspaceWillSleepNotification object:nil];
     }
     return self;
 }
@@ -175,6 +179,7 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
     [self stopAudioMonitor];
     [self stopRecordingMessage];
     [self stopStation];
+    [NSWorkspace.sharedWorkspace.notificationCenter removeObserver:self];
 }
 
 #pragma mark - Bindings & Callbacks
@@ -501,6 +506,13 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
     [self.keyer stopAutoCQ];
     self.startStopDecoderButton.title = @"START DECODER";
     self.startStopDecoderButton.contentTintColor = [NSColor systemGreenColor];
+}
+
+- (void)workspaceWillSleep:(NSNotification *)note {
+    (void)note;
+    BOOL onAir = self.keyer.isTransmitting || self.keyer.isAutoCQActive || self.isManualTuneActive;
+    [self stopStation];
+    if (onAir && self.logHandler) self.logHandler(@"CW Station: stopped for system sleep (RX; sent).");
 }
 
 - (void)updateFrequencyHz:(uint64_t)freqHz mode:(NSString *)mode {

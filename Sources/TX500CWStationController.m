@@ -119,6 +119,7 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
 @property (nonatomic, strong) NSButton *txAbortButton;
 @property (nonatomic, assign, readwrite) BOOL isManualTuneActive;
 @property (nonatomic, assign) double manualTuneCutoffSeconds; // 0 = the 10 s default; tests shorten it
+@property (nonatomic, assign) NSUInteger manualTuneGeneration;   // each Tune's cutoff stops only that Tune
 @property (nonatomic, strong) NSMutableArray<NSButton *> *macroButtons;
 
 // UI Controls - Live Transmit Telemetry (PWR & SWR)
@@ -1965,6 +1966,8 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
         self.autoCQButton.title = @"Auto-CQ Repeater";
         self.autoCQCountdownLabel.stringValue = @"";
     } else {
+        [self stopManualTune];
+        [self prepareRadioForCWMode];
         [self.keyer startAutoCQWithTemplate:@"CQ CQ DE {MYCALL} {MYCALL} K" targetCall:@""];
         if (!self.keyer.isAutoCQActive) return; // blocked: no callsign set
         self.autoCQButton.title = @"Stop Auto-CQ";
@@ -2019,6 +2022,17 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
             if (self.logHandler) self.logHandler(@"Practice / Sim: TX (Tune) does not key the radio.");
             return;
         }
+        // Auto-CQ keys the radio again between its calls: no Tune under it.
+        if (self.keyer.isAutoCQActive) {
+            if (self.logHandler) self.logHandler(@"CW Station: stop Auto-CQ before tuning.");
+            return;
+        }
+        // A message on the air ends with its own release: a Tune on top of it would send a second
+        // TX; and its stop or cutoff would send RX; in the middle of the message.
+        if (self.keyer.isTransmitting) {
+            if (self.logHandler) self.logHandler(@"CW Station: stop the message (ABORT) before tuning.");
+            return;
+        }
         [self prepareRadioForCWMode];
         // No TX; before the radio's audio output is open and running: the carrier needs it.
         if (![self.keyer ensureRadioAudioReady]) {
@@ -2030,6 +2044,7 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
             BOOL ok = self.serialCommandSender(txCmd);
             if (ok) {
                 self.isManualTuneActive = YES;
+                NSUInteger generation = ++self.manualTuneGeneration;
                 self.txTuneButton.title = @"■ RX (Stop)";
                 self.txTuneButton.contentTintColor = [NSColor systemRedColor];
                 self.txAbortButton.enabled = YES;
@@ -2041,7 +2056,7 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
                 __weak typeof(self) weakSelf = self;
                 dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(cutoff * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                     typeof(self) strongSelf = weakSelf;
-                    if (strongSelf && strongSelf.isManualTuneActive) {
+                    if (strongSelf && strongSelf.isManualTuneActive && generation == strongSelf.manualTuneGeneration) {
                         [strongSelf stopManualTransmit];
                         if (strongSelf.logHandler) {
                             strongSelf.logHandler(@"CW Station: Manual Tune 10-second safety cutoff triggered.");
@@ -2425,6 +2440,8 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
     NSInteger row = sender.tag;
     NSArray<TX500CWHeardStation *> *stations = self.assistant.heardStations;
     if (row < 0 || row >= (NSInteger)stations.count) return;
+    [self stopManualTune];
+    [self prepareRadioForCWMode];
     TX500CWHeardStation *st = stations[row];
 
     [self.assistant selectAndAnswerStation:st];
@@ -2455,6 +2472,8 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
 
 - (void)answerWidebandChannel:(TX500CWChannelState *)channel {
     if (!channel) return;
+    [self stopManualTune];
+    [self prepareRadioForCWMode];
     double freq = channel.frequencyHz;
 
     // 1. Tune receiver pitch or radio VFO

@@ -469,6 +469,85 @@ int main(int argc, const char * argv[]) {
         [readyStation.keyer setValue:nil forKey:@"activeRadioUID"];
         NSLog(@"PASS: No keying before the radio audio output is ready.");
 
+        // 6d. Every keyer path stops a running Tune first (Auto-CQ, the roster Answer, the
+        // wideband Answer, as Send, the macros and the assistant step already did); no Tune starts
+        // while Auto-CQ runs; and a Tune's cutoff stops only that Tune, not a newer one.
+        TX500CWStationController *pathStation = [TX500CWStationController new];
+        pathStation.keyer.myCallsign = @"EA3JIC";
+        pathStation.assistant.myCallsign = @"EA3JIC";
+        __block NSMutableArray<NSString *> *pathCmds = [NSMutableArray array];
+        __block NSMutableArray<NSString *> *pathLog = [NSMutableArray array];
+        pathStation.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) { [pathCmds addObject:catCommand]; return YES; };
+        pathStation.logHandler = ^(NSString *line) { [pathLog addObject:line]; };
+        BOOL (^releasedBeforeKeying)(void) = ^BOOL { // an RX; and, after it, the new TX;
+            NSUInteger rx = [pathCmds indexOfObject:@"RX;"];
+            if (rx == NSNotFound) return NO;
+            for (NSUInteger i = rx + 1; i < pathCmds.count; i++) if ([pathCmds[i] isEqualToString:@"TX;"]) return YES;
+            return NO;
+        };
+        [pathStation toggleManualTransmit];
+        AssertTrue(pathStation.isManualTuneActive && [pathCmds containsObject:@"TX;"], @"Tune keys the radio");
+        [pathCmds removeAllObjects];
+        [pathStation toggleAutoCQ:nil];
+        AssertTrue(!pathStation.isManualTuneActive && pathStation.keyer.isAutoCQActive && pathStation.keyer.isTransmitting && releasedBeforeKeying(),
+                   @"Auto-CQ stops a running Tune first");
+        [pathStation toggleAutoCQ:nil];
+        [pathStation.keyer abortTransmission];
+        [pathStation.assistant processDecodedTextStream:@"CQ CQ DE EP2AES EP2AES K" currentWPM:22.0 snrDb:14.5];
+        AssertTrue(pathStation.assistant.heardStations.count >= 1, @"The station heard EP2AES");
+        [pathStation toggleManualTransmit];
+        [pathCmds removeAllObjects];
+        NSButton *pathAnswer = [NSButton new];
+        pathAnswer.tag = 0;
+        [pathStation rosterAnswerClicked:pathAnswer];
+        AssertTrue(!pathStation.isManualTuneActive && pathStation.keyer.isTransmitting && releasedBeforeKeying(), @"the roster Answer stops the Tune");
+        [pathStation.keyer abortTransmission];
+        [pathStation toggleManualTransmit];
+        [pathCmds removeAllObjects];
+        TX500CWChannelState *pathChannel = [TX500CWChannelState new];
+        pathChannel.frequencyHz = 900.0;
+        pathChannel.estimatedWPM = 22.0;
+        pathChannel.snrDb = 12.0;
+        pathChannel.extractedCallsign = @"0A1ZZ";
+        [pathStation answerWidebandChannel:pathChannel];
+        AssertTrue(!pathStation.isManualTuneActive && [pathStation.keyer.activeBufferText isEqualToString:@"0A1ZZ DE EA3JIC K"] && releasedBeforeKeying(),
+                   @"the wideband Answer stops the Tune");
+        // Auto-CQ between two calls (the keyer idle, Auto-CQ still on): Tune is refused.
+        [pathStation.keyer abortTransmission];
+        [pathStation toggleAutoCQ:nil];
+        [pathStation.keyer abortTransmission];
+        AssertTrue(pathStation.keyer.isAutoCQActive && !pathStation.keyer.isTransmitting, @"Auto-CQ waits between two calls");
+        [pathCmds removeAllObjects];
+        [pathLog removeAllObjects];
+        [pathStation toggleManualTransmit];
+        BOOL autoCQRefusalLogged = NO; for (NSString *line in pathLog) if ([line containsString:@"stop Auto-CQ"]) autoCQRefusalLogged = YES;
+        AssertTrue(![pathCmds containsObject:@"TX;"] && !pathStation.isManualTuneActive && autoCQRefusalLogged, @"no Tune while Auto-CQ runs");
+        [pathStation toggleAutoCQ:nil];
+        AssertTrue(!pathStation.keyer.isAutoCQActive, @"Auto-CQ stopped");
+        // A message on the air ("E" at 20 WPM, 0.24 s): TX (Tune) is refused, no second TX;.
+        pathStation.keyer.wpm = 20;
+        [pathStation.keyer transmitText:@"E" targetCall:@"" rst:@"" name:@"" qth:@""];
+        AssertTrue(pathStation.keyer.isTransmitting, @"a message is on the air");
+        [pathCmds removeAllObjects];
+        [pathLog removeAllObjects];
+        [pathStation toggleManualTransmit];
+        BOOL messageRefusalLogged = NO; for (NSString *line in pathLog) if ([line containsString:@"stop the message"]) messageRefusalLogged = YES;
+        AssertTrue(![pathCmds containsObject:@"TX;"] && !pathStation.isManualTuneActive && messageRefusalLogged, @"no Tune on top of a message");
+        [pathStation.keyer abortTransmission];
+        // A Tune stopped and started again keeps its own cutoff (0.8 s here).
+        [pathStation setValue:@0.8 forKey:@"manualTuneCutoffSeconds"];
+        [pathStation toggleManualTransmit];
+        [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.3]];
+        [pathStation stopManualTune];
+        NSDate *secondTune = [NSDate date];
+        [pathStation toggleManualTransmit];
+        [pathCmds removeAllObjects];
+        [[NSRunLoop mainRunLoop] runUntilDate:[secondTune dateByAddingTimeInterval:0.65]];
+        AssertTrue(pathStation.isManualTuneActive && ![pathCmds containsObject:@"RX;"], @"a stale cutoff does not cut a newer Tune");
+        [[NSRunLoop mainRunLoop] runUntilDate:[secondTune dateByAddingTimeInterval:1.1]];
+        AssertTrue(!pathStation.isManualTuneActive && [pathCmds containsObject:@"RX;"], @"the newer Tune has its own cutoff");
+        NSLog(@"PASS: Every keyer path stops the Tune; a cutoff stops only its own Tune.");
+
         // 7. Test QSO Assistant Pattern Detection & Callsign Extraction
         TX500CWQSOAssistant *assistant = [[TX500CWQSOAssistant alloc] init];
         assistant.myCallsign = @"EP2AES";

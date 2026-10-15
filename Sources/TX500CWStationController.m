@@ -397,6 +397,15 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
         }
         (void)text;
     };
+
+    // The keyer's hard time-out has already silenced and released the radio: put the Tune
+    // controls back (stopManualTransmit re-sends RX; only while a Tune is active) and say so.
+    self.keyer.onTransmitTimedOut = ^(NSTimeInterval limitSeconds) {
+        typeof(self) strongSelf = weakSelf;
+        if (!strongSelf) return;
+        [strongSelf stopManualTune];
+        if (strongSelf.logHandler) strongSelf.logHandler([NSString stringWithFormat:@"CW Station: transmit time-out after %.0f s; keyer and Tune stopped.", limitSeconds]);
+    };
 }
 
 #pragma mark - Radio Mode & Lifecycle

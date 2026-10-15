@@ -56,6 +56,8 @@
     double _carrierPhase;
     double _carrierFrequency;
     float _carrierAmplitude;
+    dispatch_queue_t _timeoutQueue;
+    dispatch_source_t _transmitTimeout;
 }
 
 + (nullable NSString *)findBestUSBAudioOutputUID {
@@ -75,6 +77,9 @@
         _internalSentHistory = [NSMutableArray array];
         _txPrefixCommand = @"TX;";
         _rxSuffixCommand = @"RX;";
+        _maximumTransmitSeconds = 120.0;
+        _maximumCarrierSeconds = 15.0;
+        _timeoutQueue = dispatch_queue_create("com.lab599.cwkeyer.timeout", DISPATCH_QUEUE_SERIAL);
 
         pthread_mutex_init(&_radioAudioLock, NULL);
         _radioTxBuffer = NULL;
@@ -590,6 +595,12 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
     if ([self blocksMissingCallsignForTemplate:text]) return;
     NSString *expanded = [self expandTemplate:text targetCall:call rst:rst name:name qth:qth];
     if (expanded.length == 0) return;
+    NSInteger limitWPM = fmax(3, fmin(45, self.wpm));
+    double limitEstimate = [self estimatedDurationForText:expanded wpm:limitWPM];
+    if (self.maximumTransmitSeconds > 0 && limitEstimate > self.maximumTransmitSeconds) {
+        if (self.logHandler) self.logHandler([NSString stringWithFormat:@"[CW TX blocked] %.0f s at %ld WPM is longer than the %.0f s transmit limit: shorten the text or raise the speed.", limitEstimate, (long)limitWPM, self.maximumTransmitSeconds]);
+        return;
+    }
 
     [self abortTransmission];
     NSUInteger token=self.transmissionGeneration;
@@ -612,6 +623,9 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
         self.logHandler([NSString stringWithFormat:@"CW TX (%ld WPM): %@", (long)clampedWPM, expanded]);
     }
 
+    // Hard time-out first: it depends on nothing below (a refused TX; cancels it through the abort).
+    [self armTransmitTimeoutSeconds:self.maximumTransmitSeconds];
+
     // 1. Key transceiver into TX mode
     if (self.serialCommandSender) {
         NSString *cmd = self.txPrefixCommand.length > 0 ? self.txPrefixCommand : @"TX;";
@@ -631,6 +645,7 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
         typeof(self) strongSelf = weakSelf;
         if (strongSelf && token == strongSelf.transmissionGeneration && strongSelf.isTransmitting) {
             strongSelf.isTransmitting = NO;
+            [strongSelf cancelTransmitTimeout];
             strongSelf.activeBufferText = @"";
             strongSelf.currentlyTransmittingChar = @"";
             pthread_mutex_lock(&strongSelf->_radioAudioLock);
@@ -664,6 +679,12 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
 }
 
 - (void)abortTransmission {
+    [self abortTransmissionReleasingRadio:YES];
+}
+
+// release NO: the time-out has already sent RX; from its own queue.
+- (void)abortTransmissionReleasingRadio:(BOOL)release {
+    [self cancelTransmitTimeout];
     self.transmissionGeneration++;
     self.isTransmitting = NO;
     self.activeBufferText = @"";
@@ -678,7 +699,7 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
         [self.sidetonePlayer stop];
     }
 
-    if (self.serialCommandSender) {
+    if (release && self.serialCommandSender) {
         NSString *rxCmd = self.rxSuffixCommand.length > 0 ? self.rxSuffixCommand : @"RX;";
         self.serialCommandSender(rxCmd);
     }
@@ -700,6 +721,8 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
     _carrierFrequency = (pitch > 100.0) ? pitch : 650.0;
     _carrierAmplitude = 0.85f;
     _carrierPhase = 0.0;
+    // Hard time-out, armed before the sound starts (the queue cannot render while the lock is held).
+    [self armTransmitTimeoutSeconds:self.maximumCarrierSeconds];
     pthread_mutex_unlock(&_radioAudioLock);
 
     if (self.sidetoneEngineReady && self.sidetonePlayer && self.sidetoneEnabled) {
@@ -734,9 +757,63 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
     pthread_mutex_lock(&_radioAudioLock);
     _isContinuousCarrier = NO;
     pthread_mutex_unlock(&_radioAudioLock);
+    if (!self.isTransmitting) [self cancelTransmitTimeout]; // a message in flight keeps its own time-out
 
     if (self.sidetonePlayer.isPlaying) {
         [self.sidetonePlayer stop];
+    }
+}
+
+#pragma mark - Transmit time-out
+
+// Armed before any sound and cancelled by every normal stop. It runs on its own queue with a
+// wall-clock deadline, so a sidetone exception, a blocked main thread or a sleep/wake cycle
+// cannot postpone it: the audio is silenced under the lock first, then RX; goes out through the
+// sender, then the state and the pane are cleared on the main thread.
+- (void)armTransmitTimeoutSeconds:(NSTimeInterval)seconds {
+    [self cancelTransmitTimeout];
+    if (seconds <= 0) return;
+    dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, _timeoutQueue);
+    __weak typeof(self) weakSelf = self;
+    dispatch_source_set_event_handler(timer, ^{
+        typeof(self) strongSelf = weakSelf;
+        dispatch_source_cancel(timer);
+        if (!strongSelf) return;
+        pthread_mutex_lock(&strongSelf->_radioAudioLock);
+        BOOL carrier = strongSelf->_isContinuousCarrier;
+        strongSelf->_isContinuousCarrier = NO;
+        strongSelf->_radioTxBufferReadIndex = strongSelf->_radioTxBufferTotalSamples;
+        pthread_mutex_unlock(&strongSelf->_radioAudioLock);
+        if (!carrier && !strongSelf.isTransmitting) return;   // ended normally; nothing to do
+        NSUInteger token = strongSelf.transmissionGeneration;
+        BOOL released = NO;
+        if (strongSelf.serialCommandSender) {
+            NSString *rxCmd = strongSelf.rxSuffixCommand.length > 0 ? strongSelf.rxSuffixCommand : @"RX;";
+            released = strongSelf.serialCommandSender(rxCmd);
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) mainSelf = weakSelf;
+            if (!mainSelf) return;
+            // A newer message started on the main thread after this RX; went out: it is keyed with its
+            // own time-out, so it is not cleared here (clearing it would leave the radio keyed).
+            if (!carrier && mainSelf.transmissionGeneration != token) {
+                if (mainSelf.logHandler) mainSelf.logHandler([NSString stringWithFormat:@"CW TX time-out: %.0f s on the air, RX; sent; a newer transmission had already started and keeps its own time-out.", seconds]);
+                return;
+            }
+            [mainSelf abortTransmissionReleasingRadio:!released];
+            if (mainSelf.logHandler) mainSelf.logHandler([NSString stringWithFormat:@"CW TX time-out: %.0f s on the air, transmission stopped%@.", seconds, released ? @" and RX; sent" : @"; RX; not confirmed, check the radio"]);
+            if (mainSelf.onTransmitTimedOut) mainSelf.onTransmitTimedOut(seconds);
+        });
+    });
+    dispatch_source_set_timer(timer, dispatch_walltime(NULL, (int64_t)(seconds * NSEC_PER_SEC)), DISPATCH_TIME_FOREVER, (uint64_t)(0.05 * NSEC_PER_SEC));
+    _transmitTimeout = timer;
+    dispatch_resume(timer);
+}
+
+- (void)cancelTransmitTimeout {
+    if (_transmitTimeout) {
+        dispatch_source_cancel(_transmitTimeout);
+        _transmitTimeout = nil;
     }
 }
 
@@ -759,6 +836,7 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
 
     // Send first CQ immediately
     [self transmitText:self.currentAutoCQTemplate targetCall:self.currentAutoCQCall rst:@"" name:@"" qth:@""];
+    if ([self stopAutoCQIfRefused]) return;
 
     // Timer every 1 second for countdown
     __weak typeof(self) weakSelf = self;
@@ -791,7 +869,17 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
         if ([self blocksMissingCallsignForTemplate:self.currentAutoCQTemplate]) { [self stopAutoCQ]; return; }
         self.autoCQCountdown = self.autoCQIntervalSeconds;
         [self transmitText:self.currentAutoCQTemplate targetCall:self.currentAutoCQCall rst:@"" name:@"" qth:@""];
+        [self stopAutoCQIfRefused];
     }
+}
+
+// A CQ that was refused (longer than the transmit limit, TX; refused) stops Auto-CQ instead of
+// being retried every interval while the button says "Stop Auto-CQ".
+- (BOOL)stopAutoCQIfRefused {
+    if (self.isTransmitting) return NO;
+    [self stopAutoCQ];
+    if (self.logHandler) self.logHandler(@"Auto-CQ stopped: the CQ was not sent.");
+    return YES;
 }
 
 @end

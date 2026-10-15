@@ -761,6 +761,82 @@ int main(int argc, const char * argv[]) {
         [keyer transmitText:@"CQ" targetCall:@"" rst:@"" name:@"" qth:@""];
         AssertTrue(keyer.isTransmitting, @"Valid setup allows keying");
         [keyer abortTransmission];
+        // 14. A hard transmit time-out that depends neither on the sidetone, nor on the release
+        // timers, nor on the main thread. A message longer than the limit is refused up front; a
+        // message whose release timers never fire is silenced and released at the limit; the tuning
+        // carrier, which has no keyer timer of its own, is stopped at its limit even while the main
+        // thread is busy; the station is told; a message that ends in time gets no time-out.
+        TX500CWKeyer *totKeyer = [[TX500CWKeyer alloc] init];
+        totKeyer.myCallsign = @"EA3JIC";
+        NSMutableArray<NSString *> *totCmds = [NSMutableArray array];
+        __block NSMutableArray<NSString *> *totLog = [NSMutableArray array];
+        totKeyer.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) { @synchronized (totCmds) { [totCmds addObject:catCommand]; } return YES; };
+        totKeyer.logHandler = ^(NSString *line) { [totLog addObject:line]; };
+        AssertTrue(totKeyer.maximumTransmitSeconds == 120.0 && totKeyer.maximumCarrierSeconds == 15.0, @"Default limits: 120 s for a message, 15 s for the carrier");
+        totKeyer.wpm = 3;
+        totKeyer.maximumTransmitSeconds = 5.0;
+        [totKeyer transmitText:@"CQ CQ CQ DE {MYCALL} {MYCALL} {MYCALL} K" targetCall:@"" rst:@"" name:@"" qth:@""];
+        AssertTrue(!totKeyer.isTransmitting && totCmds.count == 0 && [totLog.lastObject containsString:@"transmit limit"], @"A message longer than the limit is refused and says why");
+        totKeyer.wpm = 45;
+        totKeyer.maximumTransmitSeconds = 0.3;
+        [totKeyer transmitText:@"E" targetCall:@"" rst:@"" name:@"" qth:@""];
+        AssertTrue(totKeyer.isTransmitting && [totCmds containsObject:@"TX;"], @"A short message is keyed");
+        @synchronized (totCmds) { [totCmds removeAllObjects]; } // drop the RX; of the abort that opens every message
+        [totKeyer setValue:@999 forKey:@"transmissionGeneration"]; // the release timers now belong to a stale transmission and never fire
+        [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.8]];
+        BOOL rxAfterTimeout = NO; @synchronized (totCmds) { rxAfterTimeout = [totCmds containsObject:@"RX;"]; }
+        AssertTrue(!totKeyer.isTransmitting && rxAfterTimeout, @"The time-out releases a message whose release timers never fire");
+        AssertTrue([totLog.lastObject containsString:@"time-out"], @"The console says the time-out fired");
+        __block NSTimeInterval reportedLimit = 0;
+        totKeyer.onTransmitTimedOut = ^(NSTimeInterval limitSeconds) { reportedLimit = limitSeconds; };
+        totKeyer.maximumCarrierSeconds = 0.3;
+        @synchronized (totCmds) { [totCmds removeAllObjects]; }
+        [totKeyer startContinuousCarrierWithPitchHz:650.0];
+        AssertTrue([[totKeyer valueForKey:@"isContinuousCarrier"] boolValue], @"The carrier started");
+        [NSThread sleepForTimeInterval:0.7]; // main thread busy: no run loop, so no main-queue block can run
+        BOOL rxWhileBusy = NO; @synchronized (totCmds) { rxWhileBusy = [totCmds containsObject:@"RX;"]; }
+        AssertTrue(![[totKeyer valueForKey:@"isContinuousCarrier"] boolValue] && rxWhileBusy, @"The time-out silences the carrier and sends RX; while the main thread is busy");
+        [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.2]];
+        AssertTrue(reportedLimit == 0.3, @"The station is told which limit fired");
+        // A newer message started from a main-queue block queued before the time-out's own block
+        // (the main thread was busy while the time-out sent RX;) keeps transmitting: the time-out's
+        // main-thread step must not clear it, or the radio would stay keyed with nothing to release it.
+        totKeyer.onTransmitTimedOut = nil;
+        totKeyer.maximumTransmitSeconds = 0.3;
+        [totKeyer transmitText:@"E" targetCall:@"" rst:@"" name:@"" qth:@""];
+        NSUInteger staleGeneration = [[totKeyer valueForKey:@"transmissionGeneration"] unsignedIntegerValue] + 1000;
+        [totKeyer setValue:@(staleGeneration) forKey:@"transmissionGeneration"]; // its release timers never fire
+        __block NSUInteger newerGeneration = 0;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            totKeyer.maximumTransmitSeconds = 30.0;
+            [totKeyer transmitText:@"CQ CQ DE {MYCALL} K" targetCall:@"" rst:@"" name:@"" qth:@""];
+            newerGeneration = [[totKeyer valueForKey:@"transmissionGeneration"] unsignedIntegerValue];
+        });
+        [NSThread sleepForTimeInterval:0.6]; // the time-out fires and sends RX; while the main thread is busy
+        [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];
+        AssertTrue(newerGeneration != 0 && totKeyer.isTransmitting &&
+                   [[totKeyer valueForKey:@"transmissionGeneration"] unsignedIntegerValue] == newerGeneration,
+                   @"A message started before the time-out's main-thread step keeps transmitting");
+        [totKeyer abortTransmission];
+        [totLog removeAllObjects];
+        totKeyer.maximumTransmitSeconds = 0.5;
+        [totKeyer transmitText:@"E" targetCall:@"" rst:@"" name:@"" qth:@""];
+        [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.9]];
+        BOOL strayTimeout = NO; for (NSString *line in totLog) if ([line containsString:@"time-out"]) strayTimeout = YES;
+        AssertTrue(!totKeyer.isTransmitting && !strayTimeout, @"A message that ends in time gets no time-out");
+        AssertTrue([totKeyer valueForKey:@"transmitTimeout"] == nil, @"A message that ends in time cancels its time-out");
+        // Auto-CQ stops when its CQ is refused (too long for the limit, or TX; refused) instead of
+        // retrying it every interval.
+        totKeyer.wpm = 3;
+        totKeyer.maximumTransmitSeconds = 5.0;
+        [totKeyer startAutoCQWithTemplate:@"CQ CQ CQ DE {MYCALL} {MYCALL} {MYCALL} K" targetCall:@""];
+        AssertTrue(!totKeyer.isAutoCQActive && !totKeyer.isTransmitting && [totLog.lastObject containsString:@"Auto-CQ stopped"], @"Auto-CQ stops when its CQ is longer than the limit");
+        totKeyer.wpm = 45;
+        totKeyer.maximumTransmitSeconds = 120.0;
+        totKeyer.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) { return ![catCommand isEqualToString:@"TX;"]; };
+        [totKeyer startAutoCQWithTemplate:@"CQ DE {MYCALL} K" targetCall:@""];
+        AssertTrue(!totKeyer.isAutoCQActive && !totKeyer.isTransmitting, @"Auto-CQ stops when TX; is refused");
+        NSLog(@"PASS: The transmit time-out always stops the audio and releases the radio.");
         NSLog(@"ALL TX-500 CW STATION AND AUDIO DSP TESTS PASSED! ✓");
         [[NSFileManager defaultManager] removeItemAtPath:[NSString stringWithUTF8String:testRoot] error:nil];
     }

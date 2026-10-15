@@ -29,6 +29,11 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, assign) float sidetoneVolume;
 @property (nonatomic, assign) BOOL useCutNumbers; // 599 -> 5NN
 @property (nonatomic, copy) NSString *myCallsign; // Empty until set; {MYCALL} macros need it.
+// Hard transmit time-out, independent of the sidetone, the release timers and the main thread: a
+// message longer than this is refused up front, and whatever is still on the air when it elapses
+// is silenced and released (RX;). Defaults: 120 s for a message, 15 s for the tuning carrier.
+@property (nonatomic, assign) NSTimeInterval maximumTransmitSeconds;
+@property (nonatomic, assign) NSTimeInterval maximumCarrierSeconds;
 
 // Live State
 @property (nonatomic, assign, readonly) BOOL isTransmitting;
@@ -55,6 +60,8 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy, nullable) NSString *radioOutputDeviceUID;
 @property (nonatomic, copy, nullable) NSString *txPrefixCommand;
 @property (nonatomic, copy, nullable) NSString *rxSuffixCommand;
+// Called on the main thread after the time-out silenced and released the radio.
+@property (nonatomic, copy, nullable) void (^onTransmitTimedOut)(NSTimeInterval limitSeconds);
 
 // Methods
 + (nullable NSString *)findBestUSBAudioOutputUID;

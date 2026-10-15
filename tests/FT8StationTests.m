@@ -8,6 +8,7 @@
 //
 
 #import <Foundation/Foundation.h>
+#import <AppKit/AppKit.h>
 #import "tx500_ft8_shim.h"
 #import "TX500FT8Message.h"
 #import "TX500FT8AudioEngine.h"
@@ -365,6 +366,22 @@ int main(int argc, const char * argv[]) {
         AssertTrue(WaitUntil(^BOOL{ return tuneReleases == 5 && !tuneEngine.isReceiveRecoveryPending; }, 1.0),
                    @"Abort QSO and Esc end the carrier and RX is requested");
         NSLog(@"PASS: Abort QSO and Esc stop the FT8 tune carrier.");
+
+        // Before the Mac sleeps nothing stays keyed or armed: the timers that
+        // end a carrier or a slot do not run while it sleeps.
+        [tuneEngine startTuneCarrier];
+        AssertTrue(tuneEngine.isTuning, @"a tune carrier is on before the Mac sleeps");
+        [NSWorkspace.sharedWorkspace.notificationCenter postNotificationName:NSWorkspaceWillSleepNotification object:nil];
+        AssertTrue(!tuneEngine.isTuning, @"sleep ends the carrier at once");
+        AssertTrue(WaitUntil(^BOOL{ return tuneReleases == 6 && !tuneEngine.isReceiveRecoveryPending; }, 1.0),
+                   @"sleep ends the carrier and asks for RX");
+        tuneEngine.isTransmitArmed = YES;
+        tuneEngine.repeatArmedTransmission = YES;
+        [NSWorkspace.sharedWorkspace.notificationCenter postNotificationName:NSWorkspaceWillSleepNotification object:nil];
+        AssertTrue(!tuneEngine.isTransmitArmed && !tuneEngine.repeatArmedTransmission,
+                   @"sleep disarms a pending transmission");
+        AssertTrue(tuneReleases == 6, @"sleep with nothing keyed sends no PTT");
+        NSLog(@"PASS: The FT8 engine stops every transmission before the Mac sleeps.");
 
         // 4. Test Maidenhead Grid Parser & Distance Math
         double lat1 = 0, lon1 = 0, lat2 = 0, lon2 = 0;

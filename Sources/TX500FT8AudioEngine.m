@@ -6,6 +6,7 @@
 //
 
 #import "TX500FT8AudioEngine.h"
+#import <AppKit/AppKit.h>
 #import "TX500TimeDiscipline.h"
 #import <math.h>
 #import <mach/mach_time.h>
@@ -347,8 +348,20 @@ static void FT8AudioQueueOutputCallback(void *inUserData,
         _audioInputGain = 1.0f;
         _audioInputLevelDb = -60.0f;
         _splitFakeItEnabled = YES;
+
+        // The slot and release timers do not run while the Mac sleeps.
+        [NSWorkspace.sharedWorkspace.notificationCenter addObserver:self selector:@selector(workspaceWillSleep:)
+                                                               name:NSWorkspaceWillSleepNotification object:nil];
     }
     return self;
+}
+
+- (void)workspaceWillSleep:(NSNotification *)note {
+    (void)note;
+    if (!_isTransmitting && !_isTuning && !self.isTransmitArmed && !self.repeatArmedTransmission) return;
+    [self disarmTransmit];
+    [self stopTuneCarrier];
+    if (self.logHandler) self.logHandler(@"[FT8] Stopped for system sleep.");
 }
 
 static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
@@ -388,6 +401,7 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
         kAudioObjectPropertyElementMain
     };
     AudioObjectRemovePropertyListener(kAudioObjectSystemObject, &devAddr, FT8AudioHardwareDevicesListener, (__bridge void *)self);
+    [NSWorkspace.sharedWorkspace.notificationCenter removeObserver:self name:NSWorkspaceWillSleepNotification object:nil];
 
     [self stopMonitoring];
     [self teardownAudioHardware];

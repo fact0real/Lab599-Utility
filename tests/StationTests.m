@@ -87,6 +87,35 @@ static void TestReceiveRecoveryReconnect(void) {
 - (NSDictionary *)readState:(NSError **)error { return self.silent ? nil : [super readState:error]; }
 - (BOOL)setTransmit:(BOOL)tx error:(NSError **)error { BOOL ok=[super setTransmit:tx error:error]; return self.silent ? NO : ok; }
 @end
+#import "Lab599SerialPort.h"
+// A transport with read deadlines, as TX500VoiceCATRadio has: a meter read (RM...) gets no answer,
+// so it waits its whole deadline unless its token is cancelled. The old form waits 0.8 s, as the
+// real transport does. Every other query gets the parent's answer at once.
+@interface FakeDeadlineRadio : FakeStationRadio
+@property double lastTimeout;
+@property NSUInteger meterReads,cancelledReads;
+@end
+@implementation FakeDeadlineRadio
+- (NSString *)query:(NSString *)q error:(NSError **)error { return [self query:q timeout:0.8 cancellation:nil error:error]; }
+- (NSString *)query:(NSString *)q timeout:(NSTimeInterval)timeout cancellation:(Lab599Cancellation *)token error:(NSError **)error {
+    if(![q hasPrefix:@"RM"]) return [super query:q error:error];
+    self.lastTimeout=timeout; self.meterReads++; double end=CFAbsoluteTimeGetCurrent()+timeout;
+    while(CFAbsoluteTimeGetCurrent()<end) { if(token.cancelled) { self.cancelledReads++; return nil; } usleep(5000); }
+    return nil;
+}
+@end
+static void TestReadDeadline(void) {
+    TX500StationCore *c=[TX500StationCore new]; FakeDeadlineRadio *r=[FakeDeadlineRadio new]; c.transportFactory=^id(NSString *p){(void)p;return r;};
+    [c selectOwner:@"CW" port:@"fake-deadline" error:nil];
+    double t0=CFAbsoluteTimeGetCurrent(); NSString *reply=[c query:@"RM0;RM;" timeout:0.1 error:nil];
+    Check(!reply && CFAbsoluteTimeGetCurrent()-t0<0.3 && r.lastTimeout==0.1,@"A read honours the deadline it was given");
+    Check(![c query:@"RM0;RM;" error:nil] && r.lastTimeout==0.8,@"The old form keeps 0.8 s");
+    [c query:@"RM1;RM;" timeout:0.001 error:nil]; Check(r.lastTimeout==0.05,@"A deadline below 0.05 s is raised to 0.05 s");
+    [c query:@"RM1;RM;" timeout:5 error:nil]; Check(r.lastTimeout==0.8,@"A deadline above 0.8 s is cut to 0.8 s");
+    TX500StationCore *c2=[TX500StationCore new]; FakeStationRadio *r2=[FakeStationRadio new]; c2.transportFactory=^id(NSString *p){(void)p;return r2;};
+    [c2 selectOwner:@"CW" port:@"fake-no-deadline" error:nil];
+    Check([[c2 query:@"PT;" timeout:0.1 error:nil] isEqual:@"PT0;"],@"A transport without deadlines still works");
+}
 static void TestLostReplyKeepsTX(void) {
     TX500StationCore *c=[TX500StationCore new]; FakeSilentRadio *r=[FakeSilentRadio new]; c.transportFactory=^id(NSString *p){(void)p;return r;};
     Check([c selectOwner:@"CW" port:@"fake-silent" error:nil] && [c transmit:YES owner:@"CW" error:nil] && c.ownsTX,@"Silent-radio fixture keys CW");
@@ -105,6 +134,7 @@ static void TestLostReplyKeepsTX(void) {
     TX500StationCore *c3=[TX500StationCore new]; FakeSilentRadio *r3=[FakeSilentRadio new]; c3.transportFactory=^id(NSString *p){(void)p;return r3;};
     [c3 selectOwner:@"Digital" port:@"fake-silent-3" error:nil]; r3.silent=YES; // Digital: the only owner the PT fallback can key
     Check(![c3 transmit:YES owner:@"Digital" error:nil] && ![r3.commands containsObject:@"TX;"],@"TX refused when the radio state and PT cannot be read");
+    TestReadDeadline();
 }
 static void TestStore(NSURL *root) {
     NSString *suite=NSUUID.UUID.UUIDString; NSUserDefaults *d=[[NSUserDefaults alloc] initWithSuiteName:suite]; [d setObject:@"K1ABC" forKey:@"TX500_OperatorCallsign"]; [d setObject:@"FN42" forKey:@"TX500_OperatorGrid"];

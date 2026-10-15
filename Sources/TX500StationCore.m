@@ -55,11 +55,22 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
     return YES;
 }
 - (NSString *)query:(NSString *)command error:(NSError **)error {
+    return [self query:command timeout:0.8 error:error];
+}
+- (NSString *)query:(NSString *)command timeout:(NSTimeInterval)timeout error:(NSError **)error {
+    // A status read holds the lock every other CAT user waits on: it never waits longer than
+    // its caller asked, and never longer than the old fixed 0.8 s.
+    if(!isfinite(timeout)) timeout=0.8;
+    timeout=MIN(0.8,MAX(0.05,timeout));
     [_lock lock];
     // Explicit read allowlist: a short CAT command is not necessarily a query.
     NSSet *reads=[NSSet setWithArray:@[@"FA;",@"FB;",@"MD;",@"PT;",@"FR;",@"FT;",@"XT;",@"VX;",@"IF;",@"ID;",@"TY;",@"VL;",@"PC;",@"MA;",@"KS;",@"FW;",@"FL;",@"SQ0;",@"SM0;",@"SM1;",@"RM;",@"RM0;RM;",@"RM1;RM;",@"RM2;RM;",@"RM3;RM;"]];
     if(![reads containsObject:command] || !_transport) { [self reject:@"No connected radio or unsupported status query." error:error]; [self cacheState]; [_lock unlock]; return nil; }
-    double start=Lab599MonotonicTime(); NSString *reply=[_transport query:command error:error];
+    double start=Lab599MonotonicTime(); NSString *reply;
+    // A transport without deadlines (the in-memory test radios) keeps the old form.
+    if([_transport respondsToSelector:@selector(query:timeout:cancellation:error:)])
+        reply=[_transport query:command timeout:timeout cancellation:nil error:error];
+    else reply=[_transport query:command error:error];
     _lastLatency=(Lab599MonotonicTime()-start)*1000; _queryCount++;
     if(!reply) { _failureCount++; [self publish:@"CAT reply missing • check the connection"]; }
     else {

@@ -6,6 +6,7 @@ FOUNDATION_EXPORT NSError *TXVoiceError(NSString *message);
 FOUNDATION_EXPORT NSArray<NSDictionary *> *TXVoiceDevices(BOOL input);
 FOUNDATION_EXPORT BOOL TXVoiceDeviceAvailable(NSString *uid, BOOL input);
 
+@class Lab599Cancellation;
 // Radio methods are synchronous and called only on the keyer's private worker.
 @protocol TX500VoiceRadio <NSObject>
 - (nullable NSDictionary *)readState:(NSError **)error;
@@ -16,6 +17,10 @@ FOUNDATION_EXPORT BOOL TXVoiceDeviceAvailable(NSString *uid, BOOL input);
 @interface TX500VoiceCATRadio : NSObject <TX500VoiceRadio>
 - (instancetype)initWithPort:(NSString *)path;
 - (nullable NSString *)query:(NSString *)command error:(NSError **)error;
+// The reply must come within timeout; a cancelled token ends the wait within one 40 ms
+// slice and returns nil with the serial port's own "Stopped" error.
+- (nullable NSString *)query:(NSString *)command timeout:(NSTimeInterval)timeout
+    cancellation:(nullable Lab599Cancellation *)token error:(NSError **)error;
 - (BOOL)send:(NSString *)command error:(NSError **)error;
 @end
 

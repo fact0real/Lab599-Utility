@@ -1260,9 +1260,8 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         return sent;
     };
     self.cwStationController.catQueryHandler = ^NSString *(NSString *catCommand, NSTimeInterval timeout) {
-        (void)timeout;
         NSError *qErr = nil;
-        return [weakSelf.stationCore query:catCommand error:&qErr];
+        return [weakSelf.stationCore query:catCommand timeout:timeout error:&qErr];
     };
     NSDictionary *initProfile = TX500StationStore.sharedStore.activeProfile;
     if (initProfile[@"radioOutput"]) {

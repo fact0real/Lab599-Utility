@@ -15,6 +15,8 @@ FOUNDATION_EXPORT NSString *const TXStationRadioChanged;
 @property(nonatomic, copy, nullable) id (^transportFactory)(NSString *path);
 - (BOOL)selectOwner:(NSString *)owner port:(NSString *)path error:(NSError **)error;
 - (nullable NSString *)query:(NSString *)command error:(NSError **)error;
+// The deadline is the caller's (kept between 0.05 and 0.8 s); the old form keeps 0.8 s.
+- (nullable NSString *)query:(NSString *)command timeout:(NSTimeInterval)timeout error:(NSError **)error;
 - (BOOL)send:(NSString *)command owner:(NSString *)owner error:(NSError **)error;
 - (BOOL)transmit:(BOOL)active owner:(NSString *)owner error:(NSError **)error;
 - (nullable NSDictionary *)readState:(NSError **)error;

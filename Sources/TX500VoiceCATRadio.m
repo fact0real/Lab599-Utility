@@ -21,17 +21,23 @@ NSError *TXVoiceError(NSString *message) {
         timeout:0.25 cancellation:nil error:error];
 }
 - (NSString *)query:(NSString *)command error:(NSError **)error {
+    return [self query:command timeout:0.8 cancellation:nil error:error];
+}
+- (NSString *)query:(NSString *)command timeout:(NSTimeInterval)timeout
+    cancellation:(Lab599Cancellation *)token error:(NSError **)error {
     if (![self open:error] || ![_port discardInput:error] || ![self send:command error:error]) return nil;
     NSMutableData *pending = [NSMutableData data];
-    double deadline = Lab599MonotonicTime() + 0.8;
+    double deadline = Lab599MonotonicTime() + timeout;
     NSString *prefix = [command substringToIndex:2];
     NSMutableSet<NSString *> *echoFrames = [NSMutableSet set];
     for (NSString *component in [command componentsSeparatedByString:@";"]) {
         if (component.length > 0) [echoFrames addObject:[component stringByAppendingString:@";"]];
     }
-    while (Lab599MonotonicTime() < deadline) {
+    // A cancelled token always gets one more read, which returns at once with the port's
+    // "Stopped" error: a read cut short is never reported as a missing reply.
+    while (token.cancelled || Lab599MonotonicTime() < deadline) {
         NSError *readError = nil;
-        NSData *chunk = [_port readMaximum:128 timeout:0.04 cancellation:nil error:&readError];
+        NSData *chunk = [_port readMaximum:128 timeout:0.04 cancellation:token error:&readError];
         if (!chunk && readError.code != Lab599SerialTimeout) { if (error) *error = readError; return nil; }
         if (chunk.length) [pending appendData:chunk];
         if (pending.length > 4096) break;

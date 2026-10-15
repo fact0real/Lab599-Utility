@@ -955,6 +955,43 @@ int main(int argc, const char * argv[]) {
         AssertTrue([contestAssistant.suggestedActionMacro isEqualToString:@"HG8W DE EP2AES K"], @"Suggested response macro is 'HG8W DE EP2AES K'");
         NSLog(@"PASS: Contest CQ stream ingestion, glued token splitting, and contextual auto-response generation verified.");
 
+        // 10b. A word that is itself a callsign is not split by its prefix: UR0ZZZ and CQ0ZZZ
+        // stay whole (the wideband channel panel keeps them whole too). A glued DE or CQ in front
+        // of a callsign, and a glued UR in front of a report, are still split.
+        BOOL (^heardCall)(TX500CWQSOAssistant *, NSString *) = ^BOOL(TX500CWQSOAssistant *a, NSString *call) {
+            for (TX500CWHeardStation *st in a.heardStations) if ([st.callsign isEqualToString:call]) return YES;
+            return NO;
+        };
+        TX500CWQSOAssistant *urAssistant = [[TX500CWQSOAssistant alloc] init];
+        urAssistant.myCallsign = @"EA3JIC";
+        [urAssistant processDecodedTextStream:@"CQ CQ DE UR0ZZZ UR0ZZZ K" currentWPM:22.0 snrDb:14.5];
+        AssertTrue(heardCall(urAssistant, @"UR0ZZZ") && [urAssistant.activeTargetCallsign isEqualToString:@"UR0ZZZ"], @"a UR callsign is heard");
+        TX500CWQSOAssistant *cqAssistant = [[TX500CWQSOAssistant alloc] init];
+        cqAssistant.myCallsign = @"EA3JIC";
+        [cqAssistant processDecodedTextStream:@"CQ CQ DE CQ0ZZZ CQ0ZZZ K" currentWPM:22.0 snrDb:14.5];
+        AssertTrue(heardCall(cqAssistant, @"CQ0ZZZ") && [cqAssistant.activeTargetCallsign isEqualToString:@"CQ0ZZZ"], @"a CQ callsign is heard");
+        TX500CWQSOAssistant *gluedAssistant = [[TX500CWQSOAssistant alloc] init];
+        gluedAssistant.myCallsign = @"EA3JIC";
+        [gluedAssistant processDecodedTextStream:@"TEST DEK0ZZZ DEK0ZZZ" currentWPM:22.0 snrDb:14.5];
+        AssertTrue(heardCall(gluedAssistant, @"K0ZZZ") && !heardCall(gluedAssistant, @"DEK0ZZZ"), @"a glued DE is still split");
+        TX500CWQSOAssistant *gluedCQAssistant = [[TX500CWQSOAssistant alloc] init];
+        gluedCQAssistant.myCallsign = @"EA3JIC";
+        [gluedCQAssistant processDecodedTextStream:@"CQK0ZZZ CQK0ZZZ" currentWPM:22.0 snrDb:14.5];
+        AssertTrue(heardCall(gluedCQAssistant, @"K0ZZZ") && !heardCall(gluedCQAssistant, @"CQK0ZZZ"), @"a glued CQ is still split");
+        TX500CWQSOAssistant *urAnswer = [[TX500CWQSOAssistant alloc] init];
+        urAnswer.myCallsign = @"EA3JIC";
+        [urAnswer startCallingCQ];
+        [urAnswer processDecodedTextStream:@"EA3JIC DE UR0ZZZ UR0ZZZ K" currentWPM:22.0 snrDb:14.5];
+        AssertTrue([urAnswer.activeTargetCallsign isEqualToString:@"UR0ZZZ"] && urAnswer.qsoState == TX500QSOStateExchangeReport,
+                   @"an answer from a UR station is taken");
+        TX500CWQSOAssistant *urReport = [[TX500CWQSOAssistant alloc] init];
+        urReport.myCallsign = @"EA3JIC";
+        urReport.activeRstRcvd = @"";
+        [urReport processDecodedTextStream:@"UR599 UR599 UR5NN" currentWPM:22.0 snrDb:14.5];
+        AssertTrue([urReport.activeRstRcvd isEqualToString:@"599"] && !heardCall(urReport, @"UR599") && !heardCall(urReport, @"UR5NN"),
+                   @"the report split still wins");
+        NSLog(@"PASS: A callsign that begins with UR, CQ or DE is heard whole; glued prefixes and reports are still split.");
+
         // 11. Test Idle State Actionability & Start Calling CQ
         TX500CWQSOAssistant *idleAssistant = [[TX500CWQSOAssistant alloc] init];
         idleAssistant.myCallsign = @"EP2AES";

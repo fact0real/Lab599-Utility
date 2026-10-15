@@ -194,9 +194,21 @@
     NSRegularExpression *noiseRegex = [NSRegularExpression regularExpressionWithPattern:@"[^A-Za-z0-9\\s]" options:0 error:nil];
     [noiseRegex replaceMatchesInString:clean options:0 range:NSMakeRange(0, clean.length) withTemplate:@" "];
 
-    // 2. Split glued contest prefixes: TESTHG8W -> TEST HG8W, CQHG8W -> CQ HG8W, DEHG8W -> DE HG8W
+    // 2. Split glued contest prefixes: TESTHG8W -> TEST HG8W, CQHG8W -> CQ HG8W, DEHG8W -> DE HG8W.
+    // A word that is itself a callsign (UR0ZZZ, CQ0ZZZ) is kept whole, unless the rest is a
+    // report or a number (UR599 -> UR 599) or a callsign of its own (DEK0ZZZ -> DE K0ZZZ).
     NSRegularExpression *prefixRegex = [NSRegularExpression regularExpressionWithPattern:@"\\b(TEST|CQ|DE|UR)([A-Z0-9]{3,8})\\b" options:NSRegularExpressionCaseInsensitive error:nil];
-    [prefixRegex replaceMatchesInString:clean options:0 range:NSMakeRange(0, clean.length) withTemplate:@"$1 $2"];
+    NSRegularExpression *restReportRegex = [NSRegularExpression regularExpressionWithPattern:@"^(5NN|599|579|589)[0-9]*$|^[0-9]+$" options:0 error:nil];
+    NSArray<NSTextCheckingResult *> *prefixMatches = [prefixRegex matchesInString:clean options:0 range:NSMakeRange(0, clean.length)];
+    for (NSTextCheckingResult *m in prefixMatches.reverseObjectEnumerator) {
+        NSString *word = [clean substringWithRange:m.range].uppercaseString;
+        NSString *rest = [clean substringWithRange:[m rangeAtIndex:2]].uppercaseString;
+        BOOL split = YES;
+        if ([restReportRegex numberOfMatchesInString:rest options:0 range:NSMakeRange(0, rest.length)] == 0 &&
+            ![self isValidCallsign:rest] && [self isValidCallsign:word])
+            split = NO;
+        if (split) [clean insertString:@" " atIndex:[m rangeAtIndex:2].location];
+    }
 
     // 3. Split glued signal reports: 5NN101 -> 5NN 101, 599042 -> 599 042
     NSRegularExpression *reportRegex = [NSRegularExpression regularExpressionWithPattern:@"\\b(5NN|599|579|589)([0-9]+)\\b" options:NSRegularExpressionCaseInsensitive error:nil];

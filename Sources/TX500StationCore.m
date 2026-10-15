@@ -121,6 +121,13 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
                 [self reject:@"TX blocked: turn VOX off before transmitting." error:error];
                 [self cacheState]; [_lock unlock]; return NO;
             }
+            // CW modulates the radio over USB audio, which only DIG (MD6) takes: in FM or AM a
+            // keyed radio sends a full carrier whatever the audio holds. The custom CW modes'
+            // MD6;TX; prefix is split by send:, so MD6; is written before this check runs.
+            if([owner isEqual:@"CW"] && [s[@"mode"] integerValue]!=6) {
+                [self reject:[NSString stringWithFormat:@"TX blocked: the radio is in MD%ld; CW needs DIG (MD6).",(long)[s[@"mode"] integerValue]] error:error];
+                [self cacheState]; [_lock unlock]; return NO;
+            }
         } else {
             // The state could not be read, so VOX is unknown: only Digital, which clears VOX itself, may go on.
             if(![owner isEqual:@"Digital"]) {

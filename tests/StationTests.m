@@ -24,6 +24,22 @@ static void Check(BOOL ok,NSString *why) { checks++; if(!ok) { fprintf(stderr,"F
 @implementation FakeNoStateRadio
 - (NSDictionary *)readState:(NSError **)error { (void)error; return nil; }
 @end
+// CW modulates over USB audio, which only DIG takes: in FM (MD4) a keyed radio sends a full carrier.
+static void TestCWNeedsDIG(void) {
+    TX500StationCore *c=[TX500StationCore new]; FakeStationRadio *r=[FakeStationRadio new]; c.transportFactory=^id(NSString *p){(void)p;return r;};
+    [c selectOwner:@"CW" port:@"fake-mode" error:nil]; r.state[@"mode"]=@4; NSError *modeError=nil;
+    Check(![c transmit:YES owner:@"CW" error:&modeError] && !c.ownsTX && ![r.commands containsObject:@"TX;"],@"CW is refused in FM");
+    Check([modeError.localizedDescription containsString:@"MD4"],@"The FM refusal names MD4");
+    r.state[@"mode"]=@6;
+    Check([c transmit:YES owner:@"CW" error:nil] && c.ownsTX && [r.commands containsObject:@"TX;"],@"CW keys in DIG");
+    Check([c releaseOwnedTX:nil] && !c.ownsTX,@"CW in DIG is released");
+    r.state[@"mode"]=@4;
+    Check([c send:@"MD6;TX;" owner:@"CW" error:nil] && c.ownsTX && [r.state[@"mode"] integerValue]==6,@"The custom CW prefix sets DIG before keying");
+    Check([c releaseOwnedTX:nil] && !c.ownsTX,@"The custom CW prefix is released");
+    [c selectOwner:@"Digital" port:@"fake-mode" error:nil]; r.state[@"mode"]=@4;
+    Check([c transmit:YES owner:@"Digital" error:nil] && c.ownsTX,@"Digital unchanged");
+    Check([c releaseOwnedTX:nil] && !c.ownsTX,@"Digital released");
+}
 static void TestUnknownVOX(void) {
     TX500StationCore *c=[TX500StationCore new]; FakeNoStateRadio *r=[FakeNoStateRadio new]; c.transportFactory=^id(NSString *p){(void)p;return r;};
     [c selectOwner:@"CW" port:@"fake-no-state" error:nil]; NSError *unknownError=nil;
@@ -32,6 +48,7 @@ static void TestUnknownVOX(void) {
     [c selectOwner:@"Digital" port:@"fake-no-state" error:nil];
     Check([c transmit:YES owner:@"Digital" error:nil] && c.ownsTX && [r.commands containsObject:@"TX;"],@"Digital still keys on PT0; when the state cannot be read");
     Check([c releaseOwnedTX:nil] && !c.ownsTX,@"Digital released after the PT fallback");
+    TestCWNeedsDIG();
 }
 static void TestCore(void) {
     TX500StationCore *c=[TX500StationCore new]; FakeStationRadio *r=[FakeStationRadio new]; c.transportFactory=^id(NSString *p){(void)p;return r;};
@@ -48,6 +65,7 @@ static void TestCore(void) {
     r.failTune=YES; Check(![c tune:7030000 mode:3 owner:@"Station" error:nil],@"Failed readback is surfaced"); r.failTune=NO;
     r.state[@"txVFO"]=@1; Check(![c tune:7030000 mode:3 owner:@"Station" error:nil],@"Split blocks preset tune"); r.state[@"txVFO"]=@0;
     r.state[@"vox"]=@1; Check(![c transmit:YES owner:@"Station" error:nil],@"VOX blocks app TX"); r.state[@"vox"]=@0;
+    r.state[@"mode"]=@6; // CW keys only in DIG; the preset above left the radio in MD2
     [c selectOwner:@"CW" port:@"fake" error:nil]; r.state[@"vox"]=@1; NSUInteger voxBefore=r.commands.count; NSError *voxError=nil;
     Check(![c transmit:YES owner:@"CW" error:&voxError] && !c.ownsTX && r.commands.count==voxBefore,@"VOX blocks CW TX and writes no TX;");
     Check([voxError.localizedDescription containsString:@"VOX"],@"The CW refusal names VOX");

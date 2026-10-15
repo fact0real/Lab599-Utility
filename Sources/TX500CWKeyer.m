@@ -485,8 +485,15 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
     }
 
     // 2. Play Morse modulation tone to Radio USB Audio output interface (drives TX-500 transmitter!)
-    [self ensureRadioAudioReady];
-    if (self.radioQueueReady) {
+    // Never in Practice / Sim: the radio output is neither opened nor fed, and a queue left open by
+    // a real transmission is closed, so practice Morse cannot leave the Mac.
+    BOOL practice = self.practiceModeActive && self.practiceModeActive();
+    if (practice) {
+        if (self.radioQueueReady) [self teardownRadioAudio];
+    } else {
+        [self ensureRadioAudioReady];
+    }
+    if (!practice && self.radioQueueReady) {
         NSMutableArray<NSDictionary *> *radIntervals = buildIntervalsForRate(48000.0);
         int totalMorseSamples = 0;
         for (NSDictionary *d in radIntervals) {
@@ -667,6 +674,11 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
 }
 
 - (void)startContinuousCarrierWithPitchHz:(double)pitch {
+    if (self.practiceModeActive && self.practiceModeActive()) {
+        if (self.radioQueueReady) [self teardownRadioAudio];
+        if (self.logHandler) self.logHandler(@"Practice / Sim: the tuning carrier is not sent to the radio.");
+        return;
+    }
     [self ensureRadioAudioReady];
     pthread_mutex_lock(&_radioAudioLock);
     _isContinuousCarrier = YES;

@@ -48,6 +48,9 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy, nullable) BOOL (^serialCommandSender)(NSString *catCommand);
 @property (nonatomic, copy, nullable) void (^logHandler)(NSString *line);
 @property (nonatomic, copy, nullable) void (^onTransmitStateChanged)(BOOL transmitting, NSString *activeText);
+// YES while Practice / Sim is on: the keyer then plays the local sidetone only and never opens or
+// feeds the radio's audio output, so nothing can reach the transmitter. Set by the station.
+@property (nonatomic, copy, nullable) BOOL (^practiceModeActive)(void);
 
 @property (nonatomic, copy, nullable) NSString *radioOutputDeviceUID;
 @property (nonatomic, copy, nullable) NSString *txPrefixCommand;

@@ -351,6 +351,12 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
         }
         return NO;
     };
+    // The same Practice / Sim decision for the keyer's audio: in practice it never opens or feeds
+    // the radio output. (The CAT gate above returns YES on purpose, so it cannot serve for this.)
+    self.keyer.practiceModeActive = ^BOOL {
+        typeof(self) strongSelf = weakSelf;
+        return strongSelf && strongSelf.decoder.isSimulationActive;
+    };
 
     self.keyer.logHandler = ^(NSString *line) {
         typeof(self) strongSelf = weakSelf;
@@ -1688,10 +1694,8 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
 - (void)toggleDecoder:(id)sender {
     (void)sender;
     // In Practice / Sim this button says "STOP SIMULATION": stop the simulation and untick the box,
-    // as unticking it does, without listening or sending anything to the radio. A Tune keyed before
-    // Practice was ticked is released first (stopManualTransmit uses the host sender, not the gate).
+    // as unticking it does, without listening or sending anything to the radio.
     if (self.decoder.isSimulationActive) {
-        [self stopManualTune];
         self.simulationCheckbox.state = NSControlStateValueOff;
         [self toggleSimulation:self.simulationCheckbox];
         return;
@@ -1712,6 +1716,9 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
 }
 
 - (void)toggleSimulation:(NSButton *)sender {
+    // A Tune keyed before the box was ticked, or still on when it is unticked, is released through
+    // the host sender first; the keyer's RX; below would be swallowed by the gate.
+    [self stopManualTune];
     [self.keyer stopAutoCQ]; [self.keyer abortTransmission];
     // A QSO never carries over between practice and the air.
     [self.assistant resetQSOState];
@@ -1941,6 +1948,11 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
 
 - (void)toggleManualTransmit {
     if (!self.isManualTuneActive) {
+        // Practice / Sim keys nothing: no MD6;, no TX; and no carrier.
+        if (self.decoder.isSimulationActive) {
+            if (self.logHandler) self.logHandler(@"Practice / Sim: TX (Tune) does not key the radio.");
+            return;
+        }
         [self prepareRadioForCWMode];
         NSString *txCmd = self.keyer.txPrefixCommand.length > 0 ? self.keyer.txPrefixCommand : @"TX;";
         if (self.serialCommandSender) {
@@ -2034,6 +2046,8 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
         [self stopTXMeterPolling];
         return;
     }
+    // Practice / Sim puts nothing on the air: the PWR and SWR meters are not read from the radio.
+    if (self.decoder.isSimulationActive) return;
     if (!self.catQueryHandler) return;
 
     __weak typeof(self) weakSelf = self;

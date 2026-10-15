@@ -465,6 +465,60 @@ int main(int argc, const char * argv[]) {
                    @"The console says a practice QSO was not saved");
         NSLog(@"PASS: CW Practice / Sim never logs or uploads.");
 
+        // 8d. Practice / Sim never reaches the radio: the keyer neither opens nor feeds the radio
+        // audio output, TX (Tune) keys nothing, and ticking the box releases a live Tune.
+        // ensureRadioAudioReady is counted while this runs (in tests it opens nothing anyway).
+        Method radioAudioMethod = class_getInstanceMethod([TX500CWKeyer class], NSSelectorFromString(@"ensureRadioAudioReady"));
+        __block NSUInteger radioAudioCalls = 0;
+        IMP radioAudioOriginal = method_setImplementation(radioAudioMethod, imp_implementationWithBlock(^(id k) { (void)k; radioAudioCalls++; }));
+        TX500CWStationController *simKeyerStation = [TX500CWStationController new];
+        simKeyerStation.keyer.myCallsign = @"EA3JIC";
+        __block NSMutableArray<NSString *> *simKeyerCmds = [NSMutableArray array];
+        __block NSMutableArray<NSString *> *simKeyerLog = [NSMutableArray array];
+        simKeyerStation.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) { [simKeyerCmds addObject:catCommand]; return YES; };
+        simKeyerStation.logHandler = ^(NSString *line) { [simKeyerLog addObject:line]; };
+        __block NSUInteger simMeterQueries = 0;
+        NSObject *simMeterLock = [NSObject new];
+        simKeyerStation.catQueryHandler = ^NSString *(NSString *catCommand, NSTimeInterval timeout) {
+            (void)catCommand; (void)timeout; @synchronized (simMeterLock) { simMeterQueries++; } return nil;
+        };
+        NSButton *simKeyerCheckbox = [simKeyerStation valueForKey:@"simulationCheckbox"];
+        simKeyerCheckbox.state = NSControlStateValueOn;
+        [simKeyerStation toggleSimulation:simKeyerCheckbox];
+        [simKeyerCmds removeAllObjects];
+        [simKeyerStation.keyer transmitText:@"CQ DE {MYCALL} K" targetCall:@"" rst:@"" name:@"" qth:@""];
+        AssertTrue(simKeyerStation.keyer.isTransmitting && simKeyerCmds.count == 0, @"Practice Send runs the keyer but sends no CAT");
+        AssertTrue(radioAudioCalls == 0, @"Practice Send never opens the radio audio output");
+        [NSThread sleepForTimeInterval:0.15]; // the meter poll runs on a background queue
+        @synchronized (simMeterLock) { AssertTrue(simMeterQueries == 0, @"Practice Send does not poll the radio's PWR and SWR meters"); }
+        [simKeyerStation.keyer abortTransmission];
+        [simKeyerStation.keyer startContinuousCarrierWithPitchHz:650.0];
+        AssertTrue(radioAudioCalls == 0 && ![[simKeyerStation.keyer valueForKey:@"isContinuousCarrier"] boolValue], @"Practice never starts the radio carrier");
+        [simKeyerStation toggleManualTransmit];
+        AssertTrue(simKeyerCmds.count == 0 && !simKeyerStation.isManualTuneActive && radioAudioCalls == 0, @"Practice TX (Tune) keys nothing");
+        AssertTrue([simKeyerLog.lastObject containsString:@"Practice / Sim"], @"Practice TX (Tune) says why");
+        // Control: with the box unticked the same calls reach the radio and ask for the radio output.
+        simKeyerCheckbox.state = NSControlStateValueOff;
+        [simKeyerStation toggleSimulation:simKeyerCheckbox];
+        [simKeyerCmds removeAllObjects];
+        [simKeyerStation.keyer transmitText:@"CQ DE {MYCALL} K" targetCall:@"" rst:@"" name:@"" qth:@""];
+        AssertTrue([simKeyerCmds containsObject:@"TX;"] && radioAudioCalls == 1, @"Off practice, Send keys the radio and asks for the radio output");
+        [NSThread sleepForTimeInterval:0.15];
+        @synchronized (simMeterLock) { AssertTrue(simMeterQueries > 0, @"Off practice, Send polls the PWR and SWR meters"); }
+        [simKeyerStation.keyer abortTransmission];
+        [simKeyerCmds removeAllObjects];
+        [simKeyerStation toggleManualTransmit];
+        AssertTrue(simKeyerStation.isManualTuneActive && [simKeyerCmds containsObject:@"TX;"], @"Off practice, Tune keys the radio");
+        // A Tune still on when the box is ticked is released at once, through the host sender.
+        [simKeyerCmds removeAllObjects];
+        simKeyerCheckbox.state = NSControlStateValueOn;
+        [simKeyerStation toggleSimulation:simKeyerCheckbox];
+        AssertTrue(!simKeyerStation.isManualTuneActive && [simKeyerCmds containsObject:@"RX;"], @"Ticking Practice releases a live Tune");
+        simKeyerCheckbox.state = NSControlStateValueOff;
+        [simKeyerStation toggleSimulation:simKeyerCheckbox];
+        method_setImplementation(radioAudioMethod, radioAudioOriginal);
+        NSLog(@"PASS: Practice / Sim never opens the radio output, never keys, and releases a live Tune.");
+
         // 9. Test ADIF 3.1 Record Generation & File Export
         NSString *adifFull = [assistant generateFullADIFString];
         AssertTrue([adifFull containsString:@"<PROGRAMID:14>Lab599 Utility"], @"ADIF Header");
@@ -553,7 +607,9 @@ int main(int argc, const char * argv[]) {
         AssertTrue(simCheckbox.state == NSControlStateValueOff, @"STOP SIMULATION unticks Practice / Sim");
         AssertTrue([simDecoderButton.title isEqualToString:@"START DECODER"], @"After STOP SIMULATION the button says START DECODER");
         AssertTrue(listenCalls == 0, @"STOP SIMULATION does not start the decoder");
-        AssertTrue(!simStation.isManualTuneActive && [simSentCmds containsObject:@"RX;"], @"STOP SIMULATION releases a running Tune through the host sender");
+        // Ticking Practice / Sim already released that Tune through the host sender (see 8d), so
+        // STOP SIMULATION finds none left to release.
+        AssertTrue(!simStation.isManualTuneActive, @"No Tune is left running after STOP SIMULATION");
         AssertTrue(![simSentCmds containsObject:@"MD6;"] && ![simSentCmds containsObject:@"TX;"], @"STOP SIMULATION sends no MD6; and keys nothing");
         method_setImplementation(listenMethod, listenOriginal);
         NSLog(@"PASS: STOP SIMULATION stops the simulation, unticks Practice / Sim and releases a Tune.");

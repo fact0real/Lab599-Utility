@@ -12,6 +12,7 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
     BOOL _ownsTX, _faulted;
     NSUInteger _queryCount, _failureCount, _receiveFailureStreak;
     double _lastLatency;
+    Lab599Cancellation *_pendingRead; // the meter read in flight; guarded by @synchronized(self)
 }
 - (instancetype)init { if((self=[super init])) { _lock=[NSRecursiveLock new]; _owner=@""; _port=@""; _status=@"Disconnected"; _snapshot=@{}; [self cacheState]; } return self; }
 // UI readers never wait behind serial I/O. Publish immutable diagnostic snapshots
@@ -67,11 +68,19 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
     NSSet *reads=[NSSet setWithArray:@[@"FA;",@"FB;",@"MD;",@"PT;",@"FR;",@"FT;",@"XT;",@"VX;",@"IF;",@"ID;",@"TY;",@"VL;",@"PC;",@"MA;",@"KS;",@"FW;",@"FL;",@"SQ0;",@"SM0;",@"SM1;",@"RM;",@"RM0;RM;",@"RM1;RM;",@"RM2;RM;",@"RM3;RM;"]];
     if(![reads containsObject:command] || !_transport) { [self reject:@"No connected radio or unsupported status query." error:error]; [self cacheState]; [_lock unlock]; return nil; }
     double start=Lab599MonotonicTime(); NSString *reply;
+    // A release waiting for the lock cancels a meter read's token (interruptPendingRead) instead of
+    // waiting out the read. Only meter reads (RM...) take one: a frequency, mode or PT read of any
+    // screen is never cut and gets its reply.
+    Lab599Cancellation *token=[command hasPrefix:@"RM"] ? [Lab599Cancellation new] : nil;
+    if(token) { @synchronized(self) { _pendingRead=token; } }
     // A transport without deadlines (the in-memory test radios) keeps the old form.
     if([_transport respondsToSelector:@selector(query:timeout:cancellation:error:)])
-        reply=[_transport query:command timeout:timeout cancellation:nil error:error];
+        reply=[_transport query:command timeout:timeout cancellation:token error:error];
     else reply=[_transport query:command error:error];
+    if(token) { @synchronized(self) { if(_pendingRead==token) _pendingRead=nil; } }
     _lastLatency=(Lab599MonotonicTime()-start)*1000; _queryCount++;
+    // A read cut short by a release is not a CAT failure: nothing is counted or published.
+    if(!reply && token.cancelled) { [self cacheState]; [_lock unlock]; return nil; }
     if(!reply) { _failureCount++; [self publish:@"CAT reply missing • check the connection"]; }
     else {
         NSDictionary *keys=@{@"FA;":@"frequency",@"MD;":@"mode",@"PT;":@"tx"}; NSString *key=keys[command];
@@ -79,6 +88,9 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
     }
     [self cacheState]; [_lock unlock]; return reply;
 }
+// Called before a release takes the lock: a meter read in flight ends within one serial
+// slice (40 ms) instead of holding the RX; of ABORT, Esc or the keyer's time-out behind it.
+- (void)interruptPendingRead { @synchronized(self) { _pendingRead.cancelled=YES; } }
 - (NSDictionary *)readState:(NSError **)error {
     [_lock lock]; double start=Lab599MonotonicTime(); NSDictionary *s=[_transport readState:error]; _queryCount++; _lastLatency=(Lab599MonotonicTime()-start)*1000;
     if(s) { _snapshot=[s copy]; [self publish:[s[@"tx"] boolValue] ? @"Radio is transmitting" : @"Radio verified • receiving"]; }
@@ -86,6 +98,7 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
     [self cacheState]; [_lock unlock]; return s;
 }
 - (BOOL)transmit:(BOOL)active owner:(NSString *)owner error:(NSError **)error {
+    if(!active) [self interruptPendingRead];
     [_lock lock];
     if(![self allowed:owner error:error]) { [self cacheState]; [_lock unlock]; return NO; }
     if(active && _faulted) { [self reject:@"PTT state is unresolved. Stop and confirm RX before another transmission." error:error]; [self cacheState]; [_lock unlock]; return NO; }
@@ -151,6 +164,7 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
     [self cacheState]; [_lock unlock]; return ok;
 }
 - (BOOL)send:(NSString *)command owner:(NSString *)owner error:(NSError **)error {
+    if([command containsString:@"RX;"]) [self interruptPendingRead]; // RX;, KY ;RX;, RX;MD3;...
     [_lock lock]; if(![self allowed:owner error:error] || !command.length || ![command hasSuffix:@";"]) { [self cacheState]; [_lock unlock]; return NO; }
     if([command isEqual:@"KY ;RX;"]) {
         BOOL released=[self releaseOwnedTX:error]; [self cacheState]; [_lock unlock]; return released;
@@ -245,6 +259,7 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
     } @finally { [self cacheState]; [_lock unlock]; }
 }
 - (BOOL)releaseOwnedTX:(NSError **)error {
+    [self interruptPendingRead];
     [_lock lock];
     BOOL ok=YES;
     if(_ownsTX) {
@@ -261,6 +276,7 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
     [self cacheState]; [_lock unlock]; return ok;
 }
 - (BOOL)suspend:(NSError **)error {
+    [self interruptPendingRead];
     [_lock lock];
     BOOL ok=[self releaseOwnedTX:error];
     if(ok || !_ownsTX) {

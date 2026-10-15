@@ -93,11 +93,17 @@ static void TestReceiveRecoveryReconnect(void) {
 // real transport does. Every other query gets the parent's answer at once.
 @interface FakeDeadlineRadio : FakeStationRadio
 @property double lastTimeout;
-@property NSUInteger meterReads,cancelledReads;
+@property NSUInteger meterReads,cancelledReads,slowReads;
+@property BOOL slowFrequencyRead; // FA; answers only after its deadline, unless its token is cancelled
 @end
 @implementation FakeDeadlineRadio
 - (NSString *)query:(NSString *)q error:(NSError **)error { return [self query:q timeout:0.8 cancellation:nil error:error]; }
 - (NSString *)query:(NSString *)q timeout:(NSTimeInterval)timeout cancellation:(Lab599Cancellation *)token error:(NSError **)error {
+    if(self.slowFrequencyRead && [q isEqual:@"FA;"]) {
+        self.slowReads++; double end=CFAbsoluteTimeGetCurrent()+timeout;
+        while(CFAbsoluteTimeGetCurrent()<end) { if(token.cancelled) { self.cancelledReads++; return nil; } usleep(5000); }
+        return [super query:q error:error];
+    }
     if(![q hasPrefix:@"RM"]) return [super query:q error:error];
     self.lastTimeout=timeout; self.meterReads++; double end=CFAbsoluteTimeGetCurrent()+timeout;
     while(CFAbsoluteTimeGetCurrent()<end) { if(token.cancelled) { self.cancelledReads++; return nil; } usleep(5000); }
@@ -115,6 +121,44 @@ static void TestReadDeadline(void) {
     TX500StationCore *c2=[TX500StationCore new]; FakeStationRadio *r2=[FakeStationRadio new]; c2.transportFactory=^id(NSString *p){(void)p;return r2;};
     [c2 selectOwner:@"CW" port:@"fake-no-deadline" error:nil];
     Check([[c2 query:@"PT;" timeout:0.1 error:nil] isEqual:@"PT0;"],@"A transport without deadlines still works");
+}
+// A release must not wait for a meter read in flight on another thread: ABORT, Esc, the keyer's
+// time-out (RX;) and quitting (suspend) each cancel it before they take the core's lock.
+static void TestReleaseOutrunsRead(void) {
+    NSArray *names=@[@"transmit:NO",@"send RX;",@"releaseOwnedTX",@"suspend"];
+    for(NSUInteger k=0;k<names.count;k++) {
+        TX500StationCore *c=[TX500StationCore new]; FakeDeadlineRadio *r=[FakeDeadlineRadio new]; c.transportFactory=^id(NSString *p){(void)p;return r;};
+        [c selectOwner:@"CW" port:@"fake-release" error:nil];
+        Check([c transmit:YES owner:@"CW" error:nil] && c.ownsTX,@"Release fixture keys CW");
+        NSUInteger failures=c.failureCount; dispatch_semaphore_t done=dispatch_semaphore_create(0);
+        [NSThread detachNewThreadWithBlock:^{ [c query:@"RM0;RM;" timeout:0.8 error:nil]; dispatch_semaphore_signal(done); }];
+        for(int i=0;i<200 && r.meterReads==0;i++) usleep(1000);
+        usleep(50000);
+        double t0=CFAbsoluteTimeGetCurrent(); BOOL ok=NO;
+        if(k==0) ok=[c transmit:NO owner:@"CW" error:nil];
+        else if(k==1) ok=[c send:@"RX;" owner:@"CW" error:nil];
+        else if(k==2) ok=[c releaseOwnedTX:nil];
+        else ok=[c suspend:nil];
+        double elapsed=CFAbsoluteTimeGetCurrent()-t0;
+        Check(dispatch_semaphore_wait(done,dispatch_time(DISPATCH_TIME_NOW,2*NSEC_PER_SEC))==0,@"The meter read in flight returns");
+        if(elapsed>=0.35) fprintf(stderr,"%s waited %.2f s\n",[names[k] UTF8String],elapsed);
+        Check(ok && !c.ownsTX && elapsed<0.35,@"An RX does not wait for a meter read in flight");
+        Check(r.meterReads==1 && r.cancelledReads==1,@"The release cancels the meter read in flight");
+        Check(c.failureCount==failures,@"A read cut short by a release is not a CAT failure");
+    }
+    // Only a meter read is cut: another screen's frequency read in flight gets its reply, and the
+    // release goes out after it.
+    TX500StationCore *c=[TX500StationCore new]; FakeDeadlineRadio *r=[FakeDeadlineRadio new]; c.transportFactory=^id(NSString *p){(void)p;return r;};
+    r.slowFrequencyRead=YES;
+    [c selectOwner:@"CW" port:@"fake-release-fa" error:nil];
+    Check([c transmit:YES owner:@"CW" error:nil] && c.ownsTX,@"Release fixture keys CW");
+    __block NSString *faReply=nil; dispatch_semaphore_t done=dispatch_semaphore_create(0);
+    [NSThread detachNewThreadWithBlock:^{ faReply=[c query:@"FA;" timeout:0.3 error:nil]; dispatch_semaphore_signal(done); }];
+    for(int i=0;i<200 && r.slowReads==0;i++) usleep(1000);
+    usleep(50000);
+    BOOL released=[c send:@"RX;" owner:@"CW" error:nil];
+    Check(dispatch_semaphore_wait(done,dispatch_time(DISPATCH_TIME_NOW,2*NSEC_PER_SEC))==0,@"The frequency read in flight returns");
+    Check(released && !c.ownsTX && [faReply hasPrefix:@"FA"] && r.cancelledReads==0,@"A release never cuts a frequency read in flight");
 }
 static void TestLostReplyKeepsTX(void) {
     TX500StationCore *c=[TX500StationCore new]; FakeSilentRadio *r=[FakeSilentRadio new]; c.transportFactory=^id(NSString *p){(void)p;return r;};
@@ -135,6 +179,7 @@ static void TestLostReplyKeepsTX(void) {
     [c3 selectOwner:@"Digital" port:@"fake-silent-3" error:nil]; r3.silent=YES; // Digital: the only owner the PT fallback can key
     Check(![c3 transmit:YES owner:@"Digital" error:nil] && ![r3.commands containsObject:@"TX;"],@"TX refused when the radio state and PT cannot be read");
     TestReadDeadline();
+    TestReleaseOutrunsRead();
 }
 static void TestStore(NSURL *root) {
     NSString *suite=NSUUID.UUID.UUIDString; NSUserDefaults *d=[[NSUserDefaults alloc] initWithSuiteName:suite]; [d setObject:@"K1ABC" forKey:@"TX500_OperatorCallsign"]; [d setObject:@"FN42" forKey:@"TX500_OperatorGrid"];

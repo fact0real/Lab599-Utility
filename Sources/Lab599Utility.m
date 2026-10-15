@@ -451,6 +451,12 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     if(tabs[command]) { self.operationPicker.selectedSegment=[tabs[command] integerValue]; [self operationChanged:nil]; }
     else { self.operationPicker.selectedSegment=15; [self operationChanged:nil]; [self.stationController runCommand:command]; }
 }
+// The screen still showing (the sidebar marks it); before the first screen, the radio owner's.
+- (NSInteger)operationOnScreen {
+    for (TX500SidebarButton *btn in self.sidebarItems) if (btn.isSelected) return btn.operationTag;
+    NSDictionary *tabs=@{@"CW":@10,@"Digital":@12,@"Audio":@11,@"Voice":@14};
+    return [tabs[self.stationCore.owner ?: @""] integerValue] ?: 15;
+}
 
 - (NSTextField *)label:(NSString *)text {
     NSTextField *field = [NSTextField labelWithString:text];
@@ -2205,17 +2211,25 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     // SSTV only listens (shared audio input; CAT reads of the frequency on Listen, at its notices and when a picture ends): it never retunes
     BOOL passive=isCluster || isStation || isLogbook || isTelemetry || isDocs || isFeedback || isDriver || isHelp || isSSTV;
     if(leavingVoice && ![self.voiceKeyerController deactivate]) { self.operationPicker.selectedSegment=14; return; }
-    if(exclusive || (!passive && ![self.stationCore.owner isEqual:desired])) {
-        [self.ft8StationController stopStation]; [self.cwStationController stopStation];
-        NSError *releaseError=nil;
-        if(![self.stationCore releaseOwnedTX:&releaseError]) { [self appendLog:releaseError.localizedDescription]; }
+    // CW's own RX; goes out while CW still owns the radio.
+    BOOL cwStopped=!isCWStation && !leavingVoice;
+    if (cwStopped) {
+        [self.cwStationController stopStation];
     }
-    if(exclusive) {
-        if(![self.stationCore suspend:nil]) {
-            [self.stationCore forceCloseTransport];
-        }
-    } else {
-        [self.stationCore selectOwner:desired port:[self currentStationPort] error:nil];
+    BOOL releaseFirst=exclusive || (!passive && ![self.stationCore.owner isEqual:desired]);
+    if(releaseFirst) {
+        [self.ft8StationController stopStation];
+        if(!cwStopped) [self.cwStationController stopStation]; // once: it may have run just above
+    }
+    // A radio that did not confirm RX keeps its owner and its port, and the screen stays.
+    NSError *handoffError=nil;
+    if(![self.stationCore handoffToOwner:desired port:[self currentStationPort] releaseFirst:releaseFirst closePort:exclusive error:&handoffError]) {
+        // CW Station was stopped above (decoder, Practice / Sim): say so when it is the screen that stays.
+        NSInteger onScreen=[self operationOnScreen];
+        NSString *cwNote=(onScreen==10 && (cwStopped || releaseFirst)) ? @" CW Station was stopped: press START DECODER again." : @"";
+        [self appendLog:[NSString stringWithFormat:@"Screen not changed: %@%@",handoffError.localizedDescription ?: self.stationCore.status,cwNote]];
+        self.operationPicker.selectedSegment=onScreen;
+        return;
     }
     if (!isFW) [self clearFirmwareCATVerification];
     self.voiceOwnsRadio=isVoice;
@@ -2264,9 +2278,6 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     }
     if (!isScreen && self.screenController.liveSyncActive) {
         [self.screenController stopLiveSync];
-    }
-    if (!isCWStation && !leavingVoice) {
-        [self.cwStationController stopStation];
     }
     if (!isAudio) {
         [self.audioMonitorController pauseTabUI];

@@ -105,6 +105,28 @@ static void TestReceiveRecoveryReconnect(void) {
 - (NSDictionary *)readState:(NSError **)error { return self.silent ? nil : [super readState:error]; }
 - (BOOL)setTransmit:(BOOL)tx error:(NSError **)error { BOOL ok=[super setTransmit:tx error:error]; return self.silent ? NO : ok; }
 @end
+// A screen change hands the radio over in one step: a keyed radio that does not confirm RX keeps
+// its owner and its port, and a passive screen never takes a keyed radio.
+static void TestHandoff(void) {
+    TX500StationCore *c=[TX500StationCore new]; FakeSilentRadio *r=[FakeSilentRadio new]; c.transportFactory=^id(NSString *p){(void)p;return r;};
+    Check([c selectOwner:@"CW" port:@"fake-handoff" error:nil] && [c transmit:YES owner:@"CW" error:nil] && c.ownsTX,@"Handoff fixture keys CW");
+    r.silent=YES;
+    Check(![c handoffToOwner:@"Station" port:@"fake-handoff" releaseFirst:YES closePort:YES error:nil] && c.ownsTX && [c.owner isEqual:@"CW"] && ![r.commands containsObject:@"CLOSE"],@"An unconfirmed RX keeps the port open and the owner");
+    Check([c handoffToOwner:@"Station" port:@"fake-handoff" releaseFirst:NO closePort:NO error:nil] && c.ownsTX && [c.owner isEqual:@"CW"],@"A passive screen leaves the keyed owner alone");
+    for(NSNumber *first in @[@YES,@NO]) {
+        TX500StationCore *s=[TX500StationCore new]; FakeStationRadio *stuck=[FakeStationRadio new]; s.transportFactory=^id(NSString *p){(void)p;return stuck;};
+        [s selectOwner:@"CW" port:@"fake-stuck" error:nil]; Check([s transmit:YES owner:@"CW" error:nil] && s.ownsTX,@"Stuck-radio fixture keys CW");
+        stuck.failRX=YES; // the radio stays at PT1 after RX;
+        Check(![s handoffToOwner:@"Station" port:@"fake-stuck" releaseFirst:first.boolValue closePort:YES error:nil] && s.ownsTX && [s.owner isEqual:@"CW"] && ![stuck.commands containsObject:@"CLOSE"],@"A radio stuck in TX never has its port force-closed");
+    }
+    TX500StationCore *h=[TX500StationCore new]; FakeStationRadio *ok=[FakeStationRadio new]; h.transportFactory=^id(NSString *p){(void)p;return ok;};
+    Check([h handoffToOwner:@"Station" port:@"fake-healthy" releaseFirst:NO closePort:NO error:nil] && [h.owner isEqual:@"Station"],@"A passive screen takes a radio that is not keyed");
+    [h selectOwner:@"CW" port:@"fake-healthy" error:nil]; Check([h transmit:YES owner:@"CW" error:nil] && h.ownsTX,@"Healthy-radio fixture keys CW");
+    NSUInteger before=ok.commands.count;
+    Check([h handoffToOwner:@"Digital" port:@"fake-healthy" releaseFirst:YES closePort:NO error:nil] && !h.ownsTX && [h.owner isEqual:@"Digital"] && [[ok.commands subarrayWithRange:NSMakeRange(before,ok.commands.count-before)] containsObject:@"RX;"],@"A confirmed release hands over");
+    [h selectOwner:@"CW" port:@"fake-healthy" error:nil]; Check([h transmit:YES owner:@"CW" error:nil] && h.ownsTX,@"Healthy-radio fixture keys CW again");
+    Check([h handoffToOwner:@"Station" port:@"fake-healthy" releaseFirst:YES closePort:YES error:nil] && !h.ownsTX && [ok.commands containsObject:@"CLOSE"],@"A confirmed release lets the tool have the port");
+}
 #import "Lab599SerialPort.h"
 // A transport with read deadlines, as TX500VoiceCATRadio has: a meter read (RM...) gets no answer,
 // so it waits its whole deadline unless its token is cancelled. The old form waits 0.8 s, as the
@@ -198,6 +220,7 @@ static void TestLostReplyKeepsTX(void) {
     Check(![c3 transmit:YES owner:@"Digital" error:nil] && ![r3.commands containsObject:@"TX;"],@"TX refused when the radio state and PT cannot be read");
     TestReadDeadline();
     TestReleaseOutrunsRead();
+    TestHandoff();
 }
 static void TestStore(NSURL *root) {
     NSString *suite=NSUUID.UUID.UUIDString; NSUserDefaults *d=[[NSUserDefaults alloc] initWithSuiteName:suite]; [d setObject:@"K1ABC" forKey:@"TX500_OperatorCallsign"]; [d setObject:@"FN42" forKey:@"TX500_OperatorGrid"];

@@ -25,5 +25,10 @@ FOUNDATION_EXPORT NSString *const TXStationRadioChanged;
 - (BOOL)suspend:(NSError **)error;
 - (void)forceCloseTransport;
 - (id<TX500VoiceRadio>)voiceAdapter;
+// One step for a screen change. releaseFirst: the owned TX is released and an unconfirmed RX
+// answers NO with nothing changed. closePort (exclusive tools): then suspend, never a forced
+// close. Neither: the owner changes only while no TX is owned (a screen that only looks keeps
+// the keyed owner).
+- (BOOL)handoffToOwner:(NSString *)owner port:(NSString *)path releaseFirst:(BOOL)releaseFirst closePort:(BOOL)closePort error:(NSError **)error;
 @end
 NS_ASSUME_NONNULL_END

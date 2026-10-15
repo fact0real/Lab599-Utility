@@ -304,6 +304,17 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
     [self cacheState];
     [_lock unlock];
 }
+- (BOOL)handoffToOwner:(NSString *)owner port:(NSString *)path releaseFirst:(BOOL)releaseFirst closePort:(BOOL)closePort error:(NSError **)error {
+    if(releaseFirst || closePort) [self interruptPendingRead];
+    [_lock lock];
+    BOOL ok;
+    // A radio that did not confirm RX keeps its port, its owner and the fault latch.
+    if(releaseFirst && ![self releaseOwnedTX:error]) ok=NO;
+    else if(closePort) ok=[self suspend:error];
+    else if(!releaseFirst && _ownsTX) ok=YES;
+    else ok=[self selectOwner:owner port:path error:error];
+    [self cacheState]; [_lock unlock]; return ok;
+}
 - (id<TX500VoiceRadio>)voiceAdapter { TX500StationVoiceAdapter *a=[TX500StationVoiceAdapter new]; a.core=self; return a; }
 @end
 @implementation TX500StationVoiceAdapter

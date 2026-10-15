@@ -1683,6 +1683,15 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
 
 - (void)toggleDecoder:(id)sender {
     (void)sender;
+    // In Practice / Sim this button says "STOP SIMULATION": stop the simulation and untick the box,
+    // as unticking it does, without listening or sending anything to the radio. A Tune keyed before
+    // Practice was ticked is released first (stopManualTransmit uses the host sender, not the gate).
+    if (self.decoder.isSimulationActive) {
+        [self stopManualTune];
+        self.simulationCheckbox.state = NSControlStateValueOff;
+        [self toggleSimulation:self.simulationCheckbox];
+        return;
+    }
     if (self.decoder.isListening) {
         [self.decoder stopListening];
         self.startStopDecoderButton.title = @"START DECODER";

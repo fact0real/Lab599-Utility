@@ -21,6 +21,8 @@
 - (void)macroButtonClicked:(NSButton *)sender;
 - (void)advanceQSOAction:(id)sender;
 - (void)toggleAutoCQ:(id)sender;
+- (void)toggleDecoder:(id)sender;
+- (void)toggleSimulation:(NSButton *)sender;
 @end
 
 // Counts calls to the cloud upload while a test runs, and uploads nothing. Installed only
@@ -526,6 +528,35 @@ int main(int argc, const char * argv[]) {
         [stationController prepareRadioForCWMode];
         AssertTrue(![controllerSentCmds containsObject:@"MD6;"], @"User explicit mode choice is preserved, not overwritten");
         NSLog(@"PASS: Transceiver automatic DIG mode switching (MD6;) and user choice preservation verified.");
+        // 12b. In Practice / Sim the decoder button says "STOP SIMULATION", and that is what it does:
+        // the simulation stops, the box is unticked and a Tune keyed before the box was ticked is
+        // released. It does not listen and sends nothing else to the radio. startListening is
+        // replaced while this runs, so no audio input can open.
+        Method listenMethod = class_getInstanceMethod([TX500CWAudioDecoder class], @selector(startListening));
+        __block NSUInteger listenCalls = 0;
+        IMP listenOriginal = method_setImplementation(listenMethod, imp_implementationWithBlock(^(id listeningDecoder) {
+            (void)listeningDecoder; listenCalls++;
+        }));
+        TX500CWStationController *simStation = [TX500CWStationController new];
+        __block NSMutableArray<NSString *> *simSentCmds = [NSMutableArray array];
+        simStation.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) { [simSentCmds addObject:catCommand]; return YES; };
+        NSButton *simCheckbox = [simStation valueForKey:@"simulationCheckbox"];
+        NSButton *simDecoderButton = [simStation valueForKey:@"startStopDecoderButton"];
+        [simStation toggleManualTransmit];                       // a Tune, before Practice is ticked
+        AssertTrue(simStation.isManualTuneActive && [simSentCmds containsObject:@"TX;"], @"Tune keyed before Practice");
+        simCheckbox.state = NSControlStateValueOn;
+        [simStation toggleSimulation:simCheckbox];
+        AssertTrue(simStation.decoder.isSimulationActive && [simDecoderButton.title isEqualToString:@"STOP SIMULATION"], @"Practice / Sim on: the decoder button says STOP SIMULATION");
+        [simSentCmds removeAllObjects];
+        [simStation toggleDecoder:simDecoderButton];
+        AssertTrue(!simStation.decoder.isSimulationActive, @"STOP SIMULATION stops the simulation");
+        AssertTrue(simCheckbox.state == NSControlStateValueOff, @"STOP SIMULATION unticks Practice / Sim");
+        AssertTrue([simDecoderButton.title isEqualToString:@"START DECODER"], @"After STOP SIMULATION the button says START DECODER");
+        AssertTrue(listenCalls == 0, @"STOP SIMULATION does not start the decoder");
+        AssertTrue(!simStation.isManualTuneActive && [simSentCmds containsObject:@"RX;"], @"STOP SIMULATION releases a running Tune through the host sender");
+        AssertTrue(![simSentCmds containsObject:@"MD6;"] && ![simSentCmds containsObject:@"TX;"], @"STOP SIMULATION sends no MD6; and keys nothing");
+        method_setImplementation(listenMethod, listenOriginal);
+        NSLog(@"PASS: STOP SIMULATION stops the simulation, unticks Practice / Sim and releases a Tune.");
 
         // 13. Test TX Release Ownership (RX;)
         __block BOOL sentRelease = NO;

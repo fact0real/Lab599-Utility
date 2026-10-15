@@ -277,6 +277,17 @@ static void CWKeyerRadioOutputCallback(void *inUserData,
     pthread_mutex_unlock(&_radioAudioLock);
 }
 
+// Called with _radioAudioLock held (the render callback runs on CoreAudio's thread). Frees the
+// Morse samples of the message that ended or was stopped, so none of them stays addressable.
+- (void)releaseRadioBufferLocked {
+    if (_radioTxBuffer) {
+        free(_radioTxBuffer);
+        _radioTxBuffer = NULL;
+    }
+    _radioTxBufferTotalSamples = 0;
+    _radioTxBufferReadIndex = 0;
+}
+
 - (void)teardownRadioAudio {
     if (_radioOutputQueue) {
         AudioQueueStop(_radioOutputQueue, true);
@@ -690,7 +701,7 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
             strongSelf.currentlyTransmittingChar = @"";
             pthread_mutex_lock(&strongSelf->_radioAudioLock);
             strongSelf->_isContinuousCarrier = NO;
-            strongSelf->_radioTxBufferReadIndex = strongSelf->_radioTxBufferTotalSamples;
+            [strongSelf releaseRadioBufferLocked];
             pthread_mutex_unlock(&strongSelf->_radioAudioLock);
             if (strongSelf.sidetonePlayer.isPlaying) {
                 [strongSelf.sidetonePlayer stop];
@@ -732,7 +743,7 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
 
     pthread_mutex_lock(&_radioAudioLock);
     _isContinuousCarrier = NO;
-    _radioTxBufferReadIndex = _radioTxBufferTotalSamples;
+    [self releaseRadioBufferLocked];
     pthread_mutex_unlock(&_radioAudioLock);
 
     if (self.sidetonePlayer.isPlaying) {

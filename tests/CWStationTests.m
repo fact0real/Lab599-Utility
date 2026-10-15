@@ -288,6 +288,45 @@ int main(int argc, const char * argv[]) {
         AssertTrue(!keyer.isTransmitting, @"Keyer transmission terminated");
         NSLog(@"PASS: Keyer audio-based Morse transmission and PTT sequencing verified.");
 
+        // 6a. An abort or the end of a message empties the radio audio buffer: no Morse sample of a
+        // message that ended or was stopped stays loaded. In the test mode no queue is opened;
+        // radioQueueReady only lets the keyer load the buffer, and the render method is called the
+        // way CoreAudio's callback calls it. "E" at 20 WPM is 0.24 s.
+        TX500CWKeyer *bufferKeyer = [[TX500CWKeyer alloc] init];
+        bufferKeyer.wpm = 20;
+        __block NSMutableArray<NSString *> *bufferCmds = [NSMutableArray array];
+        bufferKeyer.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) { [bufferCmds addObject:catCommand]; return YES; };
+        [bufferKeyer setValue:@YES forKey:@"radioQueueReady"];
+        SEL renderSelector = NSSelectorFromString(@"renderRadioAudioSamples:count:");
+        void (*renderRadio)(id, SEL, float *, UInt32) = (void (*)(id, SEL, float *, UInt32))[bufferKeyer methodForSelector:renderSelector];
+        float *renderFrames = (float *)calloc(480 * 2, sizeof(float));
+        float (^renderPeak)(void) = ^float(void) {
+            for (int i = 0; i < 480 * 2; i++) renderFrames[i] = 1.0f;
+            renderRadio(bufferKeyer, renderSelector, renderFrames, 480);
+            float peak = 0.0f;
+            for (int i = 0; i < 480 * 2; i++) peak = fmaxf(peak, fabsf(renderFrames[i]));
+            return peak;
+        };
+        unsigned (^bufferSamples)(void) = ^unsigned(void) { return [[bufferKeyer valueForKey:@"radioTxBufferTotalSamples"] unsignedIntValue]; };
+        [bufferKeyer transmitText:@"E" targetCall:@"" rst:@"" name:@"" qth:@""];
+        AssertTrue(bufferKeyer.isTransmitting && bufferSamples() > 0, @"the Morse buffer is loaded");
+        AssertTrue(renderPeak() > 0.1f, @"the buffer plays while transmitting");
+        [bufferKeyer abortTransmission];
+        AssertTrue(bufferSamples() == 0 && [[bufferKeyer valueForKey:@"radioTxBufferReadIndex"] unsignedIntValue] == 0, @"an abort empties the buffer");
+        AssertTrue(renderPeak() == 0.0f, @"after an abort the radio output is silent");
+        [bufferKeyer transmitText:@"E" targetCall:@"" rst:@"" name:@"" qth:@""];
+        AssertTrue(bufferKeyer.isTransmitting && bufferSamples() > 0, @"a message after an abort loads its own buffer");
+        [bufferCmds removeAllObjects];
+        [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.24 + 0.5]];
+        AssertTrue(!bufferKeyer.isTransmitting && [bufferCmds containsObject:@"RX;"], @"the message ended with RX;");
+        AssertTrue(bufferSamples() == 0, @"the end of a message empties it too");
+        AssertTrue(renderPeak() == 0.0f, @"after the end of a message the radio output is silent");
+        [bufferKeyer transmitText:@"E" targetCall:@"" rst:@"" name:@"" qth:@""];
+        AssertTrue(bufferSamples() > 0 && renderPeak() > 0.1f, @"a new message after that loads and plays its own buffer");
+        [bufferKeyer abortTransmission];
+        free(renderFrames);
+        NSLog(@"PASS: An abort or the end of a message empties the radio audio buffer.");
+
         // 6b. The release timers are armed before any sound. A sidetone that raises (the engine
         // stopped by an output change) neither escapes the keyer nor skips the RX; release; a Morse
         // audio stage that raises still gets RX; at the estimated end; and the Tune cutoff is armed

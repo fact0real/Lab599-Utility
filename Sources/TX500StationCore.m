@@ -36,7 +36,8 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
     [_lock lock];
     if(_ownsTX && (![_owner isEqual:owner] || ![_port isEqual:path])) {
         NSString *pt=[_transport query:@"PT;" error:nil];
-        if(!pt || [pt isEqual:@"PT0;"]) {
+        // Only an explicit PT0 means receiving; no reply keeps ownership and the fault latch.
+        if([pt isEqual:@"PT0;"]) {
             _ownsTX=NO; _faulted=NO;
         } else {
             BOOL r=[self reject:@"Stop the current transmission before changing radio control." error:error]; [self cacheState]; [_lock unlock]; return r;
@@ -82,11 +83,8 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
         // leave the transceiver keyed even though the caller has already
         // unwound its TX state. Confirm PT0 and force RX when necessary.
         NSString *pt=[_transport query:@"PT;" error:error];
-        if(pt && [pt hasPrefix:@"PT1"]) {
-            _ownsTX=YES;
-        } else {
-            _faulted=NO; [self cacheState]; [_lock unlock]; return YES;
-        }
+        if([pt isEqual:@"PT0;"]) { _faulted=NO; [self cacheState]; [_lock unlock]; return YES; }
+        _ownsTX=YES; // PT1, or no reply: force RX; below and let the read-back decide.
     }
     if(active && !_ownsTX) {
         NSDictionary *s=[self readState:nil];
@@ -106,7 +104,7 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
                 [self cacheState]; [_lock unlock]; return NO;
             }
             NSString *pt = [_transport query:@"PT;" error:nil];
-            if([pt isEqual:@"PT1;"]) isAlreadyTX = YES;
+            if(![pt isEqual:@"PT0;"]) { [self reject:@"TX blocked: the radio did not confirm RX." error:error]; [self cacheState]; [_lock unlock]; return NO; }
         }
         if(isAlreadyTX) {
             [self reject:@"TX blocked: radio must be receiving." error:error];
@@ -244,7 +242,7 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
         if(!ok) {
             [_transport send:@"RX;" error:nil];
             NSString *pt=[_transport query:@"PT;" error:nil];
-            if(!pt || [pt isEqual:@"PT0;"]) {
+            if([pt isEqual:@"PT0;"]) {
                 _ownsTX=NO; _faulted=NO; ok=YES;
             }
         }

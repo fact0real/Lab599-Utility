@@ -77,6 +77,35 @@ static void TestReceiveRecoveryReconnect(void) {
     Check([core transmit:NO owner:@"Digital" error:nil] && !core.ownsTX,
           @"Only a confirmed RX on reopened CAT clears TX ownership");
 }
+// A radio whose CAT replies get lost (RF on the USB cable, a garbled frame): query and readState
+// return nil and a TX/RX write cannot be read back. The relay state is kept as the model's state.
+@interface FakeSilentRadio : FakeStationRadio
+@property BOOL silent;
+@end
+@implementation FakeSilentRadio
+- (NSString *)query:(NSString *)q error:(NSError **)error { return self.silent ? nil : [super query:q error:error]; }
+- (NSDictionary *)readState:(NSError **)error { return self.silent ? nil : [super readState:error]; }
+- (BOOL)setTransmit:(BOOL)tx error:(NSError **)error { BOOL ok=[super setTransmit:tx error:error]; return self.silent ? NO : ok; }
+@end
+static void TestLostReplyKeepsTX(void) {
+    TX500StationCore *c=[TX500StationCore new]; FakeSilentRadio *r=[FakeSilentRadio new]; c.transportFactory=^id(NSString *p){(void)p;return r;};
+    Check([c selectOwner:@"CW" port:@"fake-silent" error:nil] && [c transmit:YES owner:@"CW" error:nil] && c.ownsTX,@"Silent-radio fixture keys CW");
+    r.silent=YES;
+    Check(![c selectOwner:@"Station" port:@"fake-silent" error:nil] && c.ownsTX && [c.owner isEqual:@"CW"],@"A lost PT reply does not hand the radio to another owner");
+    NSUInteger before=r.commands.count;
+    Check(![c releaseOwnedTX:nil] && c.ownsTX && r.commands.count>before && [r.commands.lastObject isEqual:@"RX;"],@"A lost PT reply is not taken as RX: RX; is written and ownership kept");
+    Check(![c suspend:nil] && c.ownsTX,@"Quit and handoff stay refused while RX is unconfirmed");
+    Check(![c transmit:YES owner:@"CW" error:nil],@"No new TX while RX is unconfirmed");
+    r.silent=NO; r.state[@"tx"]=@1;
+    Check([c releaseOwnedTX:nil] && !c.ownsTX,@"RX confirmed once the radio answers again");
+    TX500StationCore *c2=[TX500StationCore new]; FakeSilentRadio *r2=[FakeSilentRadio new]; c2.transportFactory=^id(NSString *p){(void)p;return r2;};
+    [c2 selectOwner:@"CW" port:@"fake-silent-2" error:nil]; r2.silent=YES;
+    Check(![c2 transmit:NO owner:@"CW" error:nil] && [r2.commands containsObject:@"RX;"] && c2.ownsTX,@"An unowned RX with no PT reply forces RX; and keeps the fault");
+    r2.silent=NO; Check([c2 transmit:NO owner:@"CW" error:nil] && !c2.ownsTX,@"The unowned RX clears once PT0 is read");
+    TX500StationCore *c3=[TX500StationCore new]; FakeSilentRadio *r3=[FakeSilentRadio new]; c3.transportFactory=^id(NSString *p){(void)p;return r3;};
+    [c3 selectOwner:@"Digital" port:@"fake-silent-3" error:nil]; r3.silent=YES; // Digital: the only owner the PT fallback can key
+    Check(![c3 transmit:YES owner:@"Digital" error:nil] && ![r3.commands containsObject:@"TX;"],@"TX refused when the radio state and PT cannot be read");
+}
 static void TestStore(NSURL *root) {
     NSString *suite=NSUUID.UUID.UUIDString; NSUserDefaults *d=[[NSUserDefaults alloc] initWithSuiteName:suite]; [d setObject:@"K1ABC" forKey:@"TX500_OperatorCallsign"]; [d setObject:@"FN42" forKey:@"TX500_OperatorGrid"];
     NSURL *url=[root URLByAppendingPathComponent:@"station.json"]; TX500StationStore *s=[[TX500StationStore alloc] initWithURL:url defaults:d];
@@ -141,7 +170,7 @@ static void TestReporter(void) {
     reporter.enabled=NO;
 
 }
-int main(int argc,const char *argv[]) { @autoreleasepool { (void)argc;(void)argv; char path[]="/tmp/StationTests.XXXXXX"; Check(mkdtemp(path)!=NULL,@"Isolated test directory"); NSURL *root=[NSURL fileURLWithPath:[NSString stringWithUTF8String:path]]; TestCore(); TestReceiveRecoveryReconnect(); TestStore(root); TestReporter();
+int main(int argc,const char *argv[]) { @autoreleasepool { (void)argc;(void)argv; char path[]="/tmp/StationTests.XXXXXX"; Check(mkdtemp(path)!=NULL,@"Isolated test directory"); NSURL *root=[NSURL fileURLWithPath:[NSString stringWithUTF8String:path]]; TestCore(); TestReceiveRecoveryReconnect(); TestLostReplyKeepsTX(); TestStore(root); TestReporter();
     for (NSString *region in @[@"1", @"2", @"3"]) {
         NSURL *url=TX500BandPlanURLForRegion(region);
         Check([url.scheme isEqualToString:@"https"] && [url.host hasPrefix:@"www.iaru"], @"Official region document uses a fixed IARU HTTPS URL");

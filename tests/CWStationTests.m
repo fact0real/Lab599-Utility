@@ -337,6 +337,89 @@ int main(int argc, const char * argv[]) {
         AssertTrue(!tuneStation.isManualTuneActive && [tuneCmds containsObject:@"RX;"], @"The Tune cutoff armed before the carrier still releases the radio");
         NSLog(@"PASS: Release timers and the Tune cutoff are armed before any sound.");
 
+        // 6c. The CW transmit audio goes only to the radio's own output: the profile's Radio
+        // transmit output, else the exact pair of the radio's USB input, else none. Never the
+        // first USB output of the Mac, and never a headset's own output. Invented devices.
+        NSString *headsetIn = @"AppleUSBAudioEngine:Acme:Headset:0001:1", *headsetOut = @"AppleUSBAudioEngine:Acme:Headset:0001:2";
+        NSString *radioIn = @"AppleUSBAudioEngine:TTGK Technology:USB Audio:0007:2", *radioOut = @"AppleUSBAudioEngine:TTGK Technology:USB Audio:0007:1";
+        NSArray<NSDictionary<NSString *, NSString *> *> *routeInputs = @[
+            @{@"uid": headsetIn, @"name": @"Acme Headset", @"isPreferredUSBAudio": @"NO"},
+            @{@"uid": radioIn, @"name": @"USB Audio", @"isPreferredUSBAudio": @"YES"},
+            @{@"uid": TX500CWSystemAudioDeviceUID, @"name": @"System Audio", @"isPreferredUSBAudio": @"NO"}];
+        TX500AudioDeviceItem *headsetOutItem = [TX500AudioDeviceItem new]; headsetOutItem.uid = headsetOut; headsetOutItem.name = @"Acme Headset";
+        TX500AudioDeviceItem *radioOutItem = [TX500AudioDeviceItem new]; radioOutItem.uid = radioOut; radioOutItem.name = @"USB Audio";
+        TX500AudioDeviceItem *secondRadioOutItem = [TX500AudioDeviceItem new];
+        secondRadioOutItem.uid = @"AppleUSBAudioEngine:TTGK Technology:USB Audio:0007:3"; secondRadioOutItem.name = @"USB Audio";
+        NSArray<TX500AudioDeviceItem *> *routeOutputs = @[headsetOutItem, radioOutItem];
+        AssertTrue([TX500CWStationController pairedRadioOutputUIDForInputUID:headsetIn inputDevices:routeInputs outputDevices:routeOutputs] == nil,
+                   @"a headset's own output is never the radio's");
+        AssertTrue([[TX500CWStationController pairedRadioOutputUIDForInputUID:radioIn inputDevices:routeInputs outputDevices:routeOutputs] isEqualToString:radioOut],
+                   @"the radio's input finds its exact pair");
+        AssertTrue([TX500CWStationController pairedRadioOutputUIDForInputUID:radioIn inputDevices:routeInputs
+                                                               outputDevices:@[headsetOutItem, radioOutItem, secondRadioOutItem]] == nil,
+                   @"an ambiguous pair is no pair");
+        AssertTrue([TX500CWStationController pairedRadioOutputUIDForInputUID:TX500CWSystemAudioDeviceUID inputDevices:routeInputs outputDevices:routeOutputs] == nil,
+                   @"System Audio has no radio output");
+        AssertTrue([TX500CWStationController pairedRadioOutputUIDForInputUID:@"AppleUSBAudioEngine:TTGK Technology:USB Audio:0009:2"
+                                                                inputDevices:routeInputs outputDevices:routeOutputs] == nil,
+                   @"an input absent from the list has no radio output");
+        // Another radio interface (a Digirig, listed by the decoder as USB but not as the TX-500's
+        // codec) finds its pair too; a USB headset that only says "USB" never does.
+        NSString *digirigIn = @"AppleUSBAudioEngine:Acme:Digirig Mobile:0011:1", *digirigOut = @"AppleUSBAudioEngine:Acme:Digirig Mobile:0011:2";
+        NSString *usbHeadsetIn = @"AppleUSBAudioEngine:Acme:USB Headset:0012:1", *usbHeadsetOut = @"AppleUSBAudioEngine:Acme:USB Headset:0012:2";
+        NSArray<NSDictionary<NSString *, NSString *> *> *interfaceInputs = @[
+            @{@"uid": digirigIn, @"name": @"Digirig Mobile", @"isPreferredUSBAudio": @"NO", @"isUSB": @"YES"},
+            @{@"uid": usbHeadsetIn, @"name": @"USB Headset", @"isPreferredUSBAudio": @"NO", @"isUSB": @"YES"}];
+        TX500AudioDeviceItem *digirigOutItem = [TX500AudioDeviceItem new]; digirigOutItem.uid = digirigOut; digirigOutItem.name = @"Digirig Mobile";
+        TX500AudioDeviceItem *usbHeadsetOutItem = [TX500AudioDeviceItem new]; usbHeadsetOutItem.uid = usbHeadsetOut; usbHeadsetOutItem.name = @"USB Headset";
+        NSArray<TX500AudioDeviceItem *> *interfaceOutputs = @[usbHeadsetOutItem, digirigOutItem, headsetOutItem];
+        AssertTrue([[TX500CWStationController pairedRadioOutputUIDForInputUID:digirigIn inputDevices:interfaceInputs outputDevices:interfaceOutputs] isEqualToString:digirigOut],
+                   @"a Digirig finds its own output");
+        AssertTrue([TX500CWStationController pairedRadioOutputUIDForInputUID:usbHeadsetIn inputDevices:interfaceInputs outputDevices:interfaceOutputs] == nil,
+                   @"a USB headset never finds a radio output");
+        // The Mac's "first USB output" is made up too, so the checks hold on any Mac: a DAC.
+        Method firstUSBMethod = class_getClassMethod([TX500CWKeyer class], @selector(findBestUSBAudioOutputUID));
+        IMP firstUSBOriginal = method_setImplementation(firstUSBMethod, imp_implementationWithBlock(^NSString *(id cls) {
+            (void)cls; return @"AppleUSBAudioEngine:Acme:DAC:0003:1"; }));
+        TX500CWKeyer *routeKeyer = [[TX500CWKeyer alloc] init];
+        routeKeyer.radioOutputDeviceUID = @"profile-out";
+        routeKeyer.pairedRadioOutputDeviceUID = @"pair-out";
+        AssertTrue([[routeKeyer radioAudioTargetUID] isEqualToString:@"profile-out"], @"the profile's choice wins");
+        routeKeyer.radioOutputDeviceUID = @"";
+        AssertTrue([[routeKeyer radioAudioTargetUID] isEqualToString:@"pair-out"], @"without a profile output the pair is used");
+        routeKeyer.pairedRadioOutputDeviceUID = nil;
+        AssertTrue([routeKeyer radioAudioTargetUID] == nil, @"with nothing chosen there is no output, never the first USB one");
+        // The station: a headset chosen as the CW input gives no output, and the profile's
+        // choice (written by the host) is never overwritten.
+        TX500CWStationController *routeStation = [TX500CWStationController new];
+        SEL routeUpdate = NSSelectorFromString(@"updateKeyerRadioOutputDevice"); // private: called before every keying
+        void (*updateRoute)(id, SEL) = (void (*)(id, SEL))[routeStation methodForSelector:routeUpdate];
+        __block NSMutableArray<NSString *> *routeLog = [NSMutableArray array];
+        routeStation.logHandler = ^(NSString *line) { [routeLog addObject:line]; };
+        [[routeStation.decoder valueForKey:@"internalAudioDevices"] setArray:routeInputs];
+        [[routeStation.audioEngine valueForKey:@"internalOutputDevices"] setArray:routeOutputs];
+        routeStation.keyer.radioOutputDeviceUID = nil;
+        routeStation.decoder.selectedAudioDeviceUID = headsetIn;
+        updateRoute(routeStation, routeUpdate);
+        AssertTrue(routeStation.keyer.pairedRadioOutputDeviceUID == nil && routeStation.keyer.radioOutputDeviceUID == nil,
+                   @"a headset input sets no radio output, and the profile's output is untouched");
+        AssertTrue([routeLog.lastObject containsString:@"No radio transmit output"], @"the console names the missing radio transmit output");
+        routeStation.decoder.selectedAudioDeviceUID = radioIn;
+        updateRoute(routeStation, routeUpdate);
+        AssertTrue([routeStation.keyer.pairedRadioOutputDeviceUID isEqualToString:radioOut] && routeStation.keyer.radioOutputDeviceUID == nil &&
+                   [[routeStation.keyer radioAudioTargetUID] isEqualToString:radioOut], @"the radio's input routes the transmit audio to its pair");
+        AssertTrue([routeLog.lastObject containsString:@"Radio transmit output: USB Audio"] && [routeLog.lastObject containsString:radioOut],
+                   @"the console names the radio transmit output");
+        NSUInteger routeLines = routeLog.count;
+        updateRoute(routeStation, routeUpdate);
+        AssertTrue(routeLog.count == routeLines, @"the same output is named once");
+        routeStation.keyer.radioOutputDeviceUID = @"profile-out";
+        updateRoute(routeStation, routeUpdate);
+        AssertTrue([routeStation.keyer.radioOutputDeviceUID isEqualToString:@"profile-out"] &&
+                   [[routeStation.keyer radioAudioTargetUID] isEqualToString:@"profile-out"], @"the station never overwrites the profile's output");
+        method_setImplementation(firstUSBMethod, firstUSBOriginal);
+        NSLog(@"PASS: CW transmit audio goes only to the radio's own output.");
+
         // 7. Test QSO Assistant Pattern Detection & Callsign Extraction
         TX500CWQSOAssistant *assistant = [[TX500CWQSOAssistant alloc] init];
         assistant.myCallsign = @"EP2AES";

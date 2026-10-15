@@ -42,6 +42,9 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
 @property (nonatomic, strong, readwrite) TX500CWKeyer *keyer;
 @property (nonatomic, strong, readwrite) TX500CWQSOAssistant *assistant;
 @property (nonatomic, strong, readwrite) TX500AudioEngine *audioEngine;
+// The radio transmit output last named in the console (one line per change).
+@property (nonatomic, assign) BOOL radioAudioTargetReported;
+@property (nonatomic, copy, nullable) NSString *reportedRadioAudioTargetUID;
 
 // Audio Monitor Controls
 @property (nonatomic, strong) NSButton *monitorToggleButton;
@@ -425,28 +428,67 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
     }
 }
 
-- (void)updateKeyerRadioOutputDevice {
-    NSString *inputUID = self.decoder.selectedAudioDeviceUID;
-    NSString *matchedOutputUID = nil;
-    if (inputUID.length > 0 && ![inputUID isEqualToString:TX500CWSystemAudioDeviceUID]) {
-        if ([inputUID hasPrefix:@"AppleUSBAudioEngine:"]) {
-            NSRange lastColon = [inputUID rangeOfString:@":" options:NSBackwardsSearch];
-            if (lastColon.location != NSNotFound) {
-                NSString *family = [inputUID substringToIndex:lastColon.location + 1];
-                for (TX500AudioDeviceItem *dev in self.audioEngine.outputDevices) {
-                    NSString *u = dev.uid;
-                    if ([u hasPrefix:family]) {
-                        matchedOutputUID = u;
-                        break;
-                    }
-                }
-            }
++ (nullable NSString *)pairedRadioOutputUIDForInputUID:(nullable NSString *)inputUID
+                                         inputDevices:(NSArray<NSDictionary<NSString *, NSString *> *> *)inputs
+                                        outputDevices:(NSArray<TX500AudioDeviceItem *> *)outputs {
+    if (inputUID.length == 0 || [inputUID isEqualToString:TX500CWSystemAudioDeviceUID]) return nil;
+    NSDictionary<NSString *, NSString *> *input = nil;
+    for (NSDictionary<NSString *, NSString *> *device in inputs) {
+        if ([device[@"uid"] isEqualToString:inputUID]) { input = device; break; }
+    }
+    // Only a radio audio interface has a pair: the radio's own USB codec (isPreferredUSBAudio), or a
+    // USB device whose name is one of the decoder's radio interfaces (Digirig, SignaLink, C-Media,
+    // "codec"). A headset's output is never the radio's, and "USB" in a name is not enough.
+    BOOL radioInterface = [input[@"isPreferredUSBAudio"] isEqualToString:@"YES"];
+    if (!radioInterface && [input[@"isUSB"] isEqualToString:@"YES"]) {
+        NSString *lower = [input[@"name"] lowercaseString] ?: @"";
+        for (NSString *word in @[@"digirig", @"signalink", @"signallink", @"c-media", @"codec"]) {
+            if ([lower containsString:word]) { radioInterface = YES; break; }
         }
     }
-    if (matchedOutputUID.length > 0) {
-        self.keyer.radioOutputDeviceUID = matchedOutputUID;
-    } else if (!self.keyer.radioOutputDeviceUID.length) {
-        self.keyer.radioOutputDeviceUID = [TX500CWKeyer findBestUSBAudioOutputUID];
+    if (!radioInterface) return nil;
+    // Some interfaces expose a single UID for both directions.
+    for (TX500AudioDeviceItem *dev in outputs) {
+        if ([dev.uid isEqualToString:inputUID]) return dev.uid;
+    }
+    // Apple USB Audio: the input and output endpoints share the prefix up to the last colon.
+    NSString *prefix = @"AppleUSBAudioEngine:";
+    if (![inputUID hasPrefix:prefix]) return nil;
+    NSRange lastColon = [inputUID rangeOfString:@":" options:NSBackwardsSearch];
+    if (lastColon.location == NSNotFound || lastColon.location <= prefix.length) return nil;
+    NSString *family = [inputUID substringToIndex:lastColon.location + 1];
+    NSString *match = nil;
+    for (TX500AudioDeviceItem *dev in outputs) {
+        if (![dev.uid hasPrefix:family]) continue;
+        if (match) return nil; // two outputs in the family: an ambiguous pair is no pair
+        match = dev.uid;
+    }
+    return match;
+}
+
+// Finds the radio's own output from the chosen CW input. The profile's Radio transmit output
+// (keyer.radioOutputDeviceUID, written by the host) is never changed here: it wins when set.
+- (void)updateKeyerRadioOutputDevice {
+    NSArray<TX500AudioDeviceItem *> *outputs = self.audioEngine.outputDevices;
+    self.keyer.pairedRadioOutputDeviceUID =
+        [TX500CWStationController pairedRadioOutputUIDForInputUID:self.decoder.selectedAudioDeviceUID
+                                                     inputDevices:self.decoder.availableAudioInputDevices
+                                                    outputDevices:outputs];
+    NSString *target = [self.keyer radioAudioTargetUID];
+    BOOL same = (target == nil && self.reportedRadioAudioTargetUID == nil) ||
+                [target isEqualToString:self.reportedRadioAudioTargetUID];
+    if ((self.radioAudioTargetReported && same) || !self.logHandler) return;
+    self.radioAudioTargetReported = YES;
+    self.reportedRadioAudioTargetUID = target;
+    if (target.length) {
+        NSString *name = nil;
+        for (TX500AudioDeviceItem *dev in outputs) {
+            if ([dev.uid isEqualToString:target]) { name = dev.name; break; }
+        }
+        self.logHandler([NSString stringWithFormat:@"[CW Station] Radio transmit output: %@ (%@)",
+                         name.length ? name : @"not in the output list now", target]);
+    } else {
+        self.logHandler(@"[CW Station] No radio transmit output: choose it in Station (Radio transmit output), or pick the radio's USB input above.");
     }
 }
 

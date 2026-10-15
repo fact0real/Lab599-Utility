@@ -60,8 +60,16 @@
     dispatch_source_t _transmitTimeout;
 }
 
+// Kept for callers outside CW transmit: no transmit path uses it any more. The first USB output
+// in CoreAudio order can be a headset, a DAC or another radio.
 + (nullable NSString *)findBestUSBAudioOutputUID {
     return CWKeyerFindBestUSBAudioOutputUID();
+}
+
+- (nullable NSString *)radioAudioTargetUID {
+    if (self.radioOutputDeviceUID.length > 0) return self.radioOutputDeviceUID;
+    if (self.pairedRadioOutputDeviceUID.length > 0) return self.pairedRadioOutputDeviceUID;
+    return nil;
 }
 
 - (instancetype)init {
@@ -275,10 +283,7 @@ static void CWKeyerRadioOutputCallback(void *inUserData,
 - (void)ensureRadioAudioReady {
     if (NSProcessInfo.processInfo.environment[@"TX500_TEST_MODE"].boolValue) return;
 
-    NSString *targetUID = self.radioOutputDeviceUID;
-    if (!targetUID.length) {
-        targetUID = CWKeyerFindBestUSBAudioOutputUID();
-    }
+    NSString *targetUID = [self radioAudioTargetUID];
     if (!targetUID.length) {
         return;
     }

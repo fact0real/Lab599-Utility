@@ -69,6 +69,13 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)applyStationInputDeviceUID:(nullable NSString *)uid;
 /// Switches the transceiver to CW mode (MD3;) via CAT unless the operator chose a custom mode.
 - (void)prepareRadioForCWMode;
+/// The radio's own output for a CW input: the same UID when the input is also an output, else the
+/// one output of its AppleUSBAudioEngine family. Nil unless the input is the radio's USB audio
+/// (isPreferredUSBAudio) or a USB radio interface named Digirig, SignaLink, C-Media or "codec"; nil for
+/// System Audio, and when two outputs share the family.
++ (nullable NSString *)pairedRadioOutputUIDForInputUID:(nullable NSString *)inputUID
+                                         inputDevices:(NSArray<NSDictionary<NSString *, NSString *> *> *)inputs
+                                        outputDevices:(NSArray<TX500AudioDeviceItem *> *)outputs;
 @property (nonatomic, copy) NSString *operatingMode;
 @property (nonatomic) BOOL userHasChosenCustomMode;
 

@@ -58,6 +58,12 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, copy, nullable) BOOL (^practiceModeActive)(void);
 
 @property (nonatomic, copy, nullable) NSString *radioOutputDeviceUID;
+// The other half of the radio's USB codec, found by the station from the chosen CW input. Used
+// only when the profile names no Radio transmit output (radioOutputDeviceUID).
+@property (nonatomic, copy, nullable) NSString *pairedRadioOutputDeviceUID;
+// The output that will carry the transmit audio: the profile's radioOutputDeviceUID, else the
+// pair, else nil. Never a device picked by its transport (the first USB output of the Mac).
+- (nullable NSString *)radioAudioTargetUID;
 @property (nonatomic, copy, nullable) NSString *txPrefixCommand;
 @property (nonatomic, copy, nullable) NSString *rxSuffixCommand;
 // Called on the main thread after the time-out silenced and released the radio.

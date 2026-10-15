@@ -1369,6 +1369,50 @@ int main(int argc, const char * argv[]) {
         [totKeyer startAutoCQWithTemplate:@"CQ DE {MYCALL} K" targetCall:@""];
         AssertTrue(!totKeyer.isAutoCQActive && !totKeyer.isTransmitting, @"Auto-CQ stops when TX; is refused");
         NSLog(@"PASS: The transmit time-out always stops the audio and releases the radio.");
+        // 15. Auto-CQ has a ceiling: it stops on its own after a number of calls (a CQ the keyer
+        // accepted) or a time since it started, as the voice keyer does. A new start counts again.
+        TX500CWKeyer *cqKeyer = [[TX500CWKeyer alloc] init];
+        cqKeyer.myCallsign = @"EA3JIC";
+        cqKeyer.wpm = 45;
+        NSMutableArray<NSString *> *cqCmds = [NSMutableArray array];
+        __block NSMutableArray<NSString *> *cqLog = [NSMutableArray array];
+        cqKeyer.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) { @synchronized (cqCmds) { [cqCmds addObject:catCommand]; } return YES; };
+        cqKeyer.logHandler = ^(NSString *line) { [cqLog addObject:line]; };
+        NSUInteger (^cqKeyings)(void) = ^NSUInteger {
+            NSUInteger n = 0;
+            @synchronized (cqCmds) { for (NSString *c in cqCmds) if ([c isEqualToString:@"TX;"]) n++; }
+            return n;
+        };
+        BOOL (^cqLogSays)(NSString *) = ^BOOL(NSString *what) {
+            for (NSString *line in cqLog) if ([line containsString:what]) return YES;
+            return NO;
+        };
+        AssertTrue(cqKeyer.autoCQMaximumCalls == 10 && cqKeyer.autoCQMaximumSeconds == 600.0, @"the defaults");
+        cqKeyer.autoCQIntervalSeconds = 1;
+        cqKeyer.autoCQMaximumCalls = 2;
+        [cqKeyer startAutoCQWithTemplate:@"E" targetCall:@""];
+        [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:3.5]];
+        AssertTrue(cqKeyings() == 2 && !cqKeyer.isAutoCQActive && cqKeyer.autoCQCallsSent == 2 && cqLogSays(@"calls sent"),
+                   @"Auto-CQ stops at its call limit");
+        cqKeyer.autoCQMaximumCalls = 0;
+        cqKeyer.autoCQMaximumSeconds = 1.2;
+        @synchronized (cqCmds) { [cqCmds removeAllObjects]; }
+        [cqLog removeAllObjects];
+        [cqKeyer startAutoCQWithTemplate:@"E" targetCall:@""];
+        [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:1.5]];
+        AssertTrue(cqKeyer.isAutoCQActive && cqKeyings() == 1, @"a new start counts its time again");
+        [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:1.1]];
+        AssertTrue(!cqKeyer.isAutoCQActive && cqLogSays(@"after") && cqKeyings() >= 1, @"Auto-CQ stops at its time limit");
+        TX500CWStationController *cqStation = [TX500CWStationController new];
+        cqStation.keyer.myCallsign = @"EA3JIC";
+        cqStation.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) { (void)catCommand; return YES; };
+        [cqStation toggleAutoCQ:nil];
+        [cqStation.keyer abortTransmission]; // idle between two calls: the countdown is shown
+        [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.5]];
+        NSTextField *cqCountdown = [cqStation valueForKey:@"autoCQCountdownLabel"];
+        AssertTrue([cqCountdown.stringValue isEqualToString:@"[4s · 1/10]"], @"the countdown shows the calls sent and the limit");
+        [cqStation toggleAutoCQ:nil];
+        NSLog(@"PASS: Auto-CQ stops at its call limit and at its time limit.");
         NSLog(@"ALL TX-500 CW STATION AND AUDIO DSP TESTS PASSED! ✓");
         [[NSFileManager defaultManager] removeItemAtPath:[NSString stringWithUTF8String:testRoot] error:nil];
     }

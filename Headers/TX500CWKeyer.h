@@ -45,6 +45,10 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, assign, readonly) BOOL isAutoCQActive;
 @property (nonatomic, assign) NSInteger autoCQIntervalSeconds; // default 4
 @property (nonatomic, assign, readonly) NSInteger autoCQCountdown;
+// Auto-CQ stops on its own after this many calls, or this long after it started (0 = no limit).
+@property (nonatomic, assign) NSInteger autoCQMaximumCalls; // default 10; 0 = no limit
+@property (nonatomic, assign) NSTimeInterval autoCQMaximumSeconds; // default 600; 0 = no limit
+@property (nonatomic, assign, readonly) NSInteger autoCQCallsSent;
 
 // Macros
 @property (nonatomic, strong) NSMutableArray<TX500CWMacro *> *macroList;

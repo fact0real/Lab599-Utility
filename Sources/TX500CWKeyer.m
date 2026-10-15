@@ -33,6 +33,8 @@
 @property (nonatomic, strong, nullable) NSTimer *autoCQTimer;
 @property (nonatomic, copy, nullable) NSString *currentAutoCQTemplate;
 @property (nonatomic, copy, nullable) NSString *currentAutoCQCall;
+@property (nonatomic, assign, readwrite) NSInteger autoCQCallsSent;
+@property (nonatomic, assign) NSTimeInterval autoCQStartedAt;
 
 // Audio Sidetone (local Mac speakers/headphones)
 @property (nonatomic, strong, nullable) AVAudioEngine *sidetoneEngine;
@@ -82,6 +84,8 @@
         _useCutNumbers = YES;
         _myCallsign = @"";
         _autoCQIntervalSeconds = 4;
+        _autoCQMaximumCalls = 10;
+        _autoCQMaximumSeconds = 600.0;
         _internalSentHistory = [NSMutableArray array];
         _txPrefixCommand = @"TX;";
         _rxSuffixCommand = @"RX;";
@@ -860,10 +864,14 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
     self.currentAutoCQTemplate = cqTemplate;
     self.currentAutoCQCall = call;
     self.autoCQCountdown = self.autoCQIntervalSeconds;
+    self.autoCQCallsSent = 0;
+    self.autoCQStartedAt = NSProcessInfo.processInfo.systemUptime;
 
     // Send first CQ immediately
     [self transmitText:self.currentAutoCQTemplate targetCall:self.currentAutoCQCall rst:@"" name:@"" qth:@""];
     if ([self stopAutoCQIfRefused]) return;
+    [self noteAutoCQCallSent];
+    if (!self.isAutoCQActive) return; // a limit of one call
 
     // Timer every 1 second for countdown
     __weak typeof(self) weakSelf = self;
@@ -889,6 +897,13 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
         return;
     }
 
+    if (self.autoCQMaximumSeconds > 0 &&
+        NSProcessInfo.processInfo.systemUptime - self.autoCQStartedAt >= self.autoCQMaximumSeconds) {
+        [self stopAutoCQ];
+        if (self.logHandler) self.logHandler([NSString stringWithFormat:@"Auto-CQ stopped after %.0f s (the limit).", self.autoCQMaximumSeconds]);
+        return;
+    }
+
     if (self.autoCQCountdown > 0) {
         self.autoCQCountdown--;
     } else {
@@ -896,7 +911,17 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
         if ([self blocksMissingCallsignForTemplate:self.currentAutoCQTemplate]) { [self stopAutoCQ]; return; }
         self.autoCQCountdown = self.autoCQIntervalSeconds;
         [self transmitText:self.currentAutoCQTemplate targetCall:self.currentAutoCQCall rst:@"" name:@"" qth:@""];
-        [self stopAutoCQIfRefused];
+        if (![self stopAutoCQIfRefused]) [self noteAutoCQCallSent];
+    }
+}
+
+// A CQ the keyer accepted counts as a call; at the limit Auto-CQ stops at once and the CQ on the
+// air ends with its own release.
+- (void)noteAutoCQCallSent {
+    self.autoCQCallsSent++;
+    if (self.autoCQMaximumCalls > 0 && self.autoCQCallsSent >= self.autoCQMaximumCalls) {
+        [self stopAutoCQ];
+        if (self.logHandler) self.logHandler([NSString stringWithFormat:@"Auto-CQ stopped: %ld calls sent (the limit).", (long)self.autoCQCallsSent]);
     }
 }
 

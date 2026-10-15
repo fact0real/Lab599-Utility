@@ -1989,7 +1989,10 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
         }
         NSInteger cd = strongSelf.keyer.autoCQCountdown;
         if (cd > 0) {
-            strongSelf.autoCQCountdownLabel.stringValue = [NSString stringWithFormat:@"[%lds]", (long)cd];
+            TX500CWKeyer *k = strongSelf.keyer;
+            strongSelf.autoCQCountdownLabel.stringValue = k.autoCQMaximumCalls > 0
+                ? [NSString stringWithFormat:@"[%lds · %ld/%ld]", (long)cd, (long)k.autoCQCallsSent, (long)k.autoCQMaximumCalls]
+                : [NSString stringWithFormat:@"[%lds · %ld]", (long)cd, (long)k.autoCQCallsSent];
         } else {
             strongSelf.autoCQCountdownLabel.stringValue = @"[TX]";
         }

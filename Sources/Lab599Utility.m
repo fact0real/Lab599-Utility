@@ -440,6 +440,18 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     }
     TX500PSKReporter.sharedReporter.enabled=[NSUserDefaults.standardUserDefaults boolForKey:@"TX500_FT8_PSKReporterEnabled"];
 }
+// FT8 and the core's owned TX have no sleep observer of their own (CW Station and the voice keyer do).
+- (void)workspaceWillSleep:(NSNotification *)note {
+    (void)note;
+    BOOL onAir=self.stationCore.ownsTX || self.cwStationController.keyer.isTransmitting ||
+        self.cwStationController.keyer.isAutoCQActive || self.cwStationController.isManualTuneActive ||
+        self.ft8StationController.audioEngine.isTransmitting || self.ft8StationController.audioEngine.isTuning ||
+        self.ft8StationController.audioEngine.isTransmitArmed;
+    if(!onAir) return;
+    [self stationCommand:@"stop"];
+    [self appendLog:self.stationCore.ownsTX ? @"Stopped for system sleep: RX NOT confirmed • check the radio." :
+        @"Stopped for system sleep: every transmission released."];
+}
 - (void)stationCommand:(NSString *)command {
     if ([command isEqual:@"stop"]) {
         [self.ft8StationController stopStation]; [self.cwStationController stopStation];
@@ -1175,6 +1187,8 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     };
     self.clusterController.view.hidden=YES;
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(stationSettingsChanged:) name:@"TX500StationSettingsChangedNotification" object:nil];
+    // Nothing may stay keyed while the Mac sleeps: the release timers do not run until it wakes.
+    [NSWorkspace.sharedWorkspace.notificationCenter addObserver:self selector:@selector(workspaceWillSleep:) name:NSWorkspaceWillSleepNotification object:nil];
 
     // Telemetry Controller
     self.telemetryController = [Lab599TelemetryController new];

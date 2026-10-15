@@ -629,7 +629,9 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
             self.cwModeConfiguredOnRadio = NO;
             [self prepareRadioForCWMode];
         }
-    } else if (mode.length > 0) {
+    } else if (mode.length > 0 && [@[@"CW", @"CW-R", @"USB", @"LSB", @"DIG"] containsObject:mode]) {
+        // FM, AM and the undocumented modes are not in the mode menu: a reading in one of them keeps
+        // the operator's choice and its keying (the CW and CW-R prefixes set DIG before TX;).
         self.operatingMode = mode;
         if ([mode isEqualToString:@"CW"]) [self.modePopup selectItemWithTag:3];
         else if ([mode isEqualToString:@"CW-R"]) [self.modePopup selectItemWithTag:7];

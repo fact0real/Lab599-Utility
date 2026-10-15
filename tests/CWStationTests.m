@@ -1039,6 +1039,25 @@ int main(int argc, const char * argv[]) {
             AssertTrue([knobCmds containsObject:back], @"its release goes back to the chosen mode");
         }
         NSLog(@"PASS: Each entry to CW Station, and a radio found in another mode, sets DIG again.");
+        // The tab entry now names FM, AM and the undocumented modes, and an unanswered MD; is empty.
+        // None of them is in the mode menu: the operator's choice and its keying are kept.
+        [digCmds removeAllObjects];
+        [digStation setValue:@0 forKey:@"userTuningLockoutUntil"];
+        [digStation updateFrequencyHz:14025000 mode:@""];
+        AssertTrue(digCmds.count == 0 && [digStation.operatingMode isEqualToString:@"DIG"], @"no MD; reply: nothing sent, the mode is kept");
+        digStation.userHasChosenCustomMode = YES;
+        digStation.operatingMode = @"CW";
+        [digStation prepareRadioForCWMode];
+        for (NSString *other in @[@"FM", @"AM", @"MD9 (undocumented)", @""]) {
+            [digStation setValue:@0 forKey:@"userTuningLockoutUntil"];
+            [digStation updateFrequencyHz:14025000 mode:other];
+            AssertTrue([digStation.operatingMode isEqualToString:@"CW"] && [digStation.keyer.txPrefixCommand isEqualToString:@"MD6;TX;"],
+                       [NSString stringWithFormat:@"a reading in \"%@\" keeps the chosen CW mode and its MD6;TX; prefix", other]);
+        }
+        [digStation setValue:@0 forKey:@"userTuningLockoutUntil"];
+        [digStation updateFrequencyHz:14025000 mode:@"USB"];
+        AssertTrue([digStation.operatingMode isEqualToString:@"USB"], @"a mode the menu has is still followed");
+        NSLog(@"PASS: A radio in FM, AM or an undocumented mode never replaces the chosen CW mode.");
         // 12b. In Practice / Sim the decoder button says "STOP SIMULATION", and that is what it does:
         // the simulation stops, the box is unticked and a Tune keyed before the box was ticked is
         // released. It does not listen and sends nothing else to the radio. startListening is

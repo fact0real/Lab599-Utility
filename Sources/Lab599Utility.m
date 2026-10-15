@@ -2310,7 +2310,8 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
                 if ([faReply hasPrefix:@"FA"] && faReply.length >= 13) {
                     freqHz = (uint64_t)[[faReply substringWithRange:NSMakeRange(2, 11)] longLongValue];
                 }
-                NSString *modeStr = @"CW";
+                // Unknown unless the radio answers MD; (an empty mode changes nothing on the pane).
+                NSString *modeStr = @"";
                 if ([mdReply hasPrefix:@"MD"] && mdReply.length >= 3) {
                     unichar mCode = [mdReply characterAtIndex:2];
                     if (mCode == '3') modeStr = @"CW";
@@ -2318,6 +2319,8 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
                     else if (mCode == '2') modeStr = @"USB";
                     else if (mCode == '1') modeStr = @"LSB";
                     else if (mCode == '6') modeStr = @"DIG";
+                    // FM, AM, and MD0, MD8 and MD9 as the radio reports them (never a guessed name).
+                    else if (mCode >= '0' && mCode <= '9') modeStr = TX500CATModeLabel(mCode - '0');
                 }
                 dispatch_async(dispatch_get_main_queue(), ^{
                     [weakSelf.cwStationController updateFrequencyHz:freqHz mode:modeStr];

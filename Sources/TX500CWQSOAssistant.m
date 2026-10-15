@@ -67,6 +67,8 @@
 @interface TX500CWQSOAssistant ()
 @property (nonatomic, strong, readwrite) NSMutableArray<TX500CWHeardStation *> *internalHeardStations;
 @property (nonatomic, strong, readwrite) NSMutableArray<TX500QSOContact *> *internalLoggedContacts;
+// Practice / Sim was on when the active QSO started: it stays a practice QSO to the end.
+@property (nonatomic, assign) BOOL activeQSOStartedInPractice;
 @end
 
 @implementation TX500CWQSOAssistant
@@ -389,6 +391,7 @@
 #pragma mark - Workflow Actions
 
 - (void)selectAndAnswerStation:(TX500CWHeardStation *)station {
+    self.activeQSOStartedInPractice = self.practiceModeActive && self.practiceModeActive();
     self.activeTargetCallsign = station.callsign;
     self.activeRstSent = @"599";
     self.activeRstRcvd = @"599";
@@ -397,6 +400,7 @@
 }
 
 - (void)startCallingCQ {
+    self.activeQSOStartedInPractice = self.practiceModeActive && self.practiceModeActive();
     self.activeTargetCallsign = @"";
     self.qsoState = TX500QSOStateCallingCQ;
     [self notifyStateChanged];
@@ -414,6 +418,7 @@
 
     switch (self.qsoState) {
         case TX500QSOStateIdle:
+            self.activeQSOStartedInPractice = self.practiceModeActive && self.practiceModeActive();
             if (self.activeTargetCallsign.length > 0) {
                 self.qsoState = TX500QSOStateAnsweringCQ;
                 if (transmitBlock) transmitBlock(macro);
@@ -446,6 +451,7 @@
         case TX500QSOStateCompleted:
             self.qsoState = TX500QSOStateIdle;
             self.activeTargetCallsign = @"";
+            self.activeQSOStartedInPractice = NO;
             break;
     }
 
@@ -455,6 +461,7 @@
 - (void)resetQSOState {
     self.qsoState = TX500QSOStateIdle;
     self.activeTargetCallsign = @"";
+    self.activeQSOStartedInPractice = NO;
     self.activeRstSent = @"599";
     self.activeRstRcvd = @"599";
     [self notifyStateChanged];
@@ -487,8 +494,9 @@
 
     // Without a frequency read from the radio, or in Practice / Sim (the Morse is made up and
     // nothing was transmitted), the QSO stays in this session list only: it is not saved to
-    // the Logbook or uploaded.
-    BOOL practice = self.practiceModeActive && self.practiceModeActive();
+    // the Logbook or uploaded. A QSO started in practice stays practice even if the box was
+    // unticked before the sign-off.
+    BOOL practice = self.activeQSOStartedInPractice || (self.practiceModeActive && self.practiceModeActive());
     if (practice)
         contact.notes = @"Practice / Sim: not saved to the Logbook or uploaded.";
     else if (self.currentFrequencyHz == 0)

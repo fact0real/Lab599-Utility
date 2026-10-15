@@ -345,7 +345,7 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
         }
     };
 
-    // Practice / Sim is the decoder's simulation: the assistant asks it at sign-off.
+    // Practice / Sim is the decoder's simulation: the assistant asks it when a QSO starts and at sign-off.
     self.assistant.practiceModeActive = ^BOOL {
         typeof(self) strongSelf = weakSelf;
         return strongSelf && strongSelf.decoder.isSimulationActive;

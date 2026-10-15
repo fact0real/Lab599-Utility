@@ -792,6 +792,71 @@ int main(int argc, const char * argv[]) {
         AssertTrue([stationLine containsString:@"band unknown"], @"The console says when the band is unknown");
         NSLog(@"PASS: CW never logs, uploads or tunes from an invented frequency.");
 
+        // 8b2. A QSO started in Practice / Sim stays a practice QSO to the end, even when
+        // practice ends before the sign-off without a reset, whichever way it was started:
+        // answering a heard station, calling CQ, or the next-step button from Idle. The mark
+        // ends with the QSO, so a real QSO on the same assistant is saved and uploaded.
+        TX500CWStationController *startedStation = [TX500CWStationController new];
+        TX500CWQSOAssistant *started = startedStation.assistant;
+        started.myCallsign = @"EA3JIC";
+        started.currentFrequencyHz = 7030000;
+        started.currentBand = @"40m";
+        NSUInteger startedLogbookBefore = [[TX500LogbookManager sharedManager] allContacts].count;
+        StartCountingCloudUploads();
+        NSUInteger startedUploadsBefore = CloudUploadCount();
+        void (^finishStarted)(void) = ^{
+            for (int step = 0; step < 4 && started.qsoState != TX500QSOStateCompleted; step++)
+                [started advanceQSOStepWithAction:^(NSString * _Nonnull macroToTransmit) { (void)macroToTransmit; }];
+            [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.2]];
+        };
+        startedStation.decoder.isSimulationActive = YES;
+        [started processDecodedTextStream:@"CQ CQ DE EP2AES EP2AES K" currentWPM:22.0 snrDb:14.5];
+        AssertTrue(started.heardStations.count >= 1, @"Practice assistant heard the CQ");
+        [started selectAndAnswerStation:started.heardStations[0]];
+        startedStation.decoder.isSimulationActive = NO; // practice ended without a reset
+        finishStarted();
+        AssertTrue(started.qsoState == TX500QSOStateCompleted && started.loggedContacts.count == 1 &&
+                   [started.loggedContacts[0].notes hasPrefix:@"Practice / Sim"], @"a QSO started in practice stays a practice QSO");
+        AssertTrue([[TX500LogbookManager sharedManager] allContacts].count == startedLogbookBefore && CloudUploadCount() == startedUploadsBefore,
+                   @"a QSO started in practice is not saved or uploaded");
+        [started advanceQSOStepWithAction:^(NSString * _Nonnull macroToTransmit) { (void)macroToTransmit; }]; // Completed -> Idle
+        AssertTrue(started.qsoState == TX500QSOStateIdle && ![[started valueForKey:@"activeQSOStartedInPractice"] boolValue],
+                   @"the practice mark ends with the QSO");
+        startedStation.decoder.isSimulationActive = YES;
+        [started startCallingCQ];
+        startedStation.decoder.isSimulationActive = NO;
+        [started processDecodedTextStream:@"EA3JIC DE EP2AES EP2AES K" currentWPM:22.0 snrDb:14.5];
+        AssertTrue(started.qsoState == TX500QSOStateExchangeReport, @"EP2AES answers the practice CQ");
+        finishStarted();
+        AssertTrue(started.qsoState == TX500QSOStateCompleted && started.loggedContacts.count == 2 &&
+                   [started.loggedContacts[0].notes hasPrefix:@"Practice / Sim"], @"a CQ started in practice stays a practice QSO");
+        [started advanceQSOStepWithAction:^(NSString * _Nonnull macroToTransmit) { (void)macroToTransmit; }]; // Completed -> Idle
+        startedStation.decoder.isSimulationActive = YES;
+        [started advanceQSOStepWithAction:^(NSString * _Nonnull macroToTransmit) { (void)macroToTransmit; }]; // Idle -> CallingCQ
+        AssertTrue(started.qsoState == TX500QSOStateCallingCQ, @"the next-step button calls CQ from Idle");
+        startedStation.decoder.isSimulationActive = NO;
+        [started processDecodedTextStream:@"EA3JIC DE EP2AES EP2AES K" currentWPM:22.0 snrDb:14.5];
+        finishStarted();
+        AssertTrue(started.qsoState == TX500QSOStateCompleted && started.loggedContacts.count == 3 &&
+                   [started.loggedContacts[0].notes hasPrefix:@"Practice / Sim"], @"a QSO started from Idle in practice stays a practice QSO");
+        AssertTrue([[TX500LogbookManager sharedManager] allContacts].count == startedLogbookBefore && CloudUploadCount() == startedUploadsBefore,
+                   @"no QSO started in practice is saved or uploaded");
+        // Control: after a reset, with practice off from the start, the same steps save and upload.
+        startedStation.decoder.isSimulationActive = YES;
+        [started startCallingCQ];
+        [started resetQSOState];
+        AssertTrue(![[started valueForKey:@"activeQSOStartedInPractice"] boolValue], @"a reset ends the practice mark");
+        startedStation.decoder.isSimulationActive = NO;
+        [started processDecodedTextStream:@"CQ CQ DE EP2AES EP2AES K" currentWPM:22.0 snrDb:14.5];
+        [started selectAndAnswerStation:started.heardStations[0]];
+        finishStarted();
+        AssertTrue(started.qsoState == TX500QSOStateCompleted && started.loggedContacts.count == 4 && started.loggedContacts[0].notes.length == 0,
+                   @"a real QSO completes without a note");
+        AssertTrue([[TX500LogbookManager sharedManager] allContacts].count == startedLogbookBefore + 1 && CloudUploadCount() == startedUploadsBefore + 1,
+                   @"a real QSO is untouched");
+        StopCountingCloudUploads();
+        NSLog(@"PASS: A QSO started in Practice / Sim is never saved or uploaded; a real QSO is.");
+
         // 8c. Practice / Sim makes up the Morse and transmits nothing. Even with a frequency
         // read from the radio, a QSO done in practice stays in the session list only: it is
         // not saved to the Logbook and not uploaded. A real QSO is not touched.

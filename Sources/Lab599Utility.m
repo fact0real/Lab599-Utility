@@ -1389,6 +1389,15 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     [self stationSettingsChanged:nil];
     [TX500StationStore.sharedStore activateProfile:TX500StationStore.sharedStore.activeProfile[@"id"] error:nil];
     self.stationKeyMonitor=[NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^NSEvent *(NSEvent *event) {
+        // Esc stops a transmission even while an alert sheet is attached or another window is key;
+        // the event goes on, so the sheet still gets its own Esc.
+        if(event.keyCode==53 && !event.isARepeat && (!weakSelf.window.isKeyWindow || weakSelf.window.attachedSheet)) {
+            BOOL onAir=weakSelf.stationCore.ownsTX || weakSelf.cwStationController.keyer.isTransmitting ||
+                weakSelf.cwStationController.keyer.isAutoCQActive || weakSelf.cwStationController.isManualTuneActive ||
+                weakSelf.ft8StationController.audioEngine.isTransmitting || weakSelf.ft8StationController.audioEngine.isTuning;
+            if(onAir) [weakSelf stationCommand:@"stop"];
+            return event;
+        }
         if(!weakSelf.window.isKeyWindow || weakSelf.window.attachedSheet || event.isARepeat) return event;
         if(event.keyCode==53) { [weakSelf stationCommand:@"stop"]; return nil; }
         NSEventModifierFlags flags=event.modifierFlags & NSEventModifierFlagDeviceIndependentFlagsMask;

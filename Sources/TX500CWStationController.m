@@ -7,9 +7,15 @@
 
 #import "TX500CWStationController.h"
 #import "TX500FT8AudioEngine.h"
+#import "TX500LogbookManager.h"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
+
+// The band selector's segments, in order.
+static NSArray<NSString *> *CWBandSelectorNames(void) {
+    return @[@"160m", @"80m", @"40m", @"30m", @"20m", @"17m", @"15m", @"12m", @"10m", @"6m"];
+}
 
 @interface TX500CWVFOTextField : NSTextField
 @property (nonatomic, copy, nullable) void (^onScrolled)(NSInteger deltaUnits);
@@ -150,7 +156,7 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
         _macroButtons = [NSMutableArray array];
 
         _audioEngine = [[TX500AudioEngine alloc] init];
-        _currentDialFrequencyHz = 14025000;
+        _currentDialFrequencyHz = 0; // unknown until the radio reports it
         _currentTuningStepHz = 100;
         _widebandChannels = [NSMutableArray array];
         _isMonitoringAudio = NO;
@@ -265,6 +271,8 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
 
         // Retune radio VFO dial so clicked signal centers on the operator's nominal CW pitch
         if (llabs(deltaHz) >= 5) {
+            // No frequency read from the radio: the step refuses and says why; nothing is retuned.
+            if (strongSelf.currentDialFrequencyHz == 0) { [strongSelf stepFrequencyHz:deltaHz]; return; }
             strongSelf.userTuningLockoutUntil = [NSDate timeIntervalSinceReferenceDate] + 1.5;
             [strongSelf stepFrequencyHz:deltaHz];
             if (strongSelf.logHandler) {
@@ -330,7 +338,7 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
                                    contact.callsign]);
         } else if (strongSelf.logHandler) {
             strongSelf.logHandler([NSString stringWithFormat:@"✔ Logged QSO with %@ (%@, %@)",
-                                   contact.callsign, contact.band, contact.mode]);
+                                   contact.callsign, contact.band.length ? contact.band : @"band unknown", contact.mode]);
         }
     };
 
@@ -490,31 +498,17 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
         // Discard stale in-flight serial poll replies while user tuning command is settling
         return;
     }
-    self.currentDialFrequencyHz = freqHz;
-    self.assistant.currentFrequencyHz = freqHz;
-    // Derive amateur band
-    double mhz = (double)freqHz / 1000000.0;
-    NSString *b = @"20m";
-    NSInteger bandIndex = 4;
-    if (mhz >= 1.8 && mhz <= 2.0) { b = @"160m"; bandIndex = 0; }
-    else if (mhz >= 3.5 && mhz <= 4.0) { b = @"80m"; bandIndex = 1; }
-    else if (mhz >= 7.0 && mhz <= 7.3) { b = @"40m"; bandIndex = 2; }
-    else if (mhz >= 10.1 && mhz <= 10.15) { b = @"30m"; bandIndex = 3; }
-    else if (mhz >= 14.0 && mhz <= 14.35) { b = @"20m"; bandIndex = 4; }
-    else if (mhz >= 18.068 && mhz <= 18.168) { b = @"17m"; bandIndex = 5; }
-    else if (mhz >= 21.0 && mhz <= 21.45) { b = @"15m"; bandIndex = 6; }
-    else if (mhz >= 24.89 && mhz <= 24.99) { b = @"12m"; bandIndex = 7; }
-    else if (mhz >= 28.0 && mhz <= 29.7) { b = @"10m"; bandIndex = 8; }
-    else if (mhz >= 50.0 && mhz <= 54.0) { b = @"6m"; bandIndex = 9; }
-    self.assistant.currentBand = b;
-
-    if (self.vfoLabel) {
-        self.vfoLabel.stringValue = [NSString stringWithFormat:@"%.3f.%03llu MHz", (double)freqHz / 1e6, (unsigned long long)(freqHz % 1000)];
+    // 0 Hz means the radio did not answer FA;. A frequency known before is kept; with none,
+    // the frequency and band stay unknown (never a guessed one).
+    if (freqHz == 0 && self.currentDialFrequencyHz > 0) {
+        if (self.logHandler)
+            self.logHandler([NSString stringWithFormat:@"Radio frequency unavailable: keeping the last known %.3f MHz.",
+                             (double)self.currentDialFrequencyHz / 1e6]);
+    } else {
+        [self applyDialFrequencyHz:freqHz];
+        if (freqHz == 0 && self.logHandler)
+            self.logHandler(@"Radio frequency unavailable: CW frequency and band stay unknown. A QSO is kept in this session only until the radio answers.");
     }
-    if (self.bandSelectorControl && bandIndex >= 0 && bandIndex < self.bandSelectorControl.segmentCount) {
-        self.bandSelectorControl.selectedSegment = bandIndex;
-    }
-    [self updateVFOOffsetLabel];
 
     if (!self.userHasChosenCustomMode) {
         // Automatically ensure DIG/CW mode unless the user explicitly selected another mode
@@ -532,10 +526,37 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
     }
 }
 
+// Shows a dial frequency on the VFO, the band selector and the QSO assistant. 0 Hz is unknown.
+// The band comes from the Logbook band table; "HF" is its answer for a frequency in no band,
+// so the band stays unknown there too (never 20m by default).
+- (void)applyDialFrequencyHz:(uint64_t)freqHz {
+    self.currentDialFrequencyHz = freqHz;
+    self.assistant.currentFrequencyHz = freqHz;
+    NSString *band = freqHz > 0 ? [TX500LogRecord bandForFrequencyHz:freqHz] : @"";
+    if ([band isEqualToString:@"HF"]) band = @"";
+    self.assistant.currentBand = band;
+
+    if (self.vfoLabel) self.vfoLabel.stringValue = [self vfoTextForFrequencyHz:freqHz];
+    if (self.bandSelectorControl) {
+        NSUInteger bandIndex = [CWBandSelectorNames() indexOfObject:band];
+        self.bandSelectorControl.selectedSegment = (bandIndex != NSNotFound && (NSInteger)bandIndex < self.bandSelectorControl.segmentCount) ? (NSInteger)bandIndex : -1;
+    }
+    [self updateVFOOffsetLabel];
+}
+
+- (NSString *)vfoTextForFrequencyHz:(uint64_t)freqHz {
+    if (freqHz == 0) return @"--.---.--- MHz";
+    return [NSString stringWithFormat:@"%.3f.%03llu MHz", (double)freqHz / 1e6, (unsigned long long)(freqHz % 1000)];
+}
+
 - (void)updateVFOOffsetLabel {
     if (!self.vfoOffsetLabel) return;
-    uint64_t dial = self.currentDialFrequencyHz > 0 ? self.currentDialFrequencyHz : 14025000;
+    uint64_t dial = self.currentDialFrequencyHz;
     double pitch = self.decoder ? self.decoder.nominalPitchHz : 650.0;
+    if (dial == 0) {
+        self.vfoOffsetLabel.stringValue = [NSString stringWithFormat:@"Pitch: +%.0fHz | RF: unknown", pitch];
+        return;
+    }
     uint64_t rf = dial + (uint64_t)round(pitch);
     self.vfoOffsetLabel.stringValue = [NSString stringWithFormat:@"Pitch: +%.0fHz | RF: %.3f.%03llu MHz",
                                        pitch, (double)rf / 1e6, (unsigned long long)(rf % 1000)];
@@ -544,32 +565,7 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
 - (void)tuneToFrequencyHz:(uint64_t)freqHz {
     if (freqHz < 1000000 || freqHz > 60000000) return;
     self.userTuningLockoutUntil = [NSDate timeIntervalSinceReferenceDate] + 1.5;
-    self.currentDialFrequencyHz = freqHz;
-    self.assistant.currentFrequencyHz = freqHz;
-
-    // Derive amateur band
-    double mhz = (double)freqHz / 1000000.0;
-    NSString *b = @"20m";
-    NSInteger bandIndex = 4;
-    if (mhz >= 1.8 && mhz <= 2.0) { b = @"160m"; bandIndex = 0; }
-    else if (mhz >= 3.5 && mhz <= 4.0) { b = @"80m"; bandIndex = 1; }
-    else if (mhz >= 7.0 && mhz <= 7.3) { b = @"40m"; bandIndex = 2; }
-    else if (mhz >= 10.1 && mhz <= 10.15) { b = @"30m"; bandIndex = 3; }
-    else if (mhz >= 14.0 && mhz <= 14.35) { b = @"20m"; bandIndex = 4; }
-    else if (mhz >= 18.068 && mhz <= 18.168) { b = @"17m"; bandIndex = 5; }
-    else if (mhz >= 21.0 && mhz <= 21.45) { b = @"15m"; bandIndex = 6; }
-    else if (mhz >= 24.89 && mhz <= 24.99) { b = @"12m"; bandIndex = 7; }
-    else if (mhz >= 28.0 && mhz <= 29.7) { b = @"10m"; bandIndex = 8; }
-    else if (mhz >= 50.0 && mhz <= 54.0) { b = @"6m"; bandIndex = 9; }
-    self.assistant.currentBand = b;
-
-    if (self.vfoLabel) {
-        self.vfoLabel.stringValue = [NSString stringWithFormat:@"%.3f.%03llu MHz", (double)freqHz / 1e6, (unsigned long long)(freqHz % 1000)];
-    }
-    if (self.bandSelectorControl && bandIndex >= 0 && bandIndex < self.bandSelectorControl.segmentCount) {
-        self.bandSelectorControl.selectedSegment = bandIndex;
-    }
-    [self updateVFOOffsetLabel];
+    [self applyDialFrequencyHz:freqHz];
     if (self.serialCommandSender) {
         NSString *cmd = [NSString stringWithFormat:@"FA%011llu;", (unsigned long long)freqHz];
         self.serialCommandSender(cmd);
@@ -580,7 +576,13 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
 }
 
 - (void)stepFrequencyHz:(int64_t)stepHz {
-    uint64_t current = self.currentDialFrequencyHz > 0 ? self.currentDialFrequencyHz : 14025000;
+    // A step needs the dial frequency: never step from a guessed one.
+    if (self.currentDialFrequencyHz == 0) {
+        if (self.logHandler)
+            self.logHandler(@"[CW Station] VFO not stepped: the radio frequency is unknown. Pick a band, or reopen the CW tab to read it from the radio.");
+        return;
+    }
+    uint64_t current = self.currentDialFrequencyHz;
     int64_t target = (int64_t)current + stepHz;
     if (target < 1000000) target = 1000000;
     if (target > 60000000) target = 60000000;
@@ -641,7 +643,7 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
 
 - (void)bandSelectorChanged:(NSSegmentedControl *)sender {
     NSInteger sel = sender.selectedSegment;
-    NSArray<NSString *> *names = @[@"160m", @"80m", @"40m", @"30m", @"20m", @"17m", @"15m", @"12m", @"10m", @"6m"];
+    NSArray<NSString *> *names = CWBandSelectorNames();
     if (sel >= 0 && sel < (NSInteger)names.count) {
         [self selectAmateurBand:names[sel]];
     }
@@ -853,7 +855,7 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
     self.vfoLabel.bordered = YES;
     self.vfoLabel.alignment = NSTextAlignmentCenter;
     self.vfoLabel.editable = NO;
-    self.vfoLabel.stringValue = @"14.025.000 MHz";
+    self.vfoLabel.stringValue = [self vfoTextForFrequencyHz:self.currentDialFrequencyHz];
     self.vfoLabel.translatesAutoresizingMaskIntoConstraints = NO;
     [self.vfoLabel.widthAnchor constraintEqualToConstant:140].active = YES;
     [self.vfoLabel.heightAnchor constraintEqualToConstant:24].active = YES;
@@ -893,9 +895,10 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
     self.vfoStepControl.translatesAutoresizingMaskIntoConstraints = NO;
     self.vfoStepControl.toolTip = @"Tuning step resolution for mouse scroll and +/- buttons";
 
-    self.vfoOffsetLabel = [NSTextField labelWithString:@"Pitch: +650Hz | RF: 14.025.650 MHz"];
+    self.vfoOffsetLabel = [NSTextField labelWithString:@""];
     self.vfoOffsetLabel.font = [NSFont monospacedDigitSystemFontOfSize:10.5 weight:NSFontWeightMedium];
     self.vfoOffsetLabel.textColor = [NSColor secondaryLabelColor];
+    [self updateVFOOffsetLabel];
     self.vfoOffsetLabel.translatesAutoresizingMaskIntoConstraints = NO;
 
     NSView *spacer1 = [NSView new];
@@ -926,7 +929,7 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
                                                                        action:@selector(bandSelectorChanged:)];
     self.bandSelectorControl.controlSize = NSControlSizeSmall;
     self.bandSelectorControl.font = [NSFont monospacedDigitSystemFontOfSize:9.5 weight:NSFontWeightMedium];
-    self.bandSelectorControl.selectedSegment = 4; // 20m
+    self.bandSelectorControl.selectedSegment = -1; // no band until the radio reports a frequency
     self.bandSelectorControl.translatesAutoresizingMaskIntoConstraints = NO;
 
     [self.bandSelectorControl setToolTip:@"160m CW Sub-band: 1.800 – 1.840 MHz (QRP: 1.810 MHz)" forSegment:0];
@@ -2275,7 +2278,7 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
         } else if ([tableColumn.identifier isEqualToString:@"logBand"]) {
             tf.stringValue = c.band ?: @"";
         } else if ([tableColumn.identifier isEqualToString:@"logFreq"]) {
-            tf.stringValue = [NSString stringWithFormat:@"%.4f", c.frequencyMHz];
+            tf.stringValue = c.frequencyMHz > 0.0 ? [NSString stringWithFormat:@"%.4f", c.frequencyMHz] : @"—";
         } else if ([tableColumn.identifier isEqualToString:@"logMode"]) {
             tf.stringValue = c.mode ?: @"";
         } else if ([tableColumn.identifier isEqualToString:@"logSent"]) {
@@ -2334,6 +2337,12 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
         self.pitchValueLabel.stringValue = [NSString stringWithFormat:@"%.0fHz", freq];
     } else {
         // Frequency is higher than 1500 Hz: shift radio dial VFO so it centers at 650 Hz
+        if (self.currentDialFrequencyHz == 0) {
+            // No retune without a frequency read from the radio, so no answer off the station either.
+            if (self.logHandler)
+                self.logHandler([NSString stringWithFormat:@"[CW Station] Cannot retune to answer at %.0f Hz: the radio frequency is unknown. Pick a band, or reopen the CW tab to read it from the radio.", freq]);
+            return;
+        }
         int64_t delta = (int64_t)round(freq - 650.0);
         [self stepFrequencyHz:delta];
         [self.decoder setPitch:650.0];

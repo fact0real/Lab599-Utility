@@ -1485,7 +1485,7 @@ static NSString *const TX500LogbookNoBand = @"—";
     }
     if(self.callsignField.stringValue.length) return;
     self.currentFrequencyHz = freqHz;
-    self.currentMode = mode ?: @"USB";
+    if (mode.length) self.currentMode = mode;
 
     dispatch_async(dispatch_get_main_queue(), ^{
         if(self.callsignField.stringValue.length) return;

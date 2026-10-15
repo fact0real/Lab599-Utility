@@ -1206,6 +1206,9 @@ static const char *kQSOSelectColumns =
     rec.callsign = [cwContact.callsign uppercaseString];
     rec.band = [cwContact.band lowercaseString];
     rec.frequencyHz = (uint64_t)(cwContact.frequencyMHz * 1e6);
+    // A frequency in no band: the band table's own answer, as for imported records.
+    if (rec.band.length == 0 && rec.frequencyHz > 0)
+        rec.band = [[TX500LogRecord bandForFrequencyHz:rec.frequencyHz] lowercaseString];
     rec.mode = @"CW";
     rec.rstSent = cwContact.rstSent ?: @"599";
     rec.rstRcvd = cwContact.rstRcvd ?: @"599";

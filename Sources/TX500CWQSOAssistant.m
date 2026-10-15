@@ -81,8 +81,8 @@
         _activeName = @"";
         _activeQTH = @"";
         _myCallsign = @"";
-        _currentFrequencyHz = 14050000;
-        _currentBand = @"20m";
+        _currentFrequencyHz = 0; // unknown until the radio reports it
+        _currentBand = @"";
         _internalHeardStations = [NSMutableArray array];
         _internalLoggedContacts = [NSMutableArray array];
     }
@@ -471,7 +471,7 @@
     contact.name = self.activeName;
     contact.qth = self.activeQTH;
     contact.frequencyMHz = (double)self.currentFrequencyHz / 1000000.0;
-    contact.band = self.currentBand.length > 0 ? self.currentBand : @"20m";
+    contact.band = self.currentBand ?: @"";
 
     // Without a frequency read from the radio, or in Practice / Sim (the Morse is made up and
     // nothing was transmitted), the QSO stays in this session list only: it is not saved to
@@ -501,7 +501,7 @@
     // it the values it already has)
     TX500LogRecord *cloudRec = saved ?: [[TX500LogRecord alloc] init];
     cloudRec.callsign = [contact.callsign uppercaseString];
-    cloudRec.band = [contact.band lowercaseString];
+    cloudRec.band = saved.band.length ? saved.band : [contact.band lowercaseString];
     cloudRec.frequencyHz = (uint64_t)(contact.frequencyMHz * 1e6);
     cloudRec.mode = @"CW";
     cloudRec.rstSent = contact.rstSent ?: @"599";

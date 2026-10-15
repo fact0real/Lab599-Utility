@@ -1428,6 +1428,47 @@ int main(int argc, const char * argv[]) {
                    @"A frequency read by CAT fills the frequency, and the band follows it");
         NSLog(@"PASS: The Logbook form never logs a fixed frequency or band.");
 
+        // 20. When the radio does not answer FA; the entry form keeps what is there, and
+        // without an MD; reply the selected mode is kept (no USB guess).
+        TX500LogbookController *formController = [TX500LogbookController new];
+        NSTextField *formFreq = [formController valueForKey:@"freqField"];
+        NSPopUpButton *formMode = [formController valueForKey:@"modePopup"];
+        formFreq.stringValue = @"7.074000";
+        [formMode selectItemWithTitle:@"FT8"];
+        NSString *unknownMode = nil; // the radio did not answer MD;
+        [formController updateFrequencyHz:0 mode:unknownMode];
+        [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.2]];
+        AssertTrue([formFreq.stringValue isEqualToString:@"7.074000"], @"No radio answer leaves the frequency field alone");
+        AssertTrue([formMode.titleOfSelectedItem isEqualToString:@"FT8"], @"No radio answer leaves the mode alone");
+        [formController setValue:@"FT8" forKey:@"currentMode"];
+        [formController updateFrequencyHz:14074000 mode:unknownMode];
+        AssertTrue([[formController valueForKey:@"currentMode"] isEqualToString:@"FT8"], @"No MD; reply keeps the form's mode (no USB guess)");
+        [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.2]];
+        AssertTrue([formFreq.stringValue isEqualToString:@"14.074000"] && [formMode.titleOfSelectedItem isEqualToString:@"FT8"],
+                   @"A real frequency without a mode updates the frequency only");
+        // A CW QSO on a frequency in no band gets the band table's answer, as imported records do.
+        TX500QSOContact *offTableCW = [[TX500QSOContact alloc] init];
+        offTableCW.callsign = @"0ZZ9ZZ";
+        offTableCW.band = @"";
+        offTableCW.frequencyMHz = 4.500;
+        TX500LogRecord *offTableRec = [mgr savedContactFromCW:offTableCW myCall:@"EA3JIC" myGrid:@"JN11"];
+        AssertTrue(offTableRec && [offTableRec.band isEqualToString:[[TX500LogRecord bandForFrequencyHz:4500000] lowercaseString]] && offTableRec.band.length > 0,
+                   @"A CW QSO in no band gets the band table's answer");
+        // The radio sync of the CW tab and of the Logbook passes 0 Hz when FA; gets no usable
+        // reply (no 14.025 or 14.200 MHz), and the Logbook sync no USB without an MD; reply.
+        NSString *appSource = [NSString stringWithContentsOfFile:@"Sources/Lab599Utility.m" encoding:NSUTF8StringEncoding error:nil];
+        AssertTrue(appSource.length > 0, @"The radio sync source is readable from the tree");
+        NSRegularExpression *syncDefault = [NSRegularExpression regularExpressionWithPattern:
+            @"querySharedCATCommand:@\"FA;\"[^\\n]*\\n[^\\n]*querySharedCATCommand:@\"MD;\"[^\\n]*\\n\\s*\\n\\s*uint64_t freqHz = ([^;]*);[\\s\\S]*?NSString \\*modeStr = ([^;]*);"
+            options:0 error:nil];
+        NSArray<NSTextCheckingResult *> *syncs = [syncDefault matchesInString:appSource options:0 range:NSMakeRange(0, appSource.length)];
+        AssertTrue(syncs.count == 2, @"Both radio syncs (CW tab and Logbook) are found");
+        for (NSTextCheckingResult *m in syncs)
+            AssertTrue([[appSource substringWithRange:[m rangeAtIndex:1]] isEqualToString:@"0"], @"A radio sync with no FA; reply passes 0 Hz, never a guessed frequency");
+        if (syncs.count == 2)
+            AssertTrue([[appSource substringWithRange:[syncs[1] rangeAtIndex:2]] isEqualToString:@"nil"], @"The Logbook sync with no MD; reply passes no mode, never USB");
+        NSLog(@"PASS: No radio answer leaves the Logbook form as it is.");
+
         // Cleanup temporary test SQLite database
         [mgr closeDatabase];
         [[NSFileManager defaultManager] removeItemAtURL:dbURL error:nil];
@@ -1437,7 +1478,7 @@ int main(int argc, const char * argv[]) {
         [[NSFileManager defaultManager] removeItemAtPath:shmPath error:nil];
         [[NSFileManager defaultManager] removeItemAtPath:[NSString stringWithUTF8String:testRoot] error:nil];
 
-        NSLog(@"ALL 19 LOGBOOK & CLOUD ECOSYSTEM TESTS PASSED SUCCESSFULLY!");
+        NSLog(@"ALL 20 LOGBOOK & CLOUD ECOSYSTEM TESTS PASSED SUCCESSFULLY!");
     }
     return 0;
 }

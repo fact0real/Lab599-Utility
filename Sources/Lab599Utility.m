@@ -2302,7 +2302,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
                 NSString *faReply = [weakSelf querySharedCATCommand:@"FA;" timeout:0.4];
                 NSString *mdReply = [weakSelf querySharedCATCommand:@"MD;" timeout:0.4];
 
-                uint64_t freqHz = 14025000;
+                uint64_t freqHz = 0; // unknown unless the radio answers FA;
                 if ([faReply hasPrefix:@"FA"] && faReply.length >= 13) {
                     freqHz = (uint64_t)[[faReply substringWithRange:NSMakeRange(2, 11)] longLongValue];
                 }
@@ -2347,11 +2347,11 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
                 NSString *faReply = [weakSelf querySharedCATCommand:@"FA;" timeout:0.4];
                 NSString *mdReply = [weakSelf querySharedCATCommand:@"MD;" timeout:0.4];
 
-                uint64_t freqHz = 14200000;
+                uint64_t freqHz = 0; // unknown unless the radio answers FA;
                 if ([faReply hasPrefix:@"FA"] && faReply.length >= 13) {
                     freqHz = (uint64_t)[[faReply substringWithRange:NSMakeRange(2, 11)] longLongValue];
                 }
-                NSString *modeStr = @"USB";
+                NSString *modeStr = nil; // unknown unless the radio answers MD;
                 if ([mdReply hasPrefix:@"MD"] && mdReply.length >= 3) {
                     unichar mCode = [mdReply characterAtIndex:2];
                     if (mCode == '1') modeStr = @"LSB";

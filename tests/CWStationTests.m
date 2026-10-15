@@ -26,12 +26,13 @@
 // Counts calls to the cloud upload while a test runs, and uploads nothing. Installed only
 // around the checks that need it, and restored afterwards.
 static NSUInteger CloudUploadCalls = 0;
+static NSString *CloudUploadLastBand = nil;
 static IMP CloudUploadOriginal = NULL;
 static void StartCountingCloudUploads(void) {
     Method m = class_getInstanceMethod([TX500CloudSyncEngine class], @selector(uploadContactImmediately:completion:));
     IMP counted = imp_implementationWithBlock(^(id engine, TX500LogRecord *record, void (^completion)(BOOL, NSString *)) {
-        (void)engine; (void)record;
-        @synchronized ([TX500CloudSyncEngine class]) { CloudUploadCalls++; }
+        (void)engine;
+        @synchronized ([TX500CloudSyncEngine class]) { CloudUploadCalls++; CloudUploadLastBand = [record.band copy]; }
         if (completion) completion(YES, @"Counted by the test; nothing uploaded.");
     });
     CloudUploadOriginal = method_setImplementation(m, counted);
@@ -303,6 +304,133 @@ int main(int argc, const char * argv[]) {
         AssertTrue([assistant.loggedContacts[0].callsign isEqualToString:@"G4XYZ"], @"Logged contact callsign");
         AssertTrue([assistant.loggedContacts[0].mode isEqualToString:@"CW"], @"Logged mode CW");
         NSLog(@"PASS: Semi-automated QSO state machine flow and automatic logging verified.");
+
+        // 8b. Nothing guesses a frequency when the radio does not answer FA;. A QSO whose
+        // frequency was never read from the radio stays in the session list and is not saved
+        // to the Logbook or uploaded on its own.
+        TX500CWQSOAssistant *noFreq = [[TX500CWQSOAssistant alloc] init];
+        AssertTrue(noFreq.currentFrequencyHz == 0 && noFreq.currentBand.length == 0, @"New QSO assistant has no invented frequency or band");
+        noFreq.myCallsign = @"EA3JIC";
+        NSUInteger centralBefore = [[TX500LogbookManager sharedManager] allContacts].count;
+        StartCountingCloudUploads();
+        NSUInteger noFreqUploadsBefore = CloudUploadCount();
+        [noFreq processDecodedTextStream:@"CQ CQ DE EP2AES EP2AES K" currentWPM:22.0 snrDb:14.5];
+        AssertTrue(noFreq.heardStations.count >= 1, @"No-frequency assistant heard the CQ");
+        [noFreq selectAndAnswerStation:noFreq.heardStations[0]];
+        for (int step = 0; step < 3 && noFreq.qsoState != TX500QSOStateCompleted; step++)
+            [noFreq advanceQSOStepWithAction:^(NSString * _Nonnull macroToTransmit) { (void)macroToTransmit; }];
+        AssertTrue(noFreq.qsoState == TX500QSOStateCompleted && noFreq.loggedContacts.count == 1, @"No-frequency QSO completes in the session list");
+        AssertTrue([noFreq.loggedContacts[0].notes containsString:@"not saved"], @"No-frequency QSO says it was not saved");
+        AssertTrue(noFreq.loggedContacts[0].frequencyMHz == 0.0 && noFreq.loggedContacts[0].band.length == 0, @"No-frequency QSO gets no invented frequency or band");
+        [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.2]];
+        AssertTrue([[TX500LogbookManager sharedManager] allContacts].count == centralBefore, @"No-frequency QSO is not saved to the central Logbook");
+        AssertTrue(CloudUploadCount() == noFreqUploadsBefore, @"No-frequency QSO is not uploaded");
+
+        // The CW station: no frequency, band or band chip until the radio reports one.
+        TX500CWStationController *cwStation = [TX500CWStationController new];
+        NSTextField *cwVFO = [cwStation valueForKey:@"vfoLabel"];
+        NSTextField *cwRF = [cwStation valueForKey:@"vfoOffsetLabel"];
+        NSSegmentedControl *cwBands = [cwStation valueForKey:@"bandSelectorControl"];
+        AssertTrue(cwStation.currentDialFrequencyHz == 0 && cwStation.assistant.currentFrequencyHz == 0 && cwStation.assistant.currentBand.length == 0,
+                   @"A new CW station has no frequency or band");
+        AssertTrue(cwVFO && ![cwVFO.stringValue containsString:@"14."] && [cwRF.stringValue containsString:@"RF: unknown"] && cwBands.selectedSegment == -1,
+                   @"A new CW station shows no frequency and no band chip");
+        __block NSMutableArray<NSString *> *cwCommands = [NSMutableArray array];
+        __block NSString *syncLine = @"";
+        cwStation.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) { [cwCommands addObject:catCommand]; return YES; };
+        cwStation.logHandler = ^(NSString *line) { syncLine = line; };
+        [cwStation updateFrequencyHz:0 mode:@"CW"]; // what the radio sync passes when FA; gets no usable reply
+        AssertTrue(cwStation.currentDialFrequencyHz == 0 && cwStation.assistant.currentFrequencyHz == 0 && cwStation.assistant.currentBand.length == 0,
+                   @"No radio answer keeps the CW frequency and band unknown");
+        AssertTrue([syncLine containsString:@"Radio frequency unavailable"] && [syncLine containsString:@"unknown"], @"The console says the CW frequency is unknown");
+        [cwStation stepFrequencyHz:100];
+        BOOL steppedBlind = NO;
+        for (NSString *cmd in cwCommands) if ([cmd hasPrefix:@"FA"]) steppedBlind = YES;
+        AssertTrue(!steppedBlind && cwStation.currentDialFrequencyHz == 0 && [syncLine containsString:@"VFO not stepped"],
+                   @"A VFO step with no known frequency sends no FA and says why");
+        // A waterfall click and the wideband Answer above 1500 Hz need a retune: with no
+        // frequency read neither sends FA, the Answer keys nothing, and the console says why.
+        void (^waterfallClick)(double) = [[cwStation valueForKey:@"spectrumView"] valueForKey:@"onWaterfallFrequencyClicked"];
+        AssertTrue(waterfallClick != nil, @"The CW waterfall click handler is set");
+        syncLine = @"";
+        waterfallClick(1200.0);
+        steppedBlind = NO;
+        for (NSString *cmd in cwCommands) if ([cmd hasPrefix:@"FA"]) steppedBlind = YES;
+        AssertTrue(!steppedBlind && cwStation.currentDialFrequencyHz == 0 && [syncLine containsString:@"VFO not stepped"] && ![syncLine containsString:@"Retuned"],
+                   @"A waterfall click with no known frequency sends no FA and does not claim a retune");
+        cwStation.keyer.myCallsign = @"EA3JIC";
+        cwStation.assistant.myCallsign = @"EA3JIC";
+        TX500CWChannelState *farChannel = [TX500CWChannelState new];
+        farChannel.frequencyHz = 1800.0;
+        farChannel.estimatedWPM = 22.0;
+        farChannel.snrDb = 12.0;
+        farChannel.extractedCallsign = @"EP2AES";
+        double pitchBefore = cwStation.decoder.nominalPitchHz;
+        syncLine = @"";
+        [cwStation answerWidebandChannel:farChannel];
+        steppedBlind = NO;
+        for (NSString *cmd in cwCommands) if ([cmd hasPrefix:@"FA"]) steppedBlind = YES;
+        AssertTrue(!steppedBlind && ![cwCommands containsObject:@"TX;"] && !cwStation.keyer.isTransmitting && cwStation.decoder.nominalPitchHz == pitchBefore,
+                   @"The wideband Answer above 1500 Hz with no known frequency neither retunes nor keys");
+        AssertTrue([syncLine containsString:@"Cannot retune to answer"] && ![syncLine containsString:@"answered"],
+                   @"The wideband Answer says why it sent nothing");
+        [cwStation.keyer abortTransmission];
+        [cwStation updateFrequencyHz:7030000 mode:@"CW"]; // read from the radio
+        AssertTrue([cwVFO.stringValue isEqualToString:@"7.030.000 MHz"] && cwBands.selectedSegment == 2, @"A frequency read from the radio shows on the VFO and the 40m chip");
+        syncLine = @"";
+        [cwStation updateFrequencyHz:0 mode:@"CW"]; // one missed FA; reply later
+        AssertTrue(cwStation.currentDialFrequencyHz == 7030000 && cwStation.assistant.currentFrequencyHz == 7030000 &&
+                   [cwStation.assistant.currentBand isEqualToString:@"40m"], @"A missed radio answer keeps the frequency and band known before");
+        AssertTrue([syncLine containsString:@"keeping the last known 7.030 MHz"], @"The console says the frequency known before is kept");
+        [cwStation stepFrequencyHz:100];
+        AssertTrue([cwCommands containsObject:@"FA00007030100;"] && cwStation.assistant.currentFrequencyHz == 7030100, @"With a known frequency the VFO step is sent");
+        [cwStation setValue:@0 forKey:@"userTuningLockoutUntil"];
+        cwStation.logHandler = nil;
+        [cwStation updateFrequencyHz:5357000 mode:@"CW"];
+        AssertTrue([cwStation.assistant.currentBand isEqualToString:@"60m"] && cwBands.selectedSegment == -1, @"CW uses the Logbook band table (5.357 MHz is 60m, no chip)");
+        [cwStation updateFrequencyHz:4500000 mode:@"CW"];
+        AssertTrue(cwStation.assistant.currentBand.length == 0 && cwBands.selectedSegment == -1, @"A frequency in no band leaves the CW band unknown");
+        [cwStation tuneToFrequencyHz:4510000];
+        AssertTrue(cwStation.assistant.currentBand.length == 0, @"Tuning to a frequency in no band gives no invented band");
+
+        // Control: with a frequency read from the radio the QSO is saved and uploaded as before.
+        TX500CWQSOAssistant *withFreq = [[TX500CWQSOAssistant alloc] init];
+        withFreq.myCallsign = @"EA3JIC";
+        withFreq.currentFrequencyHz = 14050000;
+        withFreq.currentBand = @"20m";
+        [withFreq processDecodedTextStream:@"CQ CQ DE EP2AES EP2AES K" currentWPM:22.0 snrDb:14.5];
+        AssertTrue(withFreq.heardStations.count >= 1, @"Control assistant heard the CQ");
+        [withFreq selectAndAnswerStation:withFreq.heardStations[0]];
+        for (int step = 0; step < 3 && withFreq.qsoState != TX500QSOStateCompleted; step++)
+            [withFreq advanceQSOStepWithAction:^(NSString * _Nonnull macroToTransmit) { (void)macroToTransmit; }];
+        AssertTrue(withFreq.qsoState == TX500QSOStateCompleted && withFreq.loggedContacts[0].notes.length == 0, @"Control QSO completes without a note");
+        AssertTrue([[TX500LogbookManager sharedManager] allContacts].count == centralBefore + 1, @"A QSO with a frequency read from the radio is saved to the central Logbook");
+        AssertTrue(CloudUploadCount() == noFreqUploadsBefore + 1, @"A QSO with a frequency read from the radio is uploaded");
+        // A QSO on a frequency in no band is saved and uploaded with the band table's answer.
+        TX500CWQSOAssistant *offBand = [[TX500CWQSOAssistant alloc] init];
+        offBand.myCallsign = @"EA3JIC";
+        offBand.currentFrequencyHz = 4500000;
+        offBand.currentBand = @"";
+        [offBand processDecodedTextStream:@"CQ CQ DE EP2AES EP2AES K" currentWPM:22.0 snrDb:14.5];
+        [offBand selectAndAnswerStation:offBand.heardStations[0]];
+        for (int step = 0; step < 3 && offBand.qsoState != TX500QSOStateCompleted; step++)
+            [offBand advanceQSOStepWithAction:^(NSString * _Nonnull macroToTransmit) { (void)macroToTransmit; }];
+        NSString *tableBand = [[TX500LogRecord bandForFrequencyHz:4500000] lowercaseString];
+        TX500LogRecord *offBandRec = nil;
+        for (TX500LogRecord *r in [[TX500LogbookManager sharedManager] allContacts]) if (r.frequencyHz == 4500000) offBandRec = r;
+        AssertTrue(offBandRec && [offBandRec.band isEqualToString:tableBand] && [CloudUploadLastBand isEqualToString:tableBand],
+                   @"A CW QSO in no band is saved and uploaded with the band table's answer");
+        StopCountingCloudUploads();
+        __block NSString *stationLine = @"";
+        cwStation.logHandler = ^(NSString *line) { stationLine = line; };
+        cwStation.assistant.onContactLogged(noFreq.loggedContacts[0]);
+        AssertTrue([stationLine containsString:@"not saved to the Logbook"] && ![stationLine containsString:@"Logged QSO"],
+                   @"The console says a no-frequency QSO was not saved");
+        TX500QSOContact *noBand = [TX500QSOContact new];
+        noBand.callsign = @"EP2AES"; noBand.mode = @"CW"; noBand.frequencyMHz = 4.5; noBand.band = @"";
+        cwStation.assistant.onContactLogged(noBand);
+        AssertTrue([stationLine containsString:@"band unknown"], @"The console says when the band is unknown");
+        NSLog(@"PASS: CW never logs, uploads or tunes from an invented frequency.");
 
         // 8c. Practice / Sim makes up the Morse and transmits nothing. Even with a frequency
         // read from the radio, a QSO done in practice stays in the session list only: it is

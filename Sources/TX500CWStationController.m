@@ -124,6 +124,8 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
 @property (nonatomic, strong) NSTextField *txSwrLabel;
 @property (nonatomic, strong) NSLevelIndicator *txSwrMeterBar;
 @property (nonatomic, strong, nullable) NSTimer *txMeterPollingTimer;
+@property (nonatomic, assign) BOOL txMeterPollInFlight;      // one PWR/SWR read at a time
+@property (nonatomic, assign) NSUInteger txMeterSilentPolls; // polls in a row with no reply
 @property (nonatomic, assign, readwrite) double liveTXPowerWatts;
 @property (nonatomic, assign, readwrite) double liveTXSWR;
 
@@ -2048,12 +2050,14 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
         (void)timer;
         [weakSelf pollTXMeters];
     }];
+    self.txMeterSilentPolls = 0;
     [self pollTXMeters];
 }
 
 - (void)stopTXMeterPolling {
     [self.txMeterPollingTimer invalidate];
     self.txMeterPollingTimer = nil;
+    self.txMeterSilentPolls = 0;
     self.txPowerLabel.stringValue = @"⚡ PWR: 0.0 W";
     self.txPowerLabel.textColor = [NSColor secondaryLabelColor];
     self.txPowerMeterBar.doubleValue = 0.0;
@@ -2072,14 +2076,27 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
     // Practice / Sim puts nothing on the air: the PWR and SWR meters are not read from the radio.
     if (self.decoder.isSimulationActive) return;
     if (!self.catQueryHandler) return;
+    // One read at a time: a radio that is slow to answer, or does not answer, must not
+    // queue reads ahead of the RX; that ends the transmission. The flag is cleared only
+    // when the read returns (below), also after a stop, so a new transmission never
+    // starts a second read beside one still waiting.
+    if (self.txMeterPollInFlight) return;
+    self.txMeterPollInFlight = YES;
 
     __weak typeof(self) weakSelf = self;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INTERACTIVE, 0), ^{
         typeof(self) strongSelf = weakSelf;
-        if (!strongSelf || (!strongSelf.keyer.isTransmitting && !strongSelf.isManualTuneActive)) return;
+        if (!strongSelf) return;
 
-        NSString *pwrReply = strongSelf.catQueryHandler(@"RM0;RM;", 0.07);
-        NSString *swrReply = strongSelf.catQueryHandler(@"RM1;RM;", 0.07);
+        NSString *pwrReply = nil;
+        NSString *swrReply = nil;
+        if (strongSelf.keyer.isTransmitting || strongSelf.isManualTuneActive) {
+            pwrReply = strongSelf.catQueryHandler(@"RM0;RM;", 0.2);
+            // The transmission may have ended during the first read: no second read then.
+            if (strongSelf.keyer.isTransmitting || strongSelf.isManualTuneActive) {
+                swrReply = strongSelf.catQueryHandler(@"RM1;RM;", 0.2);
+            }
+        }
 
         NSInteger pwrDots = -1;
         if (pwrReply.length >= 7) {
@@ -2102,8 +2119,22 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
         dispatch_async(dispatch_get_main_queue(), ^{
             typeof(self) uiSelf = weakSelf;
             if (!uiSelf) return;
-            if (uiSelf.keyer.isTransmitting || uiSelf.isManualTuneActive) {
-                [uiSelf updateLiveTXPowerDots:pwrDots swrDots:swrDots];
+            uiSelf.txMeterPollInFlight = NO;
+            if (!uiSelf.keyer.isTransmitting && !uiSelf.isManualTuneActive) return;
+            [uiSelf updateLiveTXPowerDots:pwrDots swrDots:swrDots];
+            if (pwrDots >= 0 || swrDots >= 0) {
+                uiSelf.txMeterSilentPolls = 0;
+            } else if (pwrReply == nil && swrReply == nil) {
+                // Three silent polls in a row: stop asking until the next transmission.
+                // The meters keep what they show; the transmission itself is not touched.
+                uiSelf.txMeterSilentPolls++;
+                if (uiSelf.txMeterSilentPolls >= 3 && uiSelf.txMeterPollingTimer) {
+                    [uiSelf.txMeterPollingTimer invalidate];
+                    uiSelf.txMeterPollingTimer = nil;
+                    if (uiSelf.logHandler) {
+                        uiSelf.logHandler(@"[CW Station] PWR/SWR meters: no reply from the radio; polling stopped until the next transmission.");
+                    }
+                }
             }
         });
     });

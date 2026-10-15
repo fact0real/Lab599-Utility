@@ -590,6 +590,52 @@ int main(int argc, const char * argv[]) {
         method_setImplementation(radioAudioMethod, radioAudioOriginal);
         NSLog(@"PASS: Practice / Sim never opens the radio output, never keys, and releases a live Tune.");
 
+        // 8e. A radio that does not answer the PWR/SWR meter reads: only one read is in flight
+        // at a time (a slow read is not queued behind itself, so nothing piles up in front of
+        // the RX; that ends the Tune), and three silent polls stop the reads, not the Tune.
+        // The next transmission polls again. The stand-in read waits 0.3 s and returns nil.
+        TX500CWStationController *meterStation = [TX500CWStationController new];
+        __block NSMutableArray<NSString *> *meterCmds = [NSMutableArray array];
+        __block NSMutableArray<NSString *> *meterLog = [NSMutableArray array];
+        meterStation.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) { [meterCmds addObject:catCommand]; return YES; };
+        meterStation.logHandler = ^(NSString *line) { [meterLog addObject:line]; };
+        NSObject *meterLock = [NSObject new];
+        __block NSInteger meterInFlight = 0, meterMaxInFlight = 0;
+        __block NSUInteger meterReads = 0;
+        meterStation.catQueryHandler = ^NSString *(NSString *catCommand, NSTimeInterval timeout) {
+            (void)catCommand; (void)timeout;
+            @synchronized (meterLock) { meterInFlight++; meterMaxInFlight = MAX(meterMaxInFlight, meterInFlight); meterReads++; }
+            [NSThread sleepForTimeInterval:0.3];
+            @synchronized (meterLock) { meterInFlight--; }
+            return nil;
+        };
+        NSDate *meterTuneStart = [NSDate date];
+        [meterStation toggleManualTransmit];
+        AssertTrue(meterStation.isManualTuneActive && [meterCmds containsObject:@"TX;"], @"Tune keys the radio with TX;");
+        [[NSRunLoop mainRunLoop] runUntilDate:[meterTuneStart dateByAddingTimeInterval:1.0]];
+        @synchronized (meterLock) {
+            AssertTrue(meterMaxInFlight == 1, @"only one meter read is in flight at a time");
+            AssertTrue(meterReads <= 4, @"a slow read is not queued behind itself");
+        }
+        [[NSRunLoop mainRunLoop] runUntilDate:[meterTuneStart dateByAddingTimeInterval:2.6]];
+        BOOL meterStoppedLogged = NO;
+        for (NSString *line in meterLog) if ([line containsString:@"polling stopped"]) meterStoppedLogged = YES;
+        AssertTrue([meterStation valueForKey:@"txMeterPollingTimer"] == nil && meterStoppedLogged && meterStation.isManualTuneActive,
+                   @"three silent polls stop the meter reads, not the Tune");
+        [meterCmds removeAllObjects];
+        [meterStation stopManualTune];
+        AssertTrue(!meterStation.isManualTuneActive && [meterCmds containsObject:@"RX;"], @"Stopping the Tune sends RX;");
+        NSUInteger meterReadsFirstTune = 0;
+        @synchronized (meterLock) { meterReadsFirstTune = meterReads; }
+        [meterStation toggleManualTransmit];
+        AssertTrue(meterStation.isManualTuneActive && [meterStation valueForKey:@"txMeterPollingTimer"] != nil,
+                   @"polling restarts with the next transmission");
+        [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.4]];
+        @synchronized (meterLock) { AssertTrue(meterReads > meterReadsFirstTune, @"the next transmission reads the meters again"); }
+        [meterStation stopManualTune];
+        [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.7]]; // let the last read return
+        NSLog(@"PASS: One PWR/SWR meter read in flight; three silent polls stop the reads, not the Tune.");
+
         // 9. Test ADIF 3.1 Record Generation & File Export
         NSString *adifFull = [assistant generateFullADIFString];
         AssertTrue([adifFull containsString:@"<PROGRAMID:14>Lab599 Utility"], @"ADIF Header");

@@ -1413,6 +1413,57 @@ int main(int argc, const char * argv[]) {
         AssertTrue([cqCountdown.stringValue isEqualToString:@"[4s · 1/10]"], @"the countdown shows the calls sent and the limit");
         [cqStation toggleAutoCQ:nil];
         NSLog(@"PASS: Auto-CQ stops at its call limit and at its time limit.");
+        // 15, continued. Auto-CQ ends when the QSO starts: when the operator sends anything (Send, a
+        // macro, an Answer, the next step) and when the decoder hears a station calling us
+        // ("EA3JIC DE ..."). Our own CQ is not an answer, nor is text decoded before the start.
+        cqKeyer.autoCQMaximumCalls = 10;
+        cqKeyer.autoCQMaximumSeconds = 600.0;
+        [cqKeyer startAutoCQWithTemplate:@"E" targetCall:@""];
+        AssertTrue(cqKeyer.isAutoCQActive && cqKeyer.autoCQCallsSent == 1, @"Auto-CQ is on with its first call");
+        [cqLog removeAllObjects];
+        [cqKeyer transmitText:@"EP2AES DE {MYCALL} K" targetCall:@"" rst:@"" name:@"" qth:@""];
+        AssertTrue(!cqKeyer.isAutoCQActive && cqKeyer.isTransmitting && cqLogSays(@"operator is sending"), @"an operator send ends Auto-CQ");
+        [cqKeyer abortTransmission];
+        [cqKeyer startAutoCQWithTemplate:@"E" targetCall:@""];
+        [cqKeyer noteDecodedText:@"CQ CQ DE EA3JIC EA3JIC K"];
+        AssertTrue(cqKeyer.isAutoCQActive, @"our own CQ is not an answer");
+        [cqLog removeAllObjects];
+        [cqKeyer noteDecodedText:@"CQ CQ DE EA3JIC EA3JIC K EA3JIC DE EP2AES EP2AES K"];
+        AssertTrue(!cqKeyer.isAutoCQActive && cqLogSays(@"EP2AES is calling you"), @"a station calling us ends Auto-CQ");
+        [cqKeyer abortTransmission];
+        [cqKeyer noteDecodedText:@"EA3JIC DE EP2AES"];
+        [cqKeyer startAutoCQWithTemplate:@"E" targetCall:@""];
+        [cqKeyer noteDecodedText:@"EA3JIC DE EP2AES"];
+        AssertTrue(cqKeyer.isAutoCQActive, @"an old answer does not stop a new Auto-CQ");
+        [cqKeyer noteDecodedText:@""]; // the decoder's text cleared
+        [cqKeyer noteDecodedText:@"EA3JIC DE EP2AES K"];
+        AssertTrue(!cqKeyer.isAutoCQActive, @"after a cleared text an answer is read from its start");
+        [cqKeyer abortTransmission];
+        // Only the end of a long text is read (the decoder calls this for every symbol): an answer
+        // at the end is still found, and a longer call cut by that end is not taken for ours.
+        [cqKeyer noteDecodedText:@""];
+        [cqKeyer startAutoCQWithTemplate:@"E" targetCall:@""];
+        NSMutableString *cqLongText = [NSMutableString string];
+        while (cqLongText.length < 2000) [cqLongText appendString:@"CQ TEST DE 0A1ZZ "];
+        NSString *cqCutWindow = [@"EA3JIC DE EP2AES" stringByPaddingToLength:64 withString:@" " startingAtIndex:0];
+        [cqKeyer noteDecodedText:[cqLongText stringByAppendingFormat:@"X%@", cqCutWindow]];
+        AssertTrue(cqKeyer.isAutoCQActive, @"XEA3JIC cut by the end of a long text is not our call");
+        [cqLog removeAllObjects];
+        [cqKeyer noteDecodedText:[cqLongText stringByAppendingString:@"EA3JIC DE EP2AES K"]];
+        AssertTrue(!cqKeyer.isAutoCQActive && cqLogSays(@"EP2AES is calling you"), @"an answer at the end of a long text ends Auto-CQ");
+        [cqKeyer abortTransmission];
+        TX500CWStationController *answerStation = [TX500CWStationController new];
+        answerStation.keyer.myCallsign = @"EA3JIC";
+        answerStation.assistant.myCallsign = @"EA3JIC";
+        answerStation.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) { (void)catCommand; return YES; };
+        [answerStation toggleAutoCQ:nil];
+        AssertTrue(answerStation.keyer.isAutoCQActive && answerStation.decoder.onDecodedTextUpdated != nil, @"the pane's Auto-CQ is on");
+        answerStation.decoder.onDecodedTextUpdated(@"EA3JIC DE EP2AES K", @"");
+        [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.5]];
+        NSButton *answerAutoCQ = [answerStation valueForKey:@"autoCQButton"];
+        AssertTrue(!answerStation.keyer.isAutoCQActive && [answerAutoCQ.title isEqualToString:@"Auto-CQ Repeater"], @"the pane feeds the keyer");
+        [answerStation.keyer abortTransmission];
+        NSLog(@"PASS: Auto-CQ stops when the operator sends or a station calls us.");
         NSLog(@"ALL TX-500 CW STATION AND AUDIO DSP TESTS PASSED! ✓");
         [[NSFileManager defaultManager] removeItemAtPath:[NSString stringWithUTF8String:testRoot] error:nil];
     }

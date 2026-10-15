@@ -35,6 +35,9 @@
 @property (nonatomic, copy, nullable) NSString *currentAutoCQCall;
 @property (nonatomic, assign, readwrite) NSInteger autoCQCallsSent;
 @property (nonatomic, assign) NSTimeInterval autoCQStartedAt;
+@property (nonatomic, assign) BOOL autoCQSending;            // YES while Auto-CQ itself sends its CQ
+@property (nonatomic, assign) NSUInteger autoCQTextMark;     // decoded text before the start is not an answer
+@property (nonatomic, assign) NSUInteger decodedTextLength;  // length of the last decoded text seen
 
 // Audio Sidetone (local Mac speakers/headphones)
 @property (nonatomic, strong, nullable) AVAudioEngine *sidetoneEngine;
@@ -620,6 +623,12 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
 }
 
 - (void)transmitText:(NSString *)text targetCall:(NSString *)call rst:(NSString *)rst name:(NSString *)name qth:(NSString *)qth {
+    // Anything the operator sends (Send, a macro, an Answer, the next step) starts or continues a
+    // QSO: Auto-CQ must not call again on top of it.
+    if (self.isAutoCQActive && !self.autoCQSending) {
+        [self stopAutoCQ];
+        if (self.logHandler) self.logHandler(@"Auto-CQ stopped: the operator is sending.");
+    }
     if ([self blocksMissingCallsignForTemplate:text]) return;
     NSString *expanded = [self expandTemplate:text targetCall:call rst:rst name:name qth:qth];
     if (expanded.length == 0) return;
@@ -866,9 +875,12 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
     self.autoCQCountdown = self.autoCQIntervalSeconds;
     self.autoCQCallsSent = 0;
     self.autoCQStartedAt = NSProcessInfo.processInfo.systemUptime;
+    self.autoCQTextMark = self.decodedTextLength;
 
     // Send first CQ immediately
+    self.autoCQSending = YES;
     [self transmitText:self.currentAutoCQTemplate targetCall:self.currentAutoCQCall rst:@"" name:@"" qth:@""];
+    self.autoCQSending = NO;
     if ([self stopAutoCQIfRefused]) return;
     [self noteAutoCQCallSent];
     if (!self.isAutoCQActive) return; // a limit of one call
@@ -910,8 +922,43 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
         // Time to repeat CQ
         if ([self blocksMissingCallsignForTemplate:self.currentAutoCQTemplate]) { [self stopAutoCQ]; return; }
         self.autoCQCountdown = self.autoCQIntervalSeconds;
+        self.autoCQSending = YES;
         [self transmitText:self.currentAutoCQTemplate targetCall:self.currentAutoCQCall rst:@"" name:@"" qth:@""];
+        self.autoCQSending = NO;
         if (![self stopAutoCQIfRefused]) [self noteAutoCQCallSent];
+    }
+}
+
+// The decoder's whole text, as the station shows it. While Auto-CQ is on, "<MYCALL> DE" in the
+// text decoded since the start (with 12 characters before it, for an answer cut by the start) is
+// a station calling us, as the QSO assistant reads it: Auto-CQ stops and says who calls.
+- (void)noteDecodedText:(NSString *)text {
+    NSString *t = text ?: @"";
+    if (t.length < self.autoCQTextMark) self.autoCQTextMark = 0; // the decoder's text was cleared
+    self.decodedTextLength = t.length;
+    NSString *me = [self.myCallsign stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].uppercaseString;
+    if (!self.isAutoCQActive || me.length == 0) return;
+    NSUInteger from = self.autoCQTextMark > 12 ? self.autoCQTextMark - 12 : 0;
+    // The decoder calls this for every symbol and its text only grows: read only the last 64
+    // characters, which hold any "<MYCALL> DE <CALL>" just decoded. A word cut by that window is
+    // dropped, so a longer call that ends in ours is not taken for it.
+    BOOL cut = NO;
+    if (t.length > from + 64) {
+        from = t.length - 64;
+        unichar before = [t characterAtIndex:from - 1];
+        cut = ![NSCharacterSet.whitespaceAndNewlineCharacterSet characterIsMember:before];
+    }
+    NSMutableArray<NSString *> *words = [NSMutableArray array];
+    for (NSString *w in [[t substringFromIndex:from].uppercaseString componentsSeparatedByCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet])
+        if (w.length > 0) [words addObject:w];
+    if (cut && words.count > 0 && ![NSCharacterSet.whitespaceAndNewlineCharacterSet characterIsMember:[t characterAtIndex:from]]) [words removeObjectAtIndex:0];
+    for (NSUInteger i = 0; i + 1 < words.count; i++) {
+        if ([words[i] isEqualToString:me] && [words[i + 1] isEqualToString:@"DE"]) {
+            NSString *caller = i + 2 < words.count ? words[i + 2] : @"a station";
+            [self stopAutoCQ];
+            if (self.logHandler) self.logHandler([NSString stringWithFormat:@"Auto-CQ stopped: %@ is calling you.", caller]);
+            return;
+        }
     }
 }
 

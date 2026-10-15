@@ -210,6 +210,8 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
         [strongSelf.assistant processDecodedTextStream:rawText
                                             currentWPM:strongSelf.decoder.estimatedWPM
                                                  snrDb:strongSelf.decoder.signalToNoiseRatioDb];
+        // A station calling us ends Auto-CQ (the countdown timer then puts the button back).
+        [strongSelf.keyer noteDecodedText:rawText];
     };
 
     self.decoder.onMetricsUpdated = ^(double wpm, double snrDb, float level, BOOL sig) {

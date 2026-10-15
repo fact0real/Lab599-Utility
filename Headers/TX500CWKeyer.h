@@ -86,6 +86,8 @@ NS_ASSUME_NONNULL_BEGIN
 // Auto-CQ
 - (void)startAutoCQWithTemplate:(NSString *)tmpl targetCall:(NSString *)call;
 - (void)stopAutoCQ;
+// The station feeds the decoder's text; a station calling us ("<MYCALL> DE ...") ends Auto-CQ.
+- (void)noteDecodedText:(NSString *)text;
 
 // Template Expansion
 - (NSString *)expandTemplate:(NSString *)tmpl targetCall:(NSString *)call rst:(NSString *)rst name:(NSString *)name qth:(NSString *)qth;

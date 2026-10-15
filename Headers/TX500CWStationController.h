@@ -40,8 +40,9 @@ NS_ASSUME_NONNULL_BEGIN
 
 // Frequency & Band Management
 @property (nonatomic, assign) uint64_t currentDialFrequencyHz;
-- (void)tuneToFrequencyHz:(uint64_t)freqHz;
-- (void)stepFrequencyHz:(int64_t)stepHz;
+/// YES when the radio accepted the new frequency; nothing is shown as tuned otherwise.
+- (BOOL)tuneToFrequencyHz:(uint64_t)freqHz;
+- (BOOL)stepFrequencyHz:(int64_t)stepHz;
 - (void)selectAmateurBand:(NSString *)band;
 - (void)answerWidebandChannel:(TX500CWChannelState *)channel;
 

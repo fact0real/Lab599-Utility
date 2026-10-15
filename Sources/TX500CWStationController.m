@@ -283,10 +283,9 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
 
         // Retune radio VFO dial so clicked signal centers on the operator's nominal CW pitch
         if (llabs(deltaHz) >= 5) {
-            // No frequency read from the radio: the step refuses and says why; nothing is retuned.
-            if (strongSelf.currentDialFrequencyHz == 0) { [strongSelf stepFrequencyHz:deltaHz]; return; }
-            strongSelf.userTuningLockoutUntil = [NSDate timeIntervalSinceReferenceDate] + 1.5;
-            [strongSelf stepFrequencyHz:deltaHz];
+            // The step says why when it refuses (no frequency read from the radio, or FA refused) and
+            // sets the tuning lockout only when the radio accepted FA.
+            if (![strongSelf stepFrequencyHz:deltaHz]) return;
             if (strongSelf.logHandler) {
                 strongSelf.logHandler([NSString stringWithFormat:@"[CW Waterfall] Retuned radio VFO by %+lld Hz (Clicked: %.0f Hz -> Pitch: %.0f Hz)",
                                        (long long)deltaHz, clickedAudioFreqHz, nomPitch]);
@@ -639,32 +638,37 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
                                        pitch, (double)rf / 1e6, (unsigned long long)(rf % 1000)];
 }
 
-- (void)tuneToFrequencyHz:(uint64_t)freqHz {
-    if (freqHz < 1000000 || freqHz > 60000000) return;
+// The pane shows the new frequency only once the radio has accepted FA: a refused FA (the radio
+// still in TX, or another owner keying) leaves the dial, the band and the assistant as they were.
+- (BOOL)tuneToFrequencyHz:(uint64_t)freqHz {
+    if (freqHz < 1000000 || freqHz > 60000000) return NO;
+    NSString *cmd = [NSString stringWithFormat:@"FA%011llu;", (unsigned long long)freqHz];
+    BOOL accepted = self.serialCommandSender && self.serialCommandSender(cmd);
+    if (!accepted) {
+        if (self.logHandler)
+            self.logHandler([NSString stringWithFormat:@"[CW Station] VFO not retuned to %.4f MHz: the radio refused the frequency change.", (double)freqHz / 1e6]);
+        return NO;
+    }
     self.userTuningLockoutUntil = [NSDate timeIntervalSinceReferenceDate] + 1.5;
     [self applyDialFrequencyHz:freqHz];
-    if (self.serialCommandSender) {
-        NSString *cmd = [NSString stringWithFormat:@"FA%011llu;", (unsigned long long)freqHz];
-        self.serialCommandSender(cmd);
-        if (self.logHandler) {
-            self.logHandler([NSString stringWithFormat:@"[CW Station] Tuned VFO to %.4f MHz (%@)", (double)freqHz / 1e6, cmd]);
-        }
+    if (self.logHandler) {
+        self.logHandler([NSString stringWithFormat:@"[CW Station] Tuned VFO to %.4f MHz (%@)", (double)freqHz / 1e6, cmd]);
     }
+    return YES;
 }
 
-- (void)stepFrequencyHz:(int64_t)stepHz {
+- (BOOL)stepFrequencyHz:(int64_t)stepHz {
     // A step needs the dial frequency: never step from a guessed one.
     if (self.currentDialFrequencyHz == 0) {
         if (self.logHandler)
             self.logHandler(@"[CW Station] VFO not stepped: the radio frequency is unknown. Pick a band, or reopen the CW tab to read it from the radio.");
-        return;
+        return NO;
     }
     uint64_t current = self.currentDialFrequencyHz;
     int64_t target = (int64_t)current + stepHz;
     if (target < 1000000) target = 1000000;
     if (target > 60000000) target = 60000000;
-    self.userTuningLockoutUntil = [NSDate timeIntervalSinceReferenceDate] + 1.5;
-    [self tuneToFrequencyHz:(uint64_t)target];
+    return [self tuneToFrequencyHz:(uint64_t)target];
 }
 
 - (void)selectAmateurBand:(NSString *)band {
@@ -2491,7 +2495,12 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
             return;
         }
         int64_t delta = (int64_t)round(freq - 650.0);
-        [self stepFrequencyHz:delta];
+        // A refused retune leaves the radio where it was: an answer now would go out off the station.
+        if (![self stepFrequencyHz:delta]) {
+            if (self.logHandler)
+                self.logHandler([NSString stringWithFormat:@"[CW Station] Could not retune to answer %@ at %.0f Hz: the radio refused the frequency change.", channel.extractedCallsign.length ? channel.extractedCallsign : @"the carrier", freq]);
+            return;
+        }
         [self.decoder setPitch:650.0];
         self.keyer.sidetonePitchHz = 650.0;
         self.pitchSlider.doubleValue = 650.0;

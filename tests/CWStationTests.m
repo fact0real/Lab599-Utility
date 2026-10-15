@@ -1009,6 +1009,78 @@ int main(int argc, const char * argv[]) {
         [escStation stopStation];
         AssertTrue([escStation.assistant.activeTargetCallsign isEqualToString:@"EP2AES"], @"Esc outside practice keeps the QSO in progress");
         NSLog(@"PASS: Esc and leaving CW Station untick Practice / Sim and drop the practice QSO.");
+        // 13c. The wideband Answer above 1500 Hz retunes the radio first. When the radio refuses
+        // the FA (still in TX, or another owner keying), nothing on the pane changes and no answer
+        // goes out, since it would be (channel - 650) Hz off the station. With FA accepted, as before.
+        TX500CWStationController *retuneStation = [TX500CWStationController new];
+        retuneStation.keyer.myCallsign = @"EA3JIC";
+        retuneStation.assistant.myCallsign = @"EA3JIC";
+        __block BOOL retuneRefusesFA = YES;
+        __block NSMutableArray<NSString *> *retuneCmds = [NSMutableArray array];
+        __block NSMutableArray<NSString *> *retuneLog = [NSMutableArray array];
+        retuneStation.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) {
+            [retuneCmds addObject:catCommand];
+            return !(retuneRefusesFA && [catCommand hasPrefix:@"FA"]);
+        };
+        retuneStation.logHandler = ^(NSString *line) { [retuneLog addObject:line]; };
+        NSTextField *retuneVFO = [retuneStation valueForKey:@"vfoLabel"];
+        [retuneStation updateFrequencyHz:7030000 mode:@"CW"];
+        [retuneLog removeAllObjects];
+        BOOL stepped = [retuneStation stepFrequencyHz:100];
+        AssertTrue(!stepped && retuneStation.currentDialFrequencyHz == 7030000 && retuneStation.assistant.currentFrequencyHz == 7030000 &&
+                   [retuneVFO.stringValue isEqualToString:@"7.030.000 MHz"] && [retuneLog.lastObject containsString:@"VFO not retuned"],
+                   @"a refused FA changes nothing on the pane");
+        // A click on the waterfall 300 Hz above the pitch: with FA refused it says "VFO not retuned"
+        // only, sets no tuning lockout and leaves the dial; with FA accepted it retunes and says so.
+        TX500CWSpectrumView *retuneWaterfall = [retuneStation valueForKey:@"spectrumView"];
+        AssertTrue(retuneWaterfall.onWaterfallFrequencyClicked != nil, @"the waterfall click is wired");
+        double retuneClickPitch = retuneStation.decoder.nominalPitchHz;
+        if (retuneClickPitch < 300.0 || retuneClickPitch > 1500.0) retuneClickPitch = 650.0;
+        [retuneStation setValue:@0 forKey:@"userTuningLockoutUntil"];
+        [retuneLog removeAllObjects];
+        retuneWaterfall.onWaterfallFrequencyClicked(retuneClickPitch + 300.0);
+        BOOL clickClaims = NO; for (NSString *line in retuneLog) if ([line containsString:@"Retuned radio VFO"]) clickClaims = YES;
+        AssertTrue(!clickClaims && [retuneLog.lastObject containsString:@"VFO not retuned"] && retuneStation.currentDialFrequencyHz == 7030000 &&
+                   [[retuneStation valueForKey:@"userTuningLockoutUntil"] doubleValue] == 0,
+                   @"a refused waterfall retune is not reported as done and holds nothing off");
+        retuneRefusesFA = NO;
+        [retuneLog removeAllObjects];
+        retuneWaterfall.onWaterfallFrequencyClicked(retuneClickPitch + 300.0);
+        AssertTrue(retuneStation.currentDialFrequencyHz == 7030300 && [retuneLog.lastObject containsString:@"Retuned radio VFO by +300 Hz"] &&
+                   [[retuneStation valueForKey:@"userTuningLockoutUntil"] doubleValue] > [NSDate timeIntervalSinceReferenceDate],
+                   @"an accepted waterfall retune moves the dial and says so");
+        [retuneStation setValue:@0 forKey:@"userTuningLockoutUntil"];
+        [retuneStation updateFrequencyHz:7030000 mode:@"CW"];
+        retuneRefusesFA = YES;
+        TX500CWChannelState *retuneChannel = [TX500CWChannelState new];
+        retuneChannel.frequencyHz = 2100.0;
+        retuneChannel.estimatedWPM = 22.0;
+        retuneChannel.snrDb = 12.0;
+        retuneChannel.extractedCallsign = @"EP2AES";
+        double retunePitch = retuneStation.decoder.nominalPitchHz;
+        [retuneCmds removeAllObjects];
+        [retuneLog removeAllObjects];
+        [retuneStation answerWidebandChannel:retuneChannel];
+        BOOL retuneKeyed = NO, retuneSaysCould = NO, retuneClaims = NO;
+        for (NSString *cmd in retuneCmds) if ([cmd containsString:@"TX;"]) retuneKeyed = YES;
+        for (NSString *line in retuneLog) {
+            if ([line containsString:@"Could not retune"]) retuneSaysCould = YES;
+            if ([line containsString:@"answered"]) retuneClaims = YES;
+        }
+        AssertTrue(!retuneKeyed && !retuneStation.keyer.isTransmitting && retuneStation.decoder.nominalPitchHz == retunePitch &&
+                   retuneStation.currentDialFrequencyHz == 7030000 && retuneSaysCould && !retuneClaims,
+                   @"no answer off the station's frequency");
+        retuneRefusesFA = NO;
+        [retuneCmds removeAllObjects];
+        [retuneLog removeAllObjects];
+        [retuneStation answerWidebandChannel:retuneChannel];
+        NSUInteger retuneFA = [retuneCmds indexOfObject:@"FA00007031450;"], retuneTX = NSNotFound;
+        for (NSUInteger i = 0; i < retuneCmds.count; i++) if ([retuneCmds[i] containsString:@"TX;"]) { retuneTX = i; break; }
+        AssertTrue(retuneFA != NSNotFound && retuneTX != NSNotFound && retuneFA < retuneTX && retuneStation.currentDialFrequencyHz == 7031450 &&
+                   [retuneLog.lastObject containsString:@"Tuned & answered EP2AES"],
+                   @"with the retune accepted the answer goes out");
+        [retuneStation.keyer abortTransmission];
+        NSLog(@"PASS: The wideband Answer goes out only after the radio accepted the retune.");
 
         decoder.preserveDeviceSelection=YES; decoder.selectedAudioDeviceUID=@"station-test-missing-input";
         [decoder refreshAudioDevices];

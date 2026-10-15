@@ -1131,6 +1131,34 @@ int main(int argc, const char * argv[]) {
         rxRefused = NO;
         [rxStation.keyer abortTransmission];
         NSLog(@"PASS: An unconfirmed RX is said as such and ABORT stays enabled.");
+        // 13e. An audio input failure opens a sheet that blocks ABORT and Esc until OK is clicked:
+        // it stops Auto-CQ and the Tune first. No window exists here, so no sheet is shown.
+        TX500CWStationController *audioErrStation = [TX500CWStationController new];
+        audioErrStation.keyer.myCallsign = @"EA3JIC";
+        audioErrStation.assistant.myCallsign = @"EA3JIC";
+        __block NSMutableArray<NSString *> *audioErrCmds = [NSMutableArray array];
+        __block NSMutableArray<NSString *> *audioErrLog = [NSMutableArray array];
+        audioErrStation.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) { [audioErrCmds addObject:catCommand]; return YES; };
+        audioErrStation.logHandler = ^(NSString *line) { [audioErrLog addObject:line]; };
+        NSButton *audioErrAutoCQ = [audioErrStation valueForKey:@"autoCQButton"];
+        [audioErrStation toggleAutoCQ:nil];
+        AssertTrue(audioErrStation.keyer.isAutoCQActive && audioErrStation.keyer.isTransmitting && [audioErrStation valueForKey:@"autoCQMonitorTimer"] != nil,
+                   @"Auto-CQ is on the air before the audio error");
+        [audioErrStation.keyer abortTransmission]; // idle between two calls, Auto-CQ still on
+        AssertTrue(audioErrStation.decoder.onAudioError != nil && audioErrStation.keyer.isAutoCQActive, @"Auto-CQ waits for its next call");
+        [audioErrLog removeAllObjects];
+        audioErrStation.decoder.onAudioError(@"input lost");
+        BOOL audioErrSays = NO;
+        for (NSString *line in audioErrLog) if ([line containsString:@"Auto-CQ stopped"]) audioErrSays = YES;
+        AssertTrue(!audioErrStation.keyer.isAutoCQActive && [audioErrStation valueForKey:@"autoCQMonitorTimer"] == nil &&
+                   [audioErrAutoCQ.title isEqualToString:@"Auto-CQ Repeater"] && audioErrSays,
+                   @"an audio error ends Auto-CQ");
+        [audioErrStation toggleManualTransmit];
+        AssertTrue(audioErrStation.isManualTuneActive, @"Tune is on before the audio error");
+        [audioErrCmds removeAllObjects];
+        audioErrStation.decoder.onAudioError(@"x");
+        AssertTrue(!audioErrStation.isManualTuneActive && [audioErrCmds containsObject:@"RX;"], @"an audio error ends the Tune");
+        NSLog(@"PASS: An audio input failure stops the Tune and Auto-CQ before its alert.");
 
         decoder.preserveDeviceSelection=YES; decoder.selectedAudioDeviceUID=@"station-test-missing-input";
         [decoder refreshAudioDevices];

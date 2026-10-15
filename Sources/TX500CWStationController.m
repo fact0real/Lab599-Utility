@@ -267,6 +267,15 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
         typeof(weakSelf) strongSelf = weakSelf;
         if (!strongSelf) return;
         if (strongSelf.logHandler) strongSelf.logHandler(message);
+        // The sheet below blocks ABORT and Esc until OK is clicked: stop the Tune and Auto-CQ first.
+        // A message already on the air ends with its own release.
+        [strongSelf stopManualTune];
+        if (strongSelf.keyer.isAutoCQActive) {
+            [strongSelf.keyer stopAutoCQ];
+            [strongSelf stopAutoCQTimer];
+            strongSelf.autoCQButton.title = @"Auto-CQ Repeater";
+            if (strongSelf.logHandler) strongSelf.logHandler(@"Auto-CQ stopped: the audio input failed.");
+        }
         NSAlert *alert = [NSAlert new];
         alert.messageText = @"Audio input unavailable";
         alert.informativeText = message;

@@ -327,6 +327,41 @@ int main(int argc, const char * argv[]) {
         free(renderFrames);
         NSLog(@"PASS: An abort or the end of a message empties the radio audio buffer.");
 
+        // 6a, continued. The Mac does not go to idle sleep while something is keyed: a message, the
+        // tuning carrier and Auto-CQ (also between its calls) hold a sleep activity; the last of
+        // them to stop ends it.
+        TX500CWKeyer *awakeKeyer = [[TX500CWKeyer alloc] init];
+        awakeKeyer.wpm = 20;
+        awakeKeyer.myCallsign = @"EA3JIC";
+        __block NSMutableArray<NSString *> *awakeCmds = [NSMutableArray array];
+        awakeKeyer.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) { [awakeCmds addObject:catCommand]; return YES; };
+        id (^awakeActivity)(void) = ^id(void) {
+            @try { return [awakeKeyer valueForKey:@"transmitActivity"]; } @catch (NSException *e) { (void)e; return nil; }
+        };
+        AssertTrue(awakeActivity() == nil, @"an idle keyer lets the Mac sleep");
+        [awakeKeyer transmitText:@"E" targetCall:@"" rst:@"" name:@"" qth:@""];
+        AssertTrue(awakeKeyer.isTransmitting && awakeActivity() != nil, @"a message holds the Mac awake");
+        [awakeKeyer abortTransmission];
+        AssertTrue(awakeActivity() == nil, @"an abort lets the Mac sleep again");
+        [awakeKeyer transmitText:@"E" targetCall:@"" rst:@"" name:@"" qth:@""];
+        AssertTrue(awakeActivity() != nil, @"a second message holds the Mac awake");
+        [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.24 + 0.5]];
+        AssertTrue(!awakeKeyer.isTransmitting && [awakeCmds containsObject:@"RX;"] && awakeActivity() == nil, @"the end of a message lets the Mac sleep again");
+        [awakeKeyer startContinuousCarrierWithPitchHz:650.0];
+        AssertTrue([[awakeKeyer valueForKey:@"isContinuousCarrier"] boolValue] && awakeActivity() != nil, @"the carrier holds the Mac awake");
+        [awakeKeyer stopContinuousCarrier];
+        AssertTrue(awakeActivity() == nil, @"stopping the carrier lets the Mac sleep again");
+        [awakeKeyer startContinuousCarrierWithPitchHz:650.0];
+        [awakeKeyer abortTransmission];
+        AssertTrue(![[awakeKeyer valueForKey:@"isContinuousCarrier"] boolValue] && awakeActivity() == nil, @"an abort of the carrier lets the Mac sleep again");
+        [awakeKeyer startAutoCQWithTemplate:@"CQ DE {MYCALL} K" targetCall:@""];
+        AssertTrue(awakeKeyer.isAutoCQActive && awakeKeyer.isTransmitting, @"Auto-CQ sends its first CQ");
+        [awakeKeyer abortTransmission];
+        AssertTrue(awakeKeyer.isAutoCQActive && !awakeKeyer.isTransmitting && awakeActivity() != nil, @"Auto-CQ holds the Mac awake between its calls");
+        [awakeKeyer stopAutoCQ];
+        AssertTrue(awakeActivity() == nil, @"stopping Auto-CQ lets the Mac sleep again");
+        NSLog(@"PASS: A message, the carrier and Auto-CQ keep the Mac from idle sleep; each stop ends it.");
+
         // 6b. The release timers are armed before any sound. A sidetone that raises (the engine
         // stopped by an output change) neither escapes the keyer nor skips the RX; release; a Morse
         // audio stage that raises still gets RX; at the estimated end; and the Tune cutoff is armed

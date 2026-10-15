@@ -63,6 +63,7 @@
     float _carrierAmplitude;
     dispatch_queue_t _timeoutQueue;
     dispatch_source_t _transmitTimeout;
+    id<NSObject> _transmitActivity;
 }
 
 // Kept for callers outside CW transmit: no transmit path uses it any more. The first USB output
@@ -131,6 +132,10 @@
         self.sidetoneEngine = nil;
     }
     [self teardownRadioAudio];
+    if (_transmitActivity) {
+        [NSProcessInfo.processInfo endActivity:_transmitActivity];
+        _transmitActivity = nil;
+    }
     pthread_mutex_lock(&_radioAudioLock);
     if (_radioTxBuffer) {
         free(_radioTxBuffer);
@@ -142,6 +147,36 @@
 
 - (NSArray<NSString *> *)sentHistory {
     return [self.internalSentHistory copy];
+}
+
+// No idle sleep while the radio is keyed: a message, Auto-CQ (also between its calls) or the
+// tuning carrier holds an activity, and the last of them to stop ends it.
+// It takes _radioAudioLock, which is not recursive: never call it, or the two setters below, with
+// that lock held.
+- (void)updateSleepActivity {
+    pthread_mutex_lock(&_radioAudioLock);
+    BOOL carrier = _isContinuousCarrier;
+    pthread_mutex_unlock(&_radioAudioLock);
+    BOOL keyed = self.isTransmitting || self.isAutoCQActive || carrier;
+    if (keyed && !_transmitActivity) {
+        _transmitActivity = [NSProcessInfo.processInfo beginActivityWithOptions:NSActivityUserInitiated | NSActivityIdleSystemSleepDisabled
+                                                                         reason:@"CW transmission"];
+    } else if (!keyed && _transmitActivity) {
+        [NSProcessInfo.processInfo endActivity:_transmitActivity];
+        _transmitActivity = nil;
+    }
+}
+
+// Never call with _radioAudioLock held (updateSleepActivity takes it).
+- (void)setIsTransmitting:(BOOL)isTransmitting {
+    _isTransmitting = isTransmitting;
+    [self updateSleepActivity];
+}
+
+// Never call with _radioAudioLock held (updateSleepActivity takes it).
+- (void)setIsAutoCQActive:(BOOL)isAutoCQActive {
+    _isAutoCQActive = isAutoCQActive;
+    [self updateSleepActivity];
 }
 
 #pragma mark - CoreAudio Helpers
@@ -703,6 +738,7 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
             strongSelf->_isContinuousCarrier = NO;
             [strongSelf releaseRadioBufferLocked];
             pthread_mutex_unlock(&strongSelf->_radioAudioLock);
+            [strongSelf updateSleepActivity];
             if (strongSelf.sidetonePlayer.isPlaying) {
                 [strongSelf.sidetonePlayer stop];
             }
@@ -745,6 +781,7 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
     _isContinuousCarrier = NO;
     [self releaseRadioBufferLocked];
     pthread_mutex_unlock(&_radioAudioLock);
+    [self updateSleepActivity];
 
     if (self.sidetonePlayer.isPlaying) {
         [self.sidetonePlayer stop];
@@ -775,6 +812,7 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
     // Hard time-out, armed before the sound starts (the queue cannot render while the lock is held).
     [self armTransmitTimeoutSeconds:self.maximumCarrierSeconds];
     pthread_mutex_unlock(&_radioAudioLock);
+    [self updateSleepActivity];
 
     if (self.sidetoneEngineReady && self.sidetonePlayer && self.sidetoneEnabled) {
         @try {
@@ -808,6 +846,7 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
     pthread_mutex_lock(&_radioAudioLock);
     _isContinuousCarrier = NO;
     pthread_mutex_unlock(&_radioAudioLock);
+    [self updateSleepActivity];
     if (!self.isTransmitting) [self cancelTransmitTimeout]; // a message in flight keeps its own time-out
 
     if (self.sidetonePlayer.isPlaying) {

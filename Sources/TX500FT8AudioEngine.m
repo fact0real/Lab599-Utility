@@ -1135,6 +1135,10 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
     if (_isTransmitting) {
         [self endTransmission];
     }
+    // Abort QSO, Esc and the SWR abort come here: a tune carrier ends too.
+    if (_isTuning) {
+        [self stopTuneCarrier];
+    }
     if (self.logHandler) {
         self.logHandler([NSString stringWithFormat:@"[%@ Transmit Disarmed]", self.modeName]);
     }

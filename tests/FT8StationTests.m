@@ -351,6 +351,21 @@ int main(int argc, const char * argv[]) {
                    @"STOP still ends a carrier without a limit");
         NSLog(@"PASS: The FT8 tune carrier stops on its own at its limit.");
 
+        // Abort QSO and Esc (both disarmTransmit, as the SWR abort) end a tune
+        // carrier too, and leave nothing armed.
+        tuneEngine.maximumTuneSeconds = 15.0;
+        [tuneEngine startTuneCarrier];
+        AssertTrue(tuneEngine.isTuning, @"a tune carrier is on before Abort QSO");
+        tuneEngine.isTransmitArmed = YES;
+        tuneEngine.repeatArmedTransmission = YES;
+        [tuneEngine disarmTransmit];
+        AssertTrue(!tuneEngine.isTuning, @"Abort QSO and Esc end the carrier at once");
+        AssertTrue(!tuneEngine.isTransmitArmed && !tuneEngine.repeatArmedTransmission,
+                   @"Abort QSO while tuning leaves nothing armed");
+        AssertTrue(WaitUntil(^BOOL{ return tuneReleases == 5 && !tuneEngine.isReceiveRecoveryPending; }, 1.0),
+                   @"Abort QSO and Esc end the carrier and RX is requested");
+        NSLog(@"PASS: Abort QSO and Esc stop the FT8 tune carrier.");
+
         // 4. Test Maidenhead Grid Parser & Distance Math
         double lat1 = 0, lon1 = 0, lat2 = 0, lon2 = 0;
         AssertTrue([TX500FT8Message parseMaidenhead:@"KM35" outLat:&lat1 outLon:&lon1], @"Parse KM35");

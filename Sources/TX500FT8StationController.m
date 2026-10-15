@@ -749,6 +749,10 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
         strongSelf.waterfallView.isWaitingForReceive = strongSelf.audioEngine.isReceiveRecoveryPending;
         strongSelf.waterfallView.isReceiveRecoveryStalled = strongSelf.audioEngine.isReceiveRecoveryStalled;
         [strongSelf.waterfallView setNeedsDisplay:YES];
+        // The carrier can end without STOP (its time limit, Esc, the SWR abort).
+        if (!transmitting && !strongSelf.audioEngine.isTuning && [strongSelf.tuneButton.title isEqualToString:@"STOP"]) {
+            strongSelf.tuneButton.title = @"Tune";
+        }
 
         if (transmitting) {
             [strongSelf.autoEngine noteTransmittedText:txText];
@@ -1038,7 +1042,8 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
         // confirmed one second later and still trips promptly; the TX-500's
         // own hardware protection remains active throughout.
         double maxSWR = strongSelf.audioEngine.maxSWRThreshold;
-        BOOL highDuringTX = maxSWR > 0.0 && swr > maxSWR && strongSelf.audioEngine.isTransmitting;
+        BOOL highDuringTX = maxSWR > 0.0 && swr > maxSWR &&
+            (strongSelf.audioEngine.isTransmitting || strongSelf.audioEngine.isTuning);
         if (!highDuringTX) {
             strongSelf.consecutiveHighSWRReadings = 0;
         } else {

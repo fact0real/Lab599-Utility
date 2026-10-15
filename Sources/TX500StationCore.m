@@ -93,11 +93,18 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
         BOOL isAlreadyTX = NO;
         if(s) {
             isAlreadyTX = [s[@"tx"] boolValue];
-            if(![owner isEqual:@"CW"] && ![owner isEqual:@"Digital"] && [s[@"vox"] boolValue]) {
+            // CW keys the radio with TX; and modulates it over USB audio: VOX would key it outside
+            // the app's control, so it must be off (as before 2.283). Digital clears VOX itself (VX0;).
+            if(![owner isEqual:@"Digital"] && [s[@"vox"] boolValue]) {
                 [self reject:@"TX blocked: turn VOX off before transmitting." error:error];
                 [self cacheState]; [_lock unlock]; return NO;
             }
         } else {
+            // The state could not be read, so VOX is unknown: only Digital, which clears VOX itself, may go on.
+            if(![owner isEqual:@"Digital"]) {
+                [self reject:@"TX blocked: the radio state could not be read (VOX unknown)." error:error];
+                [self cacheState]; [_lock unlock]; return NO;
+            }
             NSString *pt = [_transport query:@"PT;" error:nil];
             if([pt isEqual:@"PT1;"]) isAlreadyTX = YES;
         }

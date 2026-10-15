@@ -18,6 +18,21 @@ static void Check(BOOL ok,NSString *why) { checks++; if(!ok) { fprintf(stderr,"F
 - (BOOL)send:(NSString *)c error:(NSError **)error { (void)error; [self.commands addObject:c]; if(self.failKY && [c hasPrefix:@"KY"]) return NO; if([c hasPrefix:@"FA"] && !self.failTune) { NSArray *parts=[c componentsSeparatedByString:@";"]; self.state[@"frequency"]=@([[parts[0] substringFromIndex:2] longLongValue]); if(parts.count>1 && [parts[1] hasPrefix:@"MD"]) self.state[@"mode"]=@([[parts[1] substringFromIndex:2] integerValue]); } if([c hasPrefix:@"MD"] && !self.failTune) self.state[@"mode"]=@([[c substringFromIndex:2] integerValue]); return YES; }
 - (void)close { [self.commands addObject:@"CLOSE"]; }
 @end
+// A radio whose full state read fails while PT; still answers: VOX cannot be known.
+@interface FakeNoStateRadio : FakeStationRadio
+@end
+@implementation FakeNoStateRadio
+- (NSDictionary *)readState:(NSError **)error { (void)error; return nil; }
+@end
+static void TestUnknownVOX(void) {
+    TX500StationCore *c=[TX500StationCore new]; FakeNoStateRadio *r=[FakeNoStateRadio new]; c.transportFactory=^id(NSString *p){(void)p;return r;};
+    [c selectOwner:@"CW" port:@"fake-no-state" error:nil]; NSError *unknownError=nil;
+    Check(![c transmit:YES owner:@"CW" error:&unknownError] && !c.ownsTX && ![r.commands containsObject:@"TX;"],@"CW TX refused when the radio state (VOX) cannot be read, even if PT answers PT0;");
+    Check([unknownError.localizedDescription containsString:@"VOX"],@"The unknown-VOX refusal names VOX");
+    [c selectOwner:@"Digital" port:@"fake-no-state" error:nil];
+    Check([c transmit:YES owner:@"Digital" error:nil] && c.ownsTX && [r.commands containsObject:@"TX;"],@"Digital still keys on PT0; when the state cannot be read");
+    Check([c releaseOwnedTX:nil] && !c.ownsTX,@"Digital released after the PT fallback");
+}
 static void TestCore(void) {
     TX500StationCore *c=[TX500StationCore new]; FakeStationRadio *r=[FakeStationRadio new]; c.transportFactory=^id(NSString *p){(void)p;return r;};
     Check([c selectOwner:@"Digital" port:@"fake" error:nil],@"Select owner without transmitting"); Check(r.commands.count==0,@"Selecting owner performs no CAT writes");
@@ -33,12 +48,18 @@ static void TestCore(void) {
     r.failTune=YES; Check(![c tune:7030000 mode:3 owner:@"Station" error:nil],@"Failed readback is surfaced"); r.failTune=NO;
     r.state[@"txVFO"]=@1; Check(![c tune:7030000 mode:3 owner:@"Station" error:nil],@"Split blocks preset tune"); r.state[@"txVFO"]=@0;
     r.state[@"vox"]=@1; Check(![c transmit:YES owner:@"Station" error:nil],@"VOX blocks app TX"); r.state[@"vox"]=@0;
+    [c selectOwner:@"CW" port:@"fake" error:nil]; r.state[@"vox"]=@1; NSUInteger voxBefore=r.commands.count; NSError *voxError=nil;
+    Check(![c transmit:YES owner:@"CW" error:&voxError] && !c.ownsTX && r.commands.count==voxBefore,@"VOX blocks CW TX and writes no TX;");
+    Check([voxError.localizedDescription containsString:@"VOX"],@"The CW refusal names VOX");
+    r.state[@"vox"]=@0; Check([c transmit:YES owner:@"CW" error:nil] && c.ownsTX,@"CW keys once VOX is off"); Check([c releaseOwnedTX:nil] && !c.ownsTX,@"CW VOX check leaves the release intact");
+    [c selectOwner:@"Digital" port:@"fake" error:nil]; r.state[@"vox"]=@1; Check([c transmit:YES owner:@"Digital" error:nil],@"Digital keeps its VOX exemption (its setup clears VOX itself)"); r.state[@"vox"]=@0; Check([c releaseOwnedTX:nil] && !c.ownsTX,@"Digital VOX control released");
     [c selectOwner:@"CW" port:@"fake" error:nil]; Check([c send:@"KS022;KY CQ;" owner:@"CW" error:nil] && c.ownsTX,@"CW queue has exclusive TX ownership");
     Check(![c send:@"FA00014000000;" owner:@"Station" error:nil],@"Late command from old owner is rejected"); Check([c releaseOwnedTX:nil] && !c.ownsTX,@"CW release clears keying and RX");
     r.failKY=YES;
     Check(![c send:@"KY CQ;" owner:@"CW" error:nil] && c.ownsTX,@"Failed CW queue retains cleanup ownership");
     Check([c send:@"KY ;RX;" owner:@"CW" error:nil] && !c.ownsTX,@"CW abort confirms RX even when clearing the queue fails");
     Check(![c tune:100 mode:2 owner:@"CW" error:nil],@"Invalid RF frequency rejected");
+    TestUnknownVOX();
 }
 static void TestReceiveRecoveryReconnect(void) {
     TX500StationCore *core=[TX500StationCore new];

@@ -483,7 +483,11 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
     [self stopTXMeterPolling];
     [self stopAutoCQTimer];
     [self.decoder stopListening];
+    // Practice ends here (Esc, leaving CW Station, Quit): the practice QSO must not reach the air
+    // or the Logbook afterwards, and the box must not stay ticked. A real QSO is left alone.
+    if (self.decoder.isSimulationActive) [self.assistant resetQSOState];
     [self.decoder stopSimulation];
+    self.simulationCheckbox.state = NSControlStateValueOff;
     if (self.keyer.isTransmitting) {
         [self.keyer abortTransmission];
     }

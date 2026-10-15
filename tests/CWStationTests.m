@@ -567,6 +567,41 @@ int main(int argc, const char * argv[]) {
         [keyer abortTransmission];
         AssertTrue(sentRelease, @"Abort transmission releases TX ownership with RX;");
         NSLog(@"PASS: CAT transmitter release (RX;) verified.");
+        // 13b. Esc, leaving CW Station and Quit call stopStation. With Practice / Sim on it also
+        // unticks the box and drops the practice QSO, so the next step cannot put a practice
+        // exchange on the air and its sign-off cannot be logged or uploaded. Outside practice the
+        // QSO in progress is kept.
+        TX500CWStationController *escStation = [TX500CWStationController new];
+        escStation.keyer.myCallsign = @"EA3JIC";
+        escStation.assistant.myCallsign = @"EA3JIC";
+        __block NSMutableArray<NSString *> *escCmds = [NSMutableArray array];
+        escStation.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) { [escCmds addObject:catCommand]; return YES; };
+        NSButton *escCheckbox = [escStation valueForKey:@"simulationCheckbox"];
+        escCheckbox.state = NSControlStateValueOn;
+        [escStation toggleSimulation:escCheckbox];
+        [escStation.assistant processDecodedTextStream:@"CQ CQ DE EP2AES EP2AES K" currentWPM:22.0 snrDb:14.5];
+        TX500CWHeardStation *escHeard = nil;
+        for (TX500CWHeardStation *heard in escStation.assistant.heardStations) {
+            if ([heard.callsign isEqualToString:@"EP2AES"]) escHeard = heard;
+        }
+        AssertTrue(escHeard != nil, @"Practice: the CQ was heard");
+        [escStation.assistant selectAndAnswerStation:escHeard];
+        AssertTrue(escStation.decoder.isSimulationActive && [escStation.assistant.activeTargetCallsign isEqualToString:@"EP2AES"], @"A practice QSO is loaded before Esc");
+        [escStation stopStation];
+        AssertTrue(!escStation.decoder.isSimulationActive, @"Esc stops the simulation");
+        AssertTrue(escCheckbox.state == NSControlStateValueOff, @"Esc unticks Practice / Sim");
+        AssertTrue(escStation.assistant.qsoState == TX500QSOStateIdle && escStation.assistant.activeTargetCallsign.length == 0, @"Esc drops the practice QSO");
+        [escCmds removeAllObjects];
+        [escStation advanceQSOAction:nil];
+        AssertTrue([escStation.keyer.activeBufferText hasPrefix:@"CQ CQ DE EA3JIC"] && ![escStation.keyer.activeBufferText containsString:@"EP2AES"],
+                   @"After Esc the next step calls CQ, not the practice exchange");
+        [escStation.keyer abortTransmission];
+        [escStation.assistant resetQSOState];
+        [escStation.assistant processDecodedTextStream:@"CQ CQ DE EP2AES EP2AES K" currentWPM:22.0 snrDb:14.5];
+        [escStation.assistant selectAndAnswerStation:escHeard];
+        [escStation stopStation];
+        AssertTrue([escStation.assistant.activeTargetCallsign isEqualToString:@"EP2AES"], @"Esc outside practice keeps the QSO in progress");
+        NSLog(@"PASS: Esc and leaving CW Station untick Practice / Sim and drop the practice QSO.");
 
         decoder.preserveDeviceSelection=YES; decoder.selectedAudioDeviceUID=@"station-test-missing-input";
         [decoder refreshAudioDevices];

@@ -70,7 +70,7 @@
         _sidetoneEnabled = YES;
         _sidetoneVolume = 0.6f;
         _useCutNumbers = YES;
-        _myCallsign = @"EP2AES";
+        _myCallsign = @"";
         _autoCQIntervalSeconds = 4;
         _internalSentHistory = [NSMutableArray array];
         _txPrefixCommand = @"TX;";
@@ -539,7 +539,7 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
 #pragma mark - Template Expansion
 
 - (NSString *)expandTemplate:(NSString *)tmpl targetCall:(NSString *)call rst:(NSString *)rst name:(NSString *)name qth:(NSString *)qth {
-    NSString *myCall = self.myCallsign.length > 0 ? self.myCallsign.uppercaseString : @"EP2AES";
+    NSString *myCall = [self.myCallsign stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].uppercaseString ?: @"";
     NSString *tgtCall = call.length > 0 ? call.uppercaseString : @"CALL";
     NSString *rstVal = rst.length > 0 ? rst : @"599";
     if (self.useCutNumbers && [rstVal isEqualToString:@"599"]) {
@@ -556,7 +556,19 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
 
 #pragma mark - Transmission
 
+- (BOOL)templateNeedsMissingCallsign:(NSString *)tmpl {
+    if (![tmpl containsString:@"{MYCALL}"]) return NO;
+    return [self.myCallsign stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].length == 0;
+}
+
+- (BOOL)blocksMissingCallsignForTemplate:(NSString *)tmpl {
+    if (![self templateNeedsMissingCallsign:tmpl]) return NO;
+    if (self.logHandler) self.logHandler(@"[CW TX blocked] Enter your callsign in Station before sending {MYCALL}.");
+    return YES;
+}
+
 - (void)transmitText:(NSString *)text targetCall:(NSString *)call rst:(NSString *)rst name:(NSString *)name qth:(NSString *)qth {
+    if ([self blocksMissingCallsignForTemplate:text]) return;
     NSString *expanded = [self expandTemplate:text targetCall:call rst:rst name:name qth:qth];
     if (expanded.length == 0) return;
 
@@ -707,8 +719,10 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
 
 - (void)startAutoCQWithTemplate:(NSString *)tmpl targetCall:(NSString *)call {
     [self stopAutoCQ];
+    NSString *cqTemplate = tmpl.length > 0 ? tmpl : @"CQ CQ DE {MYCALL} {MYCALL} K";
+    if ([self blocksMissingCallsignForTemplate:cqTemplate]) return;
     self.isAutoCQActive = YES;
-    self.currentAutoCQTemplate = tmpl.length > 0 ? tmpl : @"CQ CQ DE {MYCALL} {MYCALL} K";
+    self.currentAutoCQTemplate = cqTemplate;
     self.currentAutoCQCall = call;
     self.autoCQCountdown = self.autoCQIntervalSeconds;
 
@@ -743,6 +757,7 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
         self.autoCQCountdown--;
     } else {
         // Time to repeat CQ
+        if ([self blocksMissingCallsignForTemplate:self.currentAutoCQTemplate]) { [self stopAutoCQ]; return; }
         self.autoCQCountdown = self.autoCQIntervalSeconds;
         [self transmitText:self.currentAutoCQTemplate targetCall:self.currentAutoCQCall rst:@"" name:@"" qth:@""];
     }

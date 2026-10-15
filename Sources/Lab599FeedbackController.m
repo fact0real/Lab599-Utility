@@ -156,14 +156,14 @@ static NSBox *CreateCardBox(void) {
     NSTextField *callsignLbl = CreateLabel(@"Your Callsign:", YES, 11, NSColor.labelColor);
     self.callsignField = [NSTextField textFieldWithString:@""];
     self.callsignField.translatesAutoresizingMaskIntoConstraints = NO;
-    self.callsignField.placeholderString = @"e.g. EP2AES";
+    self.callsignField.placeholderString = @"Your callsign";
     self.callsignField.delegate = self;
     [self.callsignField.widthAnchor constraintEqualToConstant:150].active = YES;
 
     NSTextField *contactLbl = CreateLabel(@"Your Email / Contact (Optional):", YES, 11, NSColor.labelColor);
     self.contactField = [NSTextField textFieldWithString:@""];
     self.contactField.translatesAutoresizingMaskIntoConstraints = NO;
-    self.contactField.placeholderString = @"e.g. factoreal@asis.sh";
+    self.contactField.placeholderString = @"you@example.com";
     self.contactField.delegate = self;
     [self.contactField.widthAnchor constraintEqualToConstant:240].active = YES;
 

@@ -56,7 +56,7 @@ typedef NS_ENUM(NSInteger, TX500QSOState) {
 @property (nonatomic, copy, nullable) NSString *activeExchangeRcvd;
 @property (nonatomic, copy) NSString *activeName;
 @property (nonatomic, copy) NSString *activeQTH;
-@property (nonatomic, copy) NSString *myCallsign; // default "EP2AES"
+@property (nonatomic, copy) NSString *myCallsign; // Empty until set; macros then keep {MYCALL}.
 // YES while Practice / Sim is on (synthetic Morse, nothing transmitted): a QSO completed then
 // stays in the session list and is never saved to the Logbook or uploaded. Set by the station.
 @property (nonatomic, copy, nullable) BOOL (^practiceModeActive)(void);

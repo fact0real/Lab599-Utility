@@ -1089,6 +1089,48 @@ int main(int argc, const char * argv[]) {
         AssertTrue([fallbackCmds containsObject:@"RX;"], @"Fallback sends CAT RX; command");
         NSLog(@"PASS: Confirmed PTT and CAT TX; / RX; verified.");
 
+        // Without a saved callsign the engine has no identity and cannot key the radio.
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"TX500_OperatorCallsign"];
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"TX500_OperatorGrid"];
+        TX500FT8AudioEngine *noCallEngine = [TX500FT8AudioEngine new];
+        AssertTrue(noCallEngine.myCallsign.length == 0 && noCallEngine.myGrid.length == 0,
+                   @"Without a saved callsign the FT8 engine has no default identity");
+        noCallEngine.isSimulationMode = NO;
+        noCallEngine.catDialAndModeVerified = YES;
+        noCallEngine.dialFrequencyHz = 14074000;
+        __block NSUInteger noCallPTT = 0;
+        __block NSString *noCallLog = @"";
+        noCallEngine.pttControlHandler = ^BOOL(BOOL active) { noCallPTT++; return YES; };
+        noCallEngine.logHandler = ^(NSString *line) { noCallLog = line; };
+        noCallEngine.queuedTxMessage = @"CQ DX";
+        [noCallEngine beginTransmission];
+        AssertTrue(noCallPTT == 0 && !noCallEngine.isTransmitting && [noCallLog containsString:@"Enter your callsign"],
+                   @"Without a callsign FT8 cannot key the radio");
+        noCallEngine.myCallsign = @"  ";
+        noCallLog = @"";
+        [noCallEngine beginTransmission];
+        AssertTrue(noCallPTT == 0 && [noCallLog containsString:@"Enter your callsign"], @"A callsign of spaces counts as no callsign");
+        // Control: with a callsign the next gate (no dial frequency) stops it, so nothing keys.
+        noCallEngine.myCallsign = @"EA3JIC";
+        noCallEngine.dialFrequencyHz = 0;
+        noCallLog = @"";
+        [noCallEngine beginTransmission];
+        AssertTrue(![noCallLog containsString:@"Enter your callsign"] && [noCallLog containsString:@"have not been verified over CAT"],
+                   @"With a callsign the callsign gate lets FT8 continue to the CAT gate");
+        AssertTrue(noCallPTT == 0 && !noCallEngine.isTransmitting && !noCallEngine.isTransmitArmed, @"The control check keys nothing");
+        noCallEngine.myCallsign = @"";
+        TX500FT8AutoEngine *noCallAuto = [[TX500FT8AutoEngine alloc] init];
+        noCallAuto.audioEngine = noCallEngine;
+        __block NSString *noCallAutoLog = @"";
+        noCallAuto.logHandler = ^(NSString *line) { noCallAutoLog = line; };
+        AssertTrue(![noCallAuto startCQWithText:@"CQ DX" parity:TX500FT8SlotParityOdd limit:0] && !noCallAuto.isAutoCQActive &&
+                   [noCallAutoLog containsString:@"Enter your callsign"], @"Without a callsign Auto-CQ is not armed, and says why");
+        noCallAutoLog = @"";
+        [noCallAuto startAutoHunter];
+        AssertTrue(!noCallAuto.isAutoHunterActive && [noCallAutoLog containsString:@"Enter your callsign"],
+                   @"Without a callsign Auto-Hunter does not start, and says why");
+        NSLog(@"PASS: FT8 never transmits a default callsign.");
+
         TX500FT8AudioEngine *unverifiedDialEngine = [TX500FT8AudioEngine new];
         unverifiedDialEngine.isSimulationMode = NO;
         unverifiedDialEngine.requiresVerifiedCATDial = YES;

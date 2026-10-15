@@ -292,10 +292,10 @@ static void FT8AudioQueueOutputCallback(void *inUserData,
     self = [super init];
     if (self) {
         NSString *savedCall = [[NSUserDefaults standardUserDefaults] stringForKey:@"TX500_OperatorCallsign"];
-        _myCallsign = (savedCall.length > 0) ? savedCall : @"EP2AES";
+        _myCallsign = (savedCall.length > 0) ? savedCall : @"";
 
         NSString *savedGrid = [[NSUserDefaults standardUserDefaults] stringForKey:@"TX500_OperatorGrid"];
-        _myGrid = (savedGrid.length > 0) ? savedGrid : @"KM35";
+        _myGrid = (savedGrid.length > 0) ? savedGrid : @"";
 
         _dialFrequencyHz = 14074000;
         _rxAudioFrequencyHz = 1200.0f;
@@ -1122,6 +1122,10 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
     }
 }
 
+- (BOOL)hasOperatorCallsign {
+    return [self.myCallsign stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].length > 0;
+}
+
 - (void)disarmTransmit {
     self.isTransmitArmed = NO;
     self.repeatArmedTransmission = NO;
@@ -1152,6 +1156,13 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
 
 - (void)beginTransmission {
     if (self.queuedTxMessage.length == 0 || _receiveReleaseInProgress) return;
+    // Never transmit on the air without the operator's own callsign.
+    if (!self.isSimulationMode && !self.hasOperatorCallsign) {
+        self.isTransmitArmed = NO;
+        _autoParityLocked = -1;
+        if (self.logHandler) self.logHandler(@"[FT8 TX blocked] Enter your callsign in Station before transmitting.");
+        return;
+    }
     _receiveRecoveryStalled = NO;
     if (!self.isSimulationMode && (self.dialFrequencyHz == 0 ||
         (self.requiresVerifiedCATDial && !self.catDialAndModeVerified))) {

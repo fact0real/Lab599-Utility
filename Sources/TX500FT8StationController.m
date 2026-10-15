@@ -757,8 +757,8 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
             [strongSelf appendToQSOConsole:[NSString stringWithFormat:@"[TX Slot] Transmitting: %@", txText]];
 
             if (txText.length > 0) {
-                NSString *myCall = strongSelf.audioEngine.myCallsign ?: @"EP2AES";
-                NSString *myGrid = strongSelf.audioEngine.myGrid ?: @"KM35";
+                NSString *myCall = strongSelf.audioEngine.myCallsign ?: @"";
+                NSString *myGrid = strongSelf.audioEngine.myGrid ?: @"";
                 TX500FT8Message *txMsg = [TX500FT8Message messageWithRawText:txText
                                                                      freqHz:strongSelf.audioEngine.txAudioFrequencyHz
                                                                       snrDb:0.0f
@@ -2541,14 +2541,18 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
     // Callsigns row inside rightBox
     NSTextField *mcLbl = [NSTextField labelWithString:@"My Call:"];
     self.myCallField = [[NSTextField alloc] initWithFrame:NSZeroRect];
-    self.myCallField.stringValue = self.audioEngine.myCallsign;
+    self.myCallField.stringValue = self.audioEngine.myCallsign ?: @"";
+    self.myCallField.placeholderString = @"Your call";
+    self.myCallField.toolTip = @"Enter your callsign. FT8/FT4 cannot transmit without it.";
     self.myCallField.target = self;
     self.myCallField.action = @selector(stationInfoEdited:);
     [self.myCallField.widthAnchor constraintEqualToConstant:75].active = YES;
 
     NSTextField *mgLbl = [NSTextField labelWithString:@"Grid:"];
     self.myGridField = [[NSTextField alloc] initWithFrame:NSZeroRect];
-    self.myGridField.stringValue = self.audioEngine.myGrid;
+    self.myGridField.stringValue = self.audioEngine.myGrid ?: @"";
+    self.myGridField.placeholderString = @"Grid";
+    self.myGridField.toolTip = @"Enter your Maidenhead locator.";
     self.myGridField.target = self;
     self.myGridField.action = @selector(stationInfoEdited:);
     [self.myGridField.widthAnchor constraintEqualToConstant:55].active = YES;
@@ -3038,6 +3042,7 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
         [self.audioEngine disarmTransmit];
         [self refreshTransmitButtonState];
     } else {
+        if (![self ensureOperatorCallsign]) return;
         if (!self.audioEngine.isSimulationMode && !self.audioEngine.catDialAndModeVerified) {
             if (self.audioEngine.dialFrequencyHz > 0) {
                 self.audioEngine.catDialAndModeVerified = YES;
@@ -3067,9 +3072,8 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
         if ((!msg || msg.length == 0) && self.txMessageLabels.count >= 6)
             msg = self.txMessageLabels[5].stringValue; // Tx 6: CQ MyCall MyGrid
         if (!msg || msg.length == 0 || [msg isEqualToString:@"-"] || [msg containsString:@"<DX>"] || [msg hasPrefix:@" "]) {
-            NSString *myCall = self.myCallField.stringValue.length > 0 ? self.myCallField.stringValue.uppercaseString : @"EP2AES";
-            NSString *myGrid = self.myGridField.stringValue.length > 0 ? self.myGridField.stringValue.uppercaseString : @"KM35";
-            msg = [NSString stringWithFormat:@"CQ %@ %@", myCall, myGrid.length >= 4 ? [myGrid substringToIndex:4] : myGrid];
+            msg = [TX500FT8Message messageForPhase:6 myCall:self.audioEngine.myCallsign ?: @"" myGrid:self.myGridField.stringValue ?: @""
+                                            dxCall:@"" dxGrid:nil myReport:nil rcvdReport:nil];
         }
 
         // Determine parity from segment: 0=Even, 1=Auto, 2=Odd
@@ -3337,6 +3341,7 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
     if (self.autoEngine.isAutoCQActive) {
         [self.autoEngine stopAutoCQ];
     } else {
+        if (![self ensureOperatorCallsign]) return;
         if (!self.audioEngine.isSimulationMode && !self.audioEngine.catDialAndModeVerified) {
             [self appendToQSOConsole:@"[Auto-CQ] Confirm the radio frequency and DIG mode before starting CQ."];
             return;
@@ -3378,6 +3383,7 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
         [self.autoEngine stopAutoHunter];
         self.autoHunterButton.title = @"Auto-Hunter";
     } else {
+        if (![self ensureOperatorCallsign]) return;
         if (self.autoEngine.isAutoCQActive) {
             [self.autoEngine stopAutoCQ];
             self.autoCQButton.title = @"Auto-CQ";
@@ -3394,6 +3400,23 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
 - (void)hunterCriteriaChanged:(id)sender {
     (void)sender;
     self.autoEngine.autoHunterCriteria = (TX500FT8HunterCriteria)self.hunterCriteriaPopup.indexOfSelectedItem;
+}
+
+// Transmit controls need the operator's own callsign, except in Simulation
+// Mode, which never keys the radio. A callsign typed in My Call but not yet
+// confirmed with Return is applied here first.
+- (BOOL)ensureOperatorCallsign {
+    NSString *typed = [self.myCallField.stringValue stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+    if (typed.length > 0 && ![typed.uppercaseString isEqualToString:self.audioEngine.myCallsign.uppercaseString])
+        [self stationInfoEdited:self.myCallField];
+    // Show, and build the Tx messages from, exactly the callsign that will be sent.
+    if (self.audioEngine.hasOperatorCallsign && ![self.myCallField.stringValue isEqualToString:self.audioEngine.myCallsign]) {
+        self.myCallField.stringValue = self.audioEngine.myCallsign;
+        [self updateTransmitMatrixLabels];
+    }
+    if (self.audioEngine.isSimulationMode || self.audioEngine.hasOperatorCallsign) return YES;
+    [self appendToQSOConsole:@"[TX blocked] Enter your callsign in My Call or Station before transmitting."];
+    return NO;
 }
 
 - (void)stationInfoEdited:(id)sender {
@@ -3416,16 +3439,16 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
 - (void)reloadStationPreferences {
     self.pskReporterEnabled=[NSUserDefaults.standardUserDefaults boolForKey:@"TX500_FT8_PSKReporterEnabled"];
     self.pskReporterCheckbox.state=self.pskReporterEnabled?NSControlStateValueOn:NSControlStateValueOff;
-    NSString *call = [[NSUserDefaults standardUserDefaults] stringForKey:@"TX500_OperatorCallsign"];
-    if (call.length > 0) {
-        self.audioEngine.myCallsign = call;
-        self.myCallField.stringValue = call;
-    }
-    NSString *grid = [[NSUserDefaults standardUserDefaults] stringForKey:@"TX500_OperatorGrid"];
-    if (grid.length > 0) {
-        self.audioEngine.myGrid = grid;
-        self.myGridField.stringValue = grid;
-    }
+    // The saved station identity is authoritative, including an emptied one.
+    // Text the operator is still typing in a field is left alone.
+    NSString *call = [[NSUserDefaults standardUserDefaults] stringForKey:@"TX500_OperatorCallsign"] ?: @"";
+    BOOL callUntouched = [self.myCallField.stringValue.uppercaseString isEqualToString:(self.audioEngine.myCallsign ?: @"").uppercaseString];
+    self.audioEngine.myCallsign = call;
+    if (!self.myCallField.currentEditor || callUntouched) self.myCallField.stringValue = call;
+    NSString *grid = [[NSUserDefaults standardUserDefaults] stringForKey:@"TX500_OperatorGrid"] ?: @"";
+    BOOL gridUntouched = [self.myGridField.stringValue.uppercaseString isEqualToString:(self.audioEngine.myGrid ?: @"").uppercaseString];
+    self.audioEngine.myGrid = grid;
+    if (!self.myGridField.currentEditor || gridUntouched) self.myGridField.stringValue = grid;
 
     [self updateTransmitMatrixLabels];
     [self.bandActivityTableView reloadData];
@@ -3508,7 +3531,7 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
 }
 
 - (void)sendPSKReporterSpots:(NSArray<TX500FT8Message *> *)messages {
-    if(!self.pskReporterEnabled || self.audioEngine.isSimulationMode) return;
+    if(!self.pskReporterEnabled || self.audioEngine.isSimulationMode || !self.audioEngine.hasOperatorCallsign) return;
     NSDictionary *receiver=@{@"call":self.audioEngine.myCallsign ?: @"",
                              @"grid":self.audioEngine.myGrid ?: @"",
                              @"antenna":[NSUserDefaults.standardUserDefaults stringForKey:@"TX500_StationAntenna"] ?: @"",
@@ -3575,6 +3598,7 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
 - (void)answerLatestCQ {
     for (TX500FT8Message *m in self.filteredDecodes) {
         if (m.isCQ && m.callerCall.length > 0) {
+            if (![self ensureOperatorCallsign]) return;
             self.dxCallField.stringValue = m.callerCall;
             self.dxGridField.stringValue = m.grid ?: @"";
             [self dxCallEdited:nil];
@@ -3718,6 +3742,7 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
 
 - (void)manuallyEngageMessage:(TX500FT8Message *)message {
     if (!message || message.isMyTransmission || message.callerCall.length == 0) return;
+    if (![self ensureOperatorCallsign]) return;
     if (self.autoEngine.isQSOActive && self.autoEngine.activeDXCall.length > 0) {
         [self appendToQSOConsole:[NSString stringWithFormat:
             @"[Manual Call] %@ was not selected because the QSO with %@ is still in progress.",
@@ -4160,6 +4185,7 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
 - (void)txMatrixButtonClicked:(NSButton *)sender {
     NSInteger phase = sender.tag;
     if (phase >= 1 && phase <= 6) {
+        if (![self ensureOperatorCallsign]) return;
         if (!self.audioEngine.isSimulationMode && !self.audioEngine.catDialAndModeVerified) {
             [self appendToQSOConsole:@"[TX blocked] Confirm the radio frequency and DIG mode before transmitting."];
             return;
@@ -4478,12 +4504,12 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
 - (void)promptAddCustomAlert {
     NSAlert *alert = [[NSAlert alloc] init];
     alert.messageText = @"Add Custom FT8 Alert";
-    alert.informativeText = @"Enter any Callsign (e.g. EP2AES, W1AW), DXCC Prefix (e.g. 3B8, KH6, Z6), or Country Name to trigger alert when decoded:";
+    alert.informativeText = @"Enter any callsign, DXCC prefix (e.g. 3B8, KH6, Z6) or country name to trigger an alert when decoded:";
     [alert addButtonWithTitle:@"Add Alert"];
     [alert addButtonWithTitle:@"Cancel"];
 
     NSTextField *input = [[NSTextField alloc] initWithFrame:NSMakeRect(0, 0, 240, 24)];
-    input.placeholderString = @"e.g. EP2AES, 3B8, or Iceland";
+    input.placeholderString = @"Callsign, prefix or country";
     alert.accessoryView = input;
 
     NSModalResponse resp = [alert runModal];

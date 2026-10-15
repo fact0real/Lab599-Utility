@@ -1178,7 +1178,7 @@ static const char *kQSOSelectColumns =
     rec.country = ft8QSO.countryName;
     rec.mode = ft8QSO.mode ?: @"FT8";
     if ([rec.mode isEqualToString:@"FT4"]) rec.submode = @"FT4";
-    rec.myCall = myCall ?: @"EP2AES";
+    rec.myCall = myCall ?: @"";
     rec.myGrid = myGrid;
 
     NSDate *d = ft8QSO.timestamp ?: [NSDate date];
@@ -1212,7 +1212,7 @@ static const char *kQSOSelectColumns =
     rec.name = cwContact.name;
     rec.qth = cwContact.qth;
     rec.notes = cwContact.notes;
-    rec.myCall = myCall ?: @"EP2AES";
+    rec.myCall = myCall ?: @"";
     rec.myGrid = myGrid;
 
     if (cwContact.qsoDate.length == 8) rec.qsoDate = cwContact.qsoDate;

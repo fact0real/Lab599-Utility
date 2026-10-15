@@ -86,7 +86,7 @@ static NSBox *DXCard(NSView *v) { NSBox *b=[NSBox new]; b.boxType=NSBoxCustom; b
     NSStackView *detail=DXStack(@[_selectedTitle,_detail,_history,actions],YES,10); for(NSView *v in detail.arrangedSubviews) [v.widthAnchor constraintEqualToAnchor:detail.widthAnchor].active=YES;
     _alertsEnabled=[NSButton checkboxWithTitle:@"Highlight matching spots" target:self action:@selector(alertChanged:)];
     _sound=[NSButton checkboxWithTitle:@"Play alert sound" target:self action:@selector(alertChanged:)];
-    _alertCalls=[self field:@"Callsigns / prefixes: W1AW, EP*"]; _alertCountries=[self field:@"Countries: Japan, Germany"];
+    _alertCalls=[self field:@"Callsigns / prefixes, comma separated (* = any)"]; _alertCountries=[self field:@"Countries: Japan, Germany"];
     _lastAlert=DXLabel(@"Alerts: at most once per 30 seconds, and once per callsign / band every 10 minutes.",11,NSFontWeightRegular); _lastAlert.maximumNumberOfLines=2; _lastAlert.lineBreakMode=NSLineBreakByWordWrapping;
     NSStackView *alertFields=DXStack(@[_alertCalls,_alertCountries],NO,10); [_alertCalls.widthAnchor constraintEqualToAnchor:_alertCountries.widthAnchor].active=YES;
     NSStackView *alert=DXStack(@[DXStack(@[_alertsEnabled,_sound,[self button:@"Save alert" symbol:@"bell" action:@selector(alertChanged:)]],NO,10),alertFields,_lastAlert],YES,10); for(NSView *v in alert.arrangedSubviews) [v.widthAnchor constraintEqualToAnchor:alert.widthAnchor].active=YES;

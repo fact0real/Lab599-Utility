@@ -3393,19 +3393,19 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         NSTextField *callLbl = [self label:@"Callsign:"];
         callLbl.font = [NSFont systemFontOfSize:12 weight:NSFontWeightMedium];
         self.prefCallsignField = [NSTextField textFieldWithString:@""];
-        self.prefCallsignField.placeholderString = @"e.g. EP2AES";
+        self.prefCallsignField.placeholderString = @"Enter your callsign";
         self.prefCallsignField.translatesAutoresizingMaskIntoConstraints = NO;
 
         NSTextField *gridLbl = [self label:@"Maidenhead Grid:"];
         gridLbl.font = [NSFont systemFontOfSize:12 weight:NSFontWeightMedium];
         self.prefGridField = [NSTextField textFieldWithString:@""];
-        self.prefGridField.placeholderString = @"e.g. KM35";
+        self.prefGridField.placeholderString = @"Enter your locator";
         self.prefGridField.translatesAutoresizingMaskIntoConstraints = NO;
 
         NSTextField *nameLbl = [self label:@"Operator Name:"];
         nameLbl.font = [NSFont systemFontOfSize:12 weight:NSFontWeightMedium];
         self.prefOperatorNameField = [NSTextField textFieldWithString:@""];
-        self.prefOperatorNameField.placeholderString = @"e.g. Amir (Optional)";
+        self.prefOperatorNameField.placeholderString = @"Your name (optional)";
         self.prefOperatorNameField.translatesAutoresizingMaskIntoConstraints = NO;
 
         NSTextField *rigLbl = [self label:@"Radio / Rig:"];
@@ -3836,8 +3836,8 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     }
 
     // Populate current values from NSUserDefaults
-    NSString *call = [[NSUserDefaults standardUserDefaults] stringForKey:@"TX500_OperatorCallsign"] ?: @"EP2AES";
-    NSString *grid = [[NSUserDefaults standardUserDefaults] stringForKey:@"TX500_OperatorGrid"] ?: @"KM35";
+    NSString *call = [[NSUserDefaults standardUserDefaults] stringForKey:@"TX500_OperatorCallsign"] ?: @"";
+    NSString *grid = [[NSUserDefaults standardUserDefaults] stringForKey:@"TX500_OperatorGrid"] ?: @"";
     NSString *opName = [[NSUserDefaults standardUserDefaults] stringForKey:@"TX500_OperatorName"] ?: @"";
     NSString *rig = [[NSUserDefaults standardUserDefaults] stringForKey:@"TX500_StationRig"] ?: @"Lab599 Discovery TX-500";
     NSString *antenna = [[NSUserDefaults standardUserDefaults] stringForKey:@"TX500_StationAntenna"] ?: @"Wire Dipole / End-Fed";
@@ -3929,10 +3929,8 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 - (void)savePreferences:(id)sender {
     (void)sender;
     NSString *call = [[self.prefCallsignField.stringValue uppercaseString] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    if (call.length == 0) call = @"EP2AES";
 
     NSString *grid = [[self.prefGridField.stringValue uppercaseString] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    if (grid.length == 0) grid = @"KM35";
 
     NSString *opName = [self.prefOperatorNameField.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     NSString *rig = [self.prefRigField.stringValue stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];

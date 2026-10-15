@@ -15,6 +15,14 @@
 #import "TX500CloudSyncEngine.h"
 #import <objc/runtime.h>
 
+// Station button actions the tests press directly (no window is opened).
+@interface TX500CWStationController (ButtonsForTests)
+- (void)rosterAnswerClicked:(NSButton *)sender;
+- (void)macroButtonClicked:(NSButton *)sender;
+- (void)advanceQSOAction:(id)sender;
+- (void)toggleAutoCQ:(id)sender;
+@end
+
 // Counts calls to the cloud upload while a test runs, and uploads nothing. Installed only
 // around the checks that need it, and restored afterwards.
 static NSUInteger CloudUploadCalls = 0;
@@ -128,6 +136,115 @@ int main(int argc, const char * argv[]) {
         NSString *exp3 = [keyer expandTemplate:@"UR {RST} BK" targetCall:@"DL1ABC" rst:@"599" name:@"" qth:@""];
         AssertTrue([exp3 isEqualToString:@"UR 599 BK"], @"Standard numbers 599");
         NSLog(@"PASS: Keyer macro expansion and cut-numbers verified.");
+
+        // 5b. Without the operator's callsign, nothing that needs {MYCALL} is sent.
+        TX500CWKeyer *noCallKeyer = [[TX500CWKeyer alloc] init];
+        AssertTrue(noCallKeyer.myCallsign.length == 0, @"New keyer starts without a callsign");
+        NSString *noCallExp = [noCallKeyer expandTemplate:@"CQ CQ DE {MYCALL} {MYCALL} K" targetCall:@"" rst:@"" name:@"" qth:@""];
+        AssertTrue(![noCallExp containsString:@"EP2AES"], @"Expansion never substitutes a default callsign");
+        __block NSMutableArray<NSString *> *noCallCommands = [NSMutableArray array];
+        __block NSString *noCallLog = @"";
+        noCallKeyer.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) { [noCallCommands addObject:catCommand]; return YES; };
+        noCallKeyer.logHandler = ^(NSString *line) { noCallLog = line; };
+        [noCallKeyer transmitText:@"CQ CQ DE {MYCALL} {MYCALL} K" targetCall:@"" rst:@"" name:@"" qth:@""];
+        AssertTrue(noCallCommands.count == 0 && !noCallKeyer.isTransmitting, @"A {MYCALL} macro is not sent without a callsign");
+        AssertTrue([noCallLog containsString:@"Enter your callsign"], @"The blocked macro explains why");
+        [noCallKeyer startAutoCQWithTemplate:@"" targetCall:@""];
+        AssertTrue(!noCallKeyer.isAutoCQActive && noCallCommands.count == 0, @"Auto-CQ does not start without a callsign");
+        TX500CWQSOAssistant *noCallAssistant = [[TX500CWQSOAssistant alloc] init];
+        AssertTrue(noCallAssistant.myCallsign.length == 0, @"New QSO assistant starts without a callsign");
+        NSString *noCallMacro = noCallAssistant.suggestedActionMacro;
+        AssertTrue([noCallMacro containsString:@"{MYCALL}"] && ![noCallMacro containsString:@"EP2AES"], @"Assistant keeps {MYCALL} for the keyer to block");
+        [noCallKeyer transmitText:noCallMacro targetCall:@"" rst:@"" name:@"" qth:@""];
+        AssertTrue(noCallCommands.count == 0, @"Assistant CQ is not sent without a callsign");
+        TX500QSOState stateBefore = noCallAssistant.qsoState;
+        __block NSString *blockedStep = nil;
+        [noCallAssistant advanceQSOStepWithAction:^(NSString * _Nonnull macroToTransmit) { blockedStep = macroToTransmit; }];
+        AssertTrue(noCallAssistant.qsoState == stateBefore && [blockedStep containsString:@"{MYCALL}"],
+                   @"Assistant does not move on without a callsign");
+        noCallKeyer.myCallsign = @"   ";
+        // With text around {MYCALL}, so only the callsign check (not an empty result) can stop it.
+        [noCallKeyer transmitText:@"CQ DE {MYCALL} K" targetCall:@"" rst:@"" name:@"" qth:@""];
+        AssertTrue(noCallCommands.count == 0, @"A callsign of spaces counts as no callsign");
+        [noCallKeyer transmitText:@"TEST" targetCall:@"" rst:@"" name:@"" qth:@""];
+        AssertTrue([noCallCommands containsObject:@"TX;"] && [noCallKeyer.activeBufferText isEqualToString:@"TEST"],
+                   @"Free text without {MYCALL} is still sent");
+        [noCallKeyer abortTransmission];
+        NSLog(@"PASS: Keyer and QSO assistant never send a default callsign.");
+
+        // 5c. The station's own buttons never send a missing callsign either: the roster's
+        // Answer, the wideband Answer, the macro buttons, the assistant step and Auto-CQ.
+        // The station starts with the empty callsign of a profile that has none.
+        TX500CWStationController *noCallStation = [TX500CWStationController new];
+        noCallStation.keyer.myCallsign = @"";
+        noCallStation.assistant.myCallsign = @"";
+        __block NSMutableArray<NSString *> *stationCommands = [NSMutableArray array];
+        __block NSMutableArray<NSString *> *stationLog = [NSMutableArray array];
+        noCallStation.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) { [stationCommands addObject:catCommand]; return YES; };
+        noCallStation.logHandler = ^(NSString *line) { [stationLog addObject:line]; };
+        [noCallStation.assistant processDecodedTextStream:@"CQ CQ DE EP2AES EP2AES K" currentWPM:22.0 snrDb:14.5];
+        AssertTrue(noCallStation.assistant.heardStations.count >= 1, @"Station heard the CQ");
+        NSButton *answerButton = [NSButton new];
+        answerButton.tag = 0;
+        [noCallStation rosterAnswerClicked:answerButton];
+        AssertTrue(![stationCommands containsObject:@"TX;"] && !noCallStation.keyer.isTransmitting, @"Answer button sends nothing without a callsign");
+        NSTextField *noCallTxField = [noCallStation valueForKey:@"txInputField"];
+        AssertTrue(noCallTxField != nil && noCallTxField.stringValue.length == 0, @"Answer button leaves the TX field empty without a callsign");
+        TX500QSOState stationStateBefore = noCallStation.assistant.qsoState;
+        [noCallStation advanceQSOAction:nil];
+        AssertTrue(![stationCommands containsObject:@"TX;"] && noCallTxField.stringValue.length == 0 &&
+                   noCallStation.assistant.qsoState == stationStateBefore, @"A refused assistant step sends nothing and leaves the TX field empty");
+        NSInteger myCallMacro = -1;
+        for (NSInteger i = 0; i < (NSInteger)noCallStation.keyer.macroList.count; i++)
+            if ([noCallStation.keyer.macroList[i].templateString containsString:@"{MYCALL}"]) { myCallMacro = i; break; }
+        AssertTrue(myCallMacro >= 0, @"A default macro uses {MYCALL}");
+        NSButton *macroButton = [NSButton new];
+        macroButton.tag = myCallMacro;
+        [noCallStation macroButtonClicked:macroButton];
+        AssertTrue(![stationCommands containsObject:@"TX;"] && noCallTxField.stringValue.length == 0,
+                   @"A {MYCALL} macro button sends nothing and leaves the TX field empty without a callsign");
+        [noCallStation toggleAutoCQ:nil];
+        NSButton *noCallAutoCQButton = [noCallStation valueForKey:@"autoCQButton"];
+        AssertTrue(!noCallStation.keyer.isAutoCQActive && [noCallStation valueForKey:@"autoCQMonitorTimer"] == nil &&
+                   ![noCallAutoCQButton.title isEqualToString:@"Stop Auto-CQ"] && ![stationCommands containsObject:@"TX;"],
+                   @"Auto-CQ button neither starts nor shows a countdown without a callsign");
+        // The wideband Answer (a decoded channel with a callsign) is refused the same way, and says so.
+        TX500CWChannelState *noCallChannel = [TX500CWChannelState new];
+        noCallChannel.frequencyHz = 900.0;
+        noCallChannel.estimatedWPM = 22.0;
+        noCallChannel.snrDb = 12.0;
+        noCallChannel.extractedCallsign = @"EA0XYZ";
+        [stationLog removeAllObjects];
+        [noCallStation answerWidebandChannel:noCallChannel];
+        BOOL widebandRefusalLogged = NO, widebandClaimsAnswer = NO;
+        for (NSString *line in stationLog) {
+            if ([line containsString:@"Enter your callsign"]) widebandRefusalLogged = YES;
+            if ([line containsString:@"answered"]) widebandClaimsAnswer = YES;
+        }
+        AssertTrue(![stationCommands containsObject:@"TX;"] && !noCallStation.keyer.isTransmitting && noCallTxField.stringValue.length == 0,
+                   @"Wideband Answer sends nothing and leaves the TX field empty without a callsign");
+        AssertTrue(widebandRefusalLogged && !widebandClaimsAnswer, @"Wideband Answer says why it sent nothing");
+        TX500CWQSOAssistant *idleAnswer = [[TX500CWQSOAssistant alloc] init];
+        idleAnswer.activeTargetCallsign = @"EP2AES";
+        AssertTrue([idleAnswer.suggestedActionMacro isEqualToString:@"EP2AES DE {MYCALL} K"], @"Idle answer keeps {MYCALL} without a callsign");
+        idleAnswer.qsoState = TX500QSOStateCompleted;
+        AssertTrue([idleAnswer.suggestedActionMacro containsString:@"{MYCALL}"], @"CQ after a QSO keeps {MYCALL} without a callsign");
+        // Control: with a callsign both Answer buttons send the full answer.
+        noCallStation.keyer.myCallsign = @"EA3JIC";
+        noCallStation.assistant.myCallsign = @"EA3JIC";
+        [noCallStation rosterAnswerClicked:answerButton];
+        AssertTrue([stationCommands containsObject:@"TX;"] && [noCallStation.keyer.activeBufferText isEqualToString:@"EP2AES DE EA3JIC K"],
+                   @"Answer button sends the answer with the callsign");
+        AssertTrue([noCallTxField.stringValue isEqualToString:@"EP2AES DE EA3JIC K"], @"With a callsign the Answer button shows the answer in the TX field");
+        [noCallStation.keyer abortTransmission];
+        [stationCommands removeAllObjects];
+        [stationLog removeAllObjects];
+        [noCallStation answerWidebandChannel:noCallChannel];
+        AssertTrue([stationCommands containsObject:@"TX;"] && [noCallStation.keyer.activeBufferText isEqualToString:@"EA0XYZ DE EA3JIC K"] &&
+                   [noCallTxField.stringValue isEqualToString:@"EA0XYZ DE EA3JIC K"], @"Wideband Answer sends the answer with the callsign");
+        AssertTrue([stationLog.lastObject containsString:@"Tuned & answered EA0XYZ"], @"With a callsign the wideband Answer logs the answer");
+        [noCallStation.keyer abortTransmission];
+        NSLog(@"PASS: Station buttons never send a missing callsign.");
 
         // 6. Test Keyer Audio Keying & Transmission Control
         __block NSMutableArray<NSString *> *sentCommands = [NSMutableArray array];

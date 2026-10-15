@@ -118,14 +118,18 @@
 }
 
 - (void)startAutoCQWithLimit:(NSInteger)count {
-    NSString *myCall = self.audioEngine.myCallsign ?: @"EP2AES";
-    NSString *myGrid = self.audioEngine.myGrid ?: @"KM35";
+    NSString *myCall = self.audioEngine.myCallsign ?: @"";
+    NSString *myGrid = self.audioEngine.myGrid ?: @"";
     NSString *cqMsg = [TX500FT8Message messageForPhase:6 myCall:myCall myGrid:myGrid dxCall:@"" dxGrid:nil myReport:nil rcvdReport:nil];
     [self startCQWithText:cqMsg parity:self.audioEngine.txSlotParity limit:count];
 }
 
 - (BOOL)startCQWithText:(NSString *)text parity:(TX500FT8SlotParity)parity limit:(NSInteger)count {
     if (![text.uppercaseString hasPrefix:@"CQ "] || !self.audioEngine) return NO;
+    if (!self.audioEngine.isSimulationMode && !self.audioEngine.hasOperatorCallsign) {
+        if (self.logHandler) self.logHandler(@"[Auto-CQ] Enter your callsign in Station; CQ was not armed.");
+        return NO;
+    }
     if (!self.audioEngine.isSimulationMode && self.audioEngine.requiresVerifiedCATDial &&
         !self.audioEngine.catDialAndModeVerified) {
         if (self.audioEngine.dialFrequencyHz > 0) {
@@ -227,6 +231,10 @@
 #pragma mark - Auto-Hunter Controls
 
 - (void)startAutoHunter {
+    if (!self.audioEngine.isSimulationMode && !self.audioEngine.hasOperatorCallsign) {
+        if (self.logHandler) self.logHandler(@"[Auto-Hunter blocked] Enter your callsign in Station before transmitting.");
+        return;
+    }
     if (self.audioEngine.isReceiveRecoveryPending) {
         if (self.logHandler) self.logHandler(@"[Auto-Hunter blocked] Radio RX has not been confirmed over CAT.");
         return;
@@ -303,8 +311,8 @@
         }
     }
 
-    NSString *myCall = self.audioEngine.myCallsign ?: @"EP2AES";
-    NSString *myGrid = self.audioEngine.myGrid ?: @"KM35";
+    NSString *myCall = self.audioEngine.myCallsign ?: @"";
+    NSString *myGrid = self.audioEngine.myGrid ?: @"";
 
     NSInteger phaseToTransmit = 2; // Tx 2: DXCall MyCall Report (standard reply to CQ response)
     if (caller.messageType == TX500FT8MessageTypeReport || caller.messageType == TX500FT8MessageTypeRogerReport) {
@@ -383,8 +391,8 @@
         }
     }
 
-    NSString *myCall = self.audioEngine.myCallsign ?: @"EP2AES";
-    NSString *myGrid = self.audioEngine.myGrid ?: @"KM35";
+    NSString *myCall = self.audioEngine.myCallsign ?: @"";
+    NSString *myGrid = self.audioEngine.myGrid ?: @"";
 
     // Build Tx 1: HisCall MyCall Grid (Answer CQ)
     NSString *replyMsg = [TX500FT8Message messageForPhase:1
@@ -437,8 +445,8 @@
 - (void)advanceToNextQSOStep {
     if (!self.isQSOActive || self.activeDXCall.length == 0) return;
 
-    NSString *myCall = self.audioEngine.myCallsign ?: @"EP2AES";
-    NSString *myGrid = self.audioEngine.myGrid ?: @"KM35";
+    NSString *myCall = self.audioEngine.myCallsign ?: @"";
+    NSString *myGrid = self.audioEngine.myGrid ?: @"";
     NSInteger nextPhase = 1;
     NSString *nextMsg = @"";
 
@@ -494,8 +502,8 @@
     self.lastDecodedMessages = [messages copy];
     self.lastDecodedParity = parity;
 
-    NSString *myCall = self.audioEngine.myCallsign ?: @"EP2AES";
-    NSString *myGrid = self.audioEngine.myGrid ?: @"KM35";
+    NSString *myCall = self.audioEngine.myCallsign ?: @"";
+    NSString *myGrid = self.audioEngine.myGrid ?: @"";
     TX500FT8SlotParity nextParity = (parity == 0) ? TX500FT8SlotParityOdd : TX500FT8SlotParityEven;
 
     // 1. Check if we have an active QSO in progress with a specific DX station
@@ -725,7 +733,7 @@
 
 - (void)runAutoHunterEvaluationWithMessages:(NSArray<TX500FT8Message *> *)messages parity:(NSInteger)parity {
     (void)parity;
-    NSString *myCall = self.audioEngine.myCallsign ?: @"EP2AES";
+    NSString *myCall = self.audioEngine.myCallsign ?: @"";
     NSMutableArray<TX500FT8Message *> *qualifyingCQs = [NSMutableArray array];
 
     for (TX500FT8Message *m in messages) {
@@ -875,8 +883,8 @@
     _resumeCQAfterCurrentQSO = NO;
     NSString *text = _lastCQText.length > 0 ? _lastCQText :
         [TX500FT8Message messageForPhase:6
-                                  myCall:self.audioEngine.myCallsign ?: @"EP2AES"
-                                  myGrid:self.audioEngine.myGrid ?: @"KM35"
+                                  myCall:self.audioEngine.myCallsign ?: @""
+                                  myGrid:self.audioEngine.myGrid ?: @""
                                   dxCall:@"" dxGrid:nil myReport:nil rcvdReport:nil];
     BOOL resumed = [self startCQWithText:text parity:_lastCQParity limit:_lastCQLimit];
     if (!resumed) {
@@ -890,7 +898,7 @@
                               excludingCall:(NSString *)excludedCall
                                      parity:(NSInteger)parity {
     TX500FT8Message *best = nil;
-    NSString *myCall = self.audioEngine.myCallsign ?: @"EP2AES";
+    NSString *myCall = self.audioEngine.myCallsign ?: @"";
     for (TX500FT8Message *message in messages) {
         if (!message.isDirectedToMe || message.callerCall.length == 0 ||
             [message.callerCall isEqualToString:myCall] ||
@@ -1025,7 +1033,7 @@
         cloudRec.rstRcvd = qso.rstRcvd ?: @"-10";
         cloudRec.grid = qso.grid;
         cloudRec.country = qso.countryName;
-        cloudRec.myCall = self.audioEngine.myCallsign ?: @"EP2AES";
+        cloudRec.myCall = self.audioEngine.myCallsign ?: @"";
         cloudRec.myGrid = self.audioEngine.myGrid;
         [[TX500CloudSyncEngine sharedEngine] uploadContactImmediately:cloudRec completion:nil];
     });

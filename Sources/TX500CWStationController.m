@@ -1828,7 +1828,9 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
         if (strongSelf && macroToTransmit.length > 0) {
             [strongSelf stopManualTune];
             [strongSelf prepareRadioForCWMode];
-            strongSelf.txInputField.stringValue = macroToTransmit;
+            // A step the keyer refuses (no callsign) leaves the field alone; the console says why.
+            if (![strongSelf.keyer templateNeedsMissingCallsign:macroToTransmit])
+                strongSelf.txInputField.stringValue = macroToTransmit;
             [strongSelf.keyer transmitText:macroToTransmit
                                 targetCall:strongSelf.assistant.activeTargetCallsign
                                        rst:strongSelf.assistant.activeRstSent
@@ -1875,6 +1877,7 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
         self.autoCQCountdownLabel.stringValue = @"";
     } else {
         [self.keyer startAutoCQWithTemplate:@"CQ CQ DE {MYCALL} {MYCALL} K" targetCall:@""];
+        if (!self.keyer.isAutoCQActive) return; // blocked: no callsign set
         self.autoCQButton.title = @"Stop Auto-CQ";
         [self startAutoCQTimer];
     }
@@ -1891,7 +1894,9 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
                                                  rst:self.assistant.activeRstSent
                                                 name:self.assistant.activeName
                                                  qth:self.assistant.activeQTH];
-    self.txInputField.stringValue = expanded;
+    // A macro the keyer refuses (no callsign) leaves the field alone, so Send cannot key it without one.
+    if (![self.keyer templateNeedsMissingCallsign:m.templateString])
+        self.txInputField.stringValue = expanded;
     [self.keyer triggerMacroAtIndex:idx
                          targetCall:self.assistant.activeTargetCallsign
                                 rst:self.assistant.activeRstSent
@@ -2297,11 +2302,13 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
     self.wpmLabel.stringValue = [NSString stringWithFormat:@"%ld WPM", (long)self.keyer.wpm];
     [self.decoder setNominalWPM:st.wpm];
 
-    NSString *answerText = [NSString stringWithFormat:@"%@ DE %@ K", st.callsign, self.assistant.myCallsign];
-    self.txInputField.stringValue = answerText;
+    // Through the keyer's template, so it refuses {MYCALL} while no callsign is set.
+    NSString *answerTemplate = @"{CALL} DE {MYCALL} K";
+    if (![self.keyer templateNeedsMissingCallsign:answerTemplate])
+        self.txInputField.stringValue = [self.keyer expandTemplate:answerTemplate targetCall:st.callsign rst:@"599" name:@"" qth:@""];
 
     // Trigger immediate transmission of answer
-    [self.keyer transmitText:answerText
+    [self.keyer transmitText:answerTemplate
                   targetCall:st.callsign
                          rst:@"599"
                         name:@""
@@ -2345,6 +2352,7 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
     }
 
     // 3. If a callsign was recognized on this channel, initiate response
+    BOOL missingCallsign = NO;
     if (channel.extractedCallsign.length > 0) {
         TX500CWHeardStation *st = [[TX500CWHeardStation alloc] init];
         st.callsign = channel.extractedCallsign;
@@ -2353,9 +2361,12 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
         st.timestamp = [NSDate date];
         [self.assistant selectAndAnswerStation:st];
 
-        NSString *answerText = [NSString stringWithFormat:@"%@ DE %@ K", channel.extractedCallsign, self.assistant.myCallsign];
-        self.txInputField.stringValue = answerText;
-        [self.keyer transmitText:answerText
+        // Through the keyer's template, as the roster's Answer, so it refuses {MYCALL} while no callsign is set.
+        NSString *answerTemplate = @"{CALL} DE {MYCALL} K";
+        missingCallsign = [self.keyer templateNeedsMissingCallsign:answerTemplate];
+        if (!missingCallsign)
+            self.txInputField.stringValue = [self.keyer expandTemplate:answerTemplate targetCall:channel.extractedCallsign rst:@"599" name:@"" qth:@""];
+        [self.keyer transmitText:answerTemplate
                       targetCall:channel.extractedCallsign
                              rst:@"599"
                             name:@""
@@ -2363,7 +2374,9 @@ static NSString * const CWInputPreferenceKey = @"TX500_CW_InputDeviceUID";
     }
 
     if (self.logHandler) {
-        if (channel.extractedCallsign.length > 0) {
+        if (missingCallsign) {
+            self.logHandler([NSString stringWithFormat:@"[CW Station] Tuned to %@ at %.0f Hz; no answer sent without your callsign.", channel.extractedCallsign, freq]);
+        } else if (channel.extractedCallsign.length > 0) {
             self.logHandler([NSString stringWithFormat:@"[CW Station] Tuned & answered %@ at %.0f Hz.", channel.extractedCallsign, freq]);
         } else {
             self.logHandler([NSString stringWithFormat:@"[CW Station] Tuned receiver to carrier at %.0f Hz.", freq]);

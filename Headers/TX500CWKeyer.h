@@ -28,7 +28,7 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, assign) BOOL sidetoneEnabled;
 @property (nonatomic, assign) float sidetoneVolume;
 @property (nonatomic, assign) BOOL useCutNumbers; // 599 -> 5NN
-@property (nonatomic, copy) NSString *myCallsign; // e.g. "EP2AES"
+@property (nonatomic, copy) NSString *myCallsign; // Empty until set; {MYCALL} macros need it.
 
 // Live State
 @property (nonatomic, assign, readonly) BOOL isTransmitting;
@@ -67,6 +67,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 // Template Expansion
 - (NSString *)expandTemplate:(NSString *)tmpl targetCall:(NSString *)call rst:(NSString *)rst name:(NSString *)name qth:(NSString *)qth;
+// YES when the template uses {MYCALL} and no callsign is set: transmitText would refuse it.
+- (BOOL)templateNeedsMissingCallsign:(NSString *)tmpl;
 
 @end
 

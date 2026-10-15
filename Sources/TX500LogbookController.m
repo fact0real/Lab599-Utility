@@ -378,7 +378,7 @@ static NSString *const TX500LogbookNoBand = @"—";
 
     self.callsignField = [[NSTextField alloc] initWithFrame:NSZeroRect];
     self.callsignField.translatesAutoresizingMaskIntoConstraints = NO;
-    self.callsignField.placeholderString = @"W1AW";
+    self.callsignField.placeholderString = @"CALLSIGN";
     self.callsignField.font = [NSFont monospacedSystemFontOfSize:13.5 weight:NSFontWeightBold];
     self.callsignField.delegate = self;
     [self.voiceLoggerCard addSubview:self.callsignField];
@@ -509,7 +509,7 @@ static NSString *const TX500LogbookNoBand = @"—";
 
     self.gridField = [[NSTextField alloc] initWithFrame:NSZeroRect];
     self.gridField.translatesAutoresizingMaskIntoConstraints = NO;
-    self.gridField.placeholderString = @"FN31pr";
+    self.gridField.placeholderString = @"Grid";
     self.gridField.font = [NSFont monospacedSystemFontOfSize:11.0 weight:NSFontWeightRegular];
     self.gridField.delegate = self;
     [self.voiceLoggerCard addSubview:self.gridField];

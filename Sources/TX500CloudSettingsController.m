@@ -225,7 +225,7 @@ NSString * const TX500CloudSettingsDidChangeNotification = @"TX500CloudSettingsD
 
     self.lotwUsernameField = [[NSTextField alloc] initWithFrame:NSZeroRect];
     self.lotwUsernameField.translatesAutoresizingMaskIntoConstraints = NO;
-    self.lotwUsernameField.placeholderString = @"e.g. ep2aes";
+    self.lotwUsernameField.placeholderString = @"LoTW username";
     [v addSubview:self.lotwUsernameField];
 
     // Password
@@ -240,7 +240,7 @@ NSString * const TX500CloudSettingsDidChangeNotification = @"TX500CloudSettingsD
     [v addSubview:self.lotwPasswordField];
 
     // Default Station Location
-    NSTextField *lblLoc = [NSTextField labelWithString:@"Default Station Location (e.g. EP2AES-Home):"];
+    NSTextField *lblLoc = [NSTextField labelWithString:@"Default Station Location (e.g. Home):"];
     lblLoc.translatesAutoresizingMaskIntoConstraints = NO;
     lblLoc.font = [NSFont systemFontOfSize:12.0 weight:NSFontWeightMedium];
     [v addSubview:lblLoc];
@@ -622,7 +622,7 @@ NSString * const TX500CloudSettingsDidChangeNotification = @"TX500CloudSettingsD
 
     self.clubLogCallsignField = [[NSTextField alloc] initWithFrame:NSZeroRect];
     self.clubLogCallsignField.translatesAutoresizingMaskIntoConstraints = NO;
-    self.clubLogCallsignField.placeholderString = @"e.g. EP2AES";
+    self.clubLogCallsignField.placeholderString = @"CALLSIGN";
     [v addSubview:self.clubLogCallsignField];
 
     NSTextField *lblEmail = [NSTextField labelWithString:@"Account Email:"];
@@ -786,7 +786,7 @@ NSString * const TX500CloudSettingsDidChangeNotification = @"TX500CloudSettingsD
 
     self.eqslUsernameField = [[NSTextField alloc] initWithFrame:NSZeroRect];
     self.eqslUsernameField.translatesAutoresizingMaskIntoConstraints = NO;
-    self.eqslUsernameField.placeholderString = @"e.g. EP2AES";
+    self.eqslUsernameField.placeholderString = @"eQSL username";
     [v addSubview:self.eqslUsernameField];
 
     NSTextField *lblPass = [NSTextField labelWithString:@"eQSL Password:"];

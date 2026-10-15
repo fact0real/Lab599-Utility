@@ -80,7 +80,7 @@
         _activeRstRcvd = @"599";
         _activeName = @"";
         _activeQTH = @"";
-        _myCallsign = @"EP2AES";
+        _myCallsign = @"";
         _currentFrequencyHz = 14050000;
         _currentBand = @"20m";
         _internalHeardStations = [NSMutableArray array];
@@ -161,24 +161,26 @@
 }
 
 - (NSString *)suggestedActionMacro {
+    // Without a callsign, keep the {MYCALL} token so the keyer refuses to send it.
+    NSString *me = [self.myCallsign stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].length > 0 ? self.myCallsign : @"{MYCALL}";
     switch (self.qsoState) {
         case TX500QSOStateIdle:
             if (self.activeTargetCallsign.length > 0) {
-                return [NSString stringWithFormat:@"%@ DE %@ K", self.activeTargetCallsign, self.myCallsign];
+                return [NSString stringWithFormat:@"%@ DE %@ K", self.activeTargetCallsign, me];
             }
-            return [NSString stringWithFormat:@"CQ CQ DE %@ %@ K", self.myCallsign, self.myCallsign];
+            return [NSString stringWithFormat:@"CQ CQ DE %@ %@ K", me, me];
         case TX500QSOStateCallingCQ:
             return @"";
         case TX500QSOStateAnsweringCQ:
-            return [NSString stringWithFormat:@"%@ DE %@ K", self.activeTargetCallsign, self.myCallsign];
+            return [NSString stringWithFormat:@"%@ DE %@ K", self.activeTargetCallsign, me];
         case TX500QSOStateExchangeReport:
             return [NSString stringWithFormat:@"UR %@ BK", self.activeRstSent ?: @"5NN"];
         case TX500QSOStateExchangeInfo:
             return [NSString stringWithFormat:@"NAME %@ QTH %@ 73", self.activeName.length ? self.activeName : @"OP", self.activeQTH.length ? self.activeQTH : @"QTH"];
         case TX500QSOStateSigningOff:
-            return [NSString stringWithFormat:@"TU 73 DE %@ SK", self.myCallsign];
+            return [NSString stringWithFormat:@"TU 73 DE %@ SK", me];
         case TX500QSOStateCompleted:
-            return [NSString stringWithFormat:@"CQ CQ DE %@ %@ K", self.myCallsign, self.myCallsign];
+            return [NSString stringWithFormat:@"CQ CQ DE %@ %@ K", me, me];
     }
 }
 
@@ -389,6 +391,13 @@
 }
 
 - (void)advanceQSOStepWithAction:(void (^)(NSString *macroToTransmit))transmitBlock {
+    // Without the operator's callsign no step is sent and the QSO does not move
+    // on. The {MYCALL} token lets the keyer refuse it and say why.
+    if ([self.myCallsign stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].length == 0 &&
+        self.qsoState != TX500QSOStateCallingCQ && self.qsoState != TX500QSOStateCompleted) {
+        if (transmitBlock) transmitBlock(@"{MYCALL}");
+        return;
+    }
     NSString *macro = [self suggestedActionMacro];
 
     switch (self.qsoState) {
@@ -500,7 +509,7 @@
     cloudRec.name = contact.name;
     cloudRec.qth = contact.qth;
     cloudRec.notes = contact.notes;
-    cloudRec.myCall = self.myCallsign ?: @"EP2AES";
+    cloudRec.myCall = self.myCallsign ?: @"";
     [[TX500CloudSyncEngine sharedEngine] uploadContactImmediately:cloudRec completion:nil];
 
     if (self.onContactLogged) {

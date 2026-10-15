@@ -27,8 +27,9 @@ typedef NS_ENUM(NSInteger, TX500FT8SlotParity) {
 @interface TX500FT8AudioEngine : NSObject
 
 // Station Identification
-@property (nonatomic, copy) NSString *myCallsign;
+@property (nonatomic, copy) NSString *myCallsign; // Empty until the operator enters a callsign.
 @property (nonatomic, copy) NSString *myGrid;
+@property (nonatomic, readonly) BOOL hasOperatorCallsign; // NO blocks real RF transmission.
 
 // Audio Hardware Devices
 @property (nonatomic) BOOL preserveDeviceSelection; // Explicit station routes never fall back on disconnect.

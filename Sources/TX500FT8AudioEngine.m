@@ -73,6 +73,7 @@ static dispatch_queue_t TX500FT8DecodeQueue(void) {
     // Tone / Carrier Mode
     BOOL _isTuning;
     double _carrierPhase;
+    NSUInteger _tuneGeneration;
 
     // Simulated Station Tracking
     NSInteger _simQSOStage;
@@ -304,6 +305,7 @@ static void FT8AudioQueueOutputCallback(void *inUserData,
         _protocol = TX500_FT8_PROTOCOL_FT8;
         _txSlotParity = TX500FT8SlotParityEven;
         _isTransmitArmed = NO;
+        _maximumTuneSeconds = 15.0;
         _lastProcessedSlotIndex = INT64_MIN;
         // Simulation mode defaults to NO (Live Radio Mode) so connected TX-500 transceivers operate on air.
         // It is only enabled if explicitly passed via CLI arguments or toggled by the operator in the current session.
@@ -1651,12 +1653,25 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
         }
     }
     _isTuning=YES;
+    NSUInteger tune = ++_tuneGeneration;
     _activeTransmissionWasSimulation = self.isSimulationMode;
     if (self.logHandler) {
         NSString *pttMethod = self.isSimulationMode ? @"[Simulation - No RF]" : @"[CAT TX confirmed]";
         self.logHandler([NSString stringWithFormat:@"[Tune Carrier] Tone at %.0f Hz started %@", self.txAudioFrequencyHz, pttMethod]);
     }
     [self startSWRPolling];
+    // A carrier left on must not stay keyed until someone presses STOP. The
+    // deadline is wall-clock time and belongs to this carrier only.
+    NSTimeInterval limit = self.maximumTuneSeconds;
+    if (limit > 0.0) {
+        __weak typeof(self) weakSelf = self;
+        dispatch_after(dispatch_walltime(NULL, (int64_t)(limit * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            typeof(self) strongSelf = weakSelf;
+            if (!strongSelf || !strongSelf->_isTuning || tune != strongSelf->_tuneGeneration) return;
+            if (strongSelf.logHandler) strongSelf.logHandler([NSString stringWithFormat:@"[Tune Carrier] Safety cutoff after %.0f s", limit]);
+            [strongSelf stopTuneCarrier];
+        });
+    }
 }
 
 - (void)stopTuneCarrier {

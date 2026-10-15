@@ -62,6 +62,7 @@ typedef NS_ENUM(NSInteger, TX500FT8SlotParity) {
 @property (nonatomic, assign, readonly) BOOL isMonitoring;
 @property (nonatomic, assign, readonly) BOOL isTransmitting;
 @property (nonatomic, assign, readonly) BOOL isTuning;
+@property (nonatomic, assign) NSTimeInterval maximumTuneSeconds; // the tune carrier stops on its own at this limit (default 15 s; 0 disables)
 @property (nonatomic, assign) BOOL isTransmitArmed;
 @property (nonatomic, assign) BOOL repeatArmedTransmission;
 @property (nonatomic, assign, readonly) BOOL isReceiveRecoveryPending;

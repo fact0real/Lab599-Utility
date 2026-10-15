@@ -304,6 +304,53 @@ int main(int argc, const char * argv[]) {
         AssertTrue(!recoveryEngine.isReceiveRecoveryStalled && recoveryReleaseAttempts == 4,
                    @"Recovery succeeds without extra TX or repeated alerts");
 
+        // A tune carrier left on stops on its own at its limit, through the
+        // confirmed RX path; each carrier has its own deadline.
+        TX500FT8AudioEngine *tuneEngine = [TX500FT8AudioEngine new];
+        AssertTrue(tuneEngine.maximumTuneSeconds == 15.0, @"the tune carrier limit is 15 s by default");
+        tuneEngine.isSimulationMode = NO;
+        __block NSUInteger tuneReleases = 0;
+        tuneEngine.pttControlHandler = ^BOOL(BOOL active) {
+            if (!active) tuneReleases++;
+            return YES;
+        };
+        __block BOOL tuneCutoffLogged = NO;
+        tuneEngine.logHandler = ^(NSString *message) {
+            if ([message hasPrefix:@"[Tune Carrier] Safety cutoff after"]) tuneCutoffLogged = YES;
+        };
+        tuneEngine.maximumTuneSeconds = 0.8;
+        NSDate *tuneStart = [NSDate date];
+        [tuneEngine startTuneCarrier];
+        AssertTrue(tuneEngine.isTuning, @"the tune carrier starts with confirmed PTT");
+        [[NSRunLoop currentRunLoop] runUntilDate:[tuneStart dateByAddingTimeInterval:0.5]];
+        AssertTrue(tuneEngine.isTuning && tuneReleases == 0, @"the tune carrier stays on before its limit");
+        AssertTrue(WaitUntil(^BOOL{ return !tuneEngine.isTuning; }, 2.0) && tuneCutoffLogged,
+                   @"the tune carrier stops at its limit");
+        AssertTrue(WaitUntil(^BOOL{ return tuneReleases == 1 && !tuneEngine.isReceiveRecoveryPending; }, 1.0),
+                   @"the tune carrier stops at its limit and RX is requested");
+        tuneStart = [NSDate date];
+        [tuneEngine startTuneCarrier];
+        [tuneEngine stopTuneCarrier];
+        AssertTrue(WaitUntil(^BOOL{ return tuneReleases == 2 && !tuneEngine.isReceiveRecoveryPending; }, 1.0),
+                   @"a carrier stopped at once returns to RX");
+        [[NSRunLoop currentRunLoop] runUntilDate:[tuneStart dateByAddingTimeInterval:0.4]];
+        [tuneEngine startTuneCarrier];
+        AssertTrue(tuneEngine.isTuning, @"a newer tune carrier starts");
+        [[NSRunLoop currentRunLoop] runUntilDate:[tuneStart dateByAddingTimeInterval:1.0]];
+        AssertTrue(tuneEngine.isTuning, @"a stale deadline does not cut a newer carrier");
+        AssertTrue(WaitUntil(^BOOL{ return !tuneEngine.isTuning; }, 1.0),
+                   @"the newer carrier has its own deadline");
+        AssertTrue(WaitUntil(^BOOL{ return tuneReleases == 3 && !tuneEngine.isReceiveRecoveryPending; }, 1.0),
+                   @"the newer carrier returns to RX");
+        tuneEngine.maximumTuneSeconds = 0;
+        [tuneEngine startTuneCarrier];
+        [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.5]];
+        AssertTrue(tuneEngine.isTuning, @"a tune limit of 0 disables the cutoff");
+        [tuneEngine stopTuneCarrier];
+        AssertTrue(WaitUntil(^BOOL{ return tuneReleases == 4 && !tuneEngine.isReceiveRecoveryPending; }, 1.0),
+                   @"STOP still ends a carrier without a limit");
+        NSLog(@"PASS: The FT8 tune carrier stops on its own at its limit.");
+
         // 4. Test Maidenhead Grid Parser & Distance Math
         double lat1 = 0, lon1 = 0, lat2 = 0, lon2 = 0;
         AssertTrue([TX500FT8Message parseMaidenhead:@"KM35" outLat:&lat1 outLon:&lon1], @"Parse KM35");

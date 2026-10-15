@@ -43,6 +43,8 @@
 - (void)toggleAutoCQ:(id)sender;
 - (void)toggleDecoder:(id)sender;
 - (void)toggleSimulation:(NSButton *)sender;
+- (void)txSendClicked:(id)sender;
+- (void)modePopupChanged:(NSPopUpButton *)sender;
 @end
 
 // Counts calls to the cloud upload while a test runs, and uploads nothing. Installed only
@@ -623,7 +625,7 @@ int main(int argc, const char * argv[]) {
         __block NSString *syncLine = @"";
         cwStation.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) { [cwCommands addObject:catCommand]; return YES; };
         cwStation.logHandler = ^(NSString *line) { syncLine = line; };
-        [cwStation updateFrequencyHz:0 mode:@"CW"]; // what the radio sync passes when FA; gets no usable reply
+        [cwStation updateFrequencyHz:0 mode:@"DIG"]; // what the radio sync passes when FA; gets no usable reply (the radio in DIG)
         AssertTrue(cwStation.currentDialFrequencyHz == 0 && cwStation.assistant.currentFrequencyHz == 0 && cwStation.assistant.currentBand.length == 0,
                    @"No radio answer keeps the CW frequency and band unknown");
         AssertTrue([syncLine containsString:@"Radio frequency unavailable"] && [syncLine containsString:@"unknown"], @"The console says the CW frequency is unknown");
@@ -662,7 +664,7 @@ int main(int argc, const char * argv[]) {
         [cwStation updateFrequencyHz:7030000 mode:@"CW"]; // read from the radio
         AssertTrue([cwVFO.stringValue isEqualToString:@"7.030.000 MHz"] && cwBands.selectedSegment == 2, @"A frequency read from the radio shows on the VFO and the 40m chip");
         syncLine = @"";
-        [cwStation updateFrequencyHz:0 mode:@"CW"]; // one missed FA; reply later
+        [cwStation updateFrequencyHz:0 mode:@"DIG"]; // one missed FA; reply later
         AssertTrue(cwStation.currentDialFrequencyHz == 7030000 && cwStation.assistant.currentFrequencyHz == 7030000 &&
                    [cwStation.assistant.currentBand isEqualToString:@"40m"], @"A missed radio answer keeps the frequency and band known before");
         AssertTrue([syncLine containsString:@"keeping the last known 7.030 MHz"], @"The console says the frequency known before is kept");
@@ -933,6 +935,110 @@ int main(int argc, const char * argv[]) {
         [stationController prepareRadioForCWMode];
         AssertTrue(![controllerSentCmds containsObject:@"MD6;"], @"User explicit mode choice is preserved, not overwritten");
         NSLog(@"PASS: Transceiver automatic DIG mode switching (MD6;) and user choice preservation verified.");
+        // 12a. Another tab can leave the radio in FM (a Voice preset). Each entry to CW Station sets
+        // DIG again, and so does a reading that finds the radio in another mode.
+        TX500CWStationController *digStation = [TX500CWStationController new];
+        __block NSMutableArray<NSString *> *digCmds = [NSMutableArray array];
+        digStation.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) { [digCmds addObject:catCommand]; return YES; };
+        NSUInteger (^md6Count)(void) = ^NSUInteger {
+            return [digCmds indexesOfObjectsPassingTest:^BOOL(NSString *cmd, NSUInteger i, BOOL *stop) { (void)i; (void)stop; return [cmd isEqualToString:@"MD6;"]; }].count;
+        };
+        [digStation startStation];
+        AssertTrue(md6Count() == 1, @"the first entry sends MD6; once");
+        [digCmds removeAllObjects];
+        [digStation startStation];
+        AssertTrue(md6Count() == 0, @"within one entry MD6; is not repeated");
+        [digStation stopStation];
+        [digCmds removeAllObjects];
+        [digStation startStation];
+        AssertTrue(md6Count() == 1, @"a new entry sets DIG again");
+        [digCmds removeAllObjects];
+        [digStation setValue:@0 forKey:@"userTuningLockoutUntil"];
+        [digStation updateFrequencyHz:14025000 mode:@"FM"];
+        AssertTrue(md6Count() == 1, @"a radio reported in FM is put back to DIG");
+        [digCmds removeAllObjects];
+        [digStation setValue:@0 forKey:@"userTuningLockoutUntil"];
+        [digStation updateFrequencyHz:14025000 mode:@"DIG"];
+        AssertTrue(digCmds.count == 0, @"DIG reported: nothing sent");
+        // The default keying needs DIG: a radio reported in CW or CW-R is put back to DIG too.
+        for (NSString *cwMode in @[@"CW", @"CW-R"]) {
+            [digCmds removeAllObjects];
+            [digStation setValue:@0 forKey:@"userTuningLockoutUntil"];
+            [digStation updateFrequencyHz:14025000 mode:cwMode];
+            AssertTrue(md6Count() == 1, [NSString stringWithFormat:@"a radio reported in %@ is put back to DIG", cwMode]);
+        }
+        // The mode knob turned inside the tab (no reading comes): the first Send's TX; is refused by
+        // the station core; the next Send, and the next Tune, set DIG before their TX;.
+        TX500CWStationController *knobStation = [TX500CWStationController new];
+        knobStation.keyer.wpm = 45;
+        __block BOOL knobRefusesTX = NO;
+        __block NSMutableArray<NSString *> *knobCmds = [NSMutableArray array];
+        __block NSMutableArray<NSString *> *knobLog = [NSMutableArray array];
+        knobStation.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) {
+            [knobCmds addObject:catCommand];
+            return !(knobRefusesTX && [catCommand isEqualToString:@"TX;"]);
+        };
+        knobStation.logHandler = ^(NSString *line) { [knobLog addObject:line]; };
+        NSTextField *knobField = [knobStation valueForKey:@"txInputField"];
+        BOOL (^knobDIGBeforeTX)(void) = ^BOOL {
+            NSUInteger md6 = [knobCmds indexOfObject:@"MD6;"], tx = [knobCmds indexOfObject:@"TX;"];
+            return md6 != NSNotFound && tx != NSNotFound && md6 < tx;
+        };
+        [knobStation startStation];
+        AssertTrue([knobCmds containsObject:@"MD6;"], @"the entry sets DIG");
+        knobRefusesTX = YES; // the knob turned to CW: the core refuses TX;
+        [knobCmds removeAllObjects];
+        knobField.stringValue = @"E";
+        [knobStation txSendClicked:nil];
+        BOOL knobSays = NO; for (NSString *line in knobLog) if ([line containsString:@"DIG (MD6;) will be set again"]) knobSays = YES;
+        AssertTrue(![knobCmds containsObject:@"MD6;"] && [knobCmds containsObject:@"TX;"] && !knobStation.keyer.isTransmitting && knobSays,
+                   @"the first Send after the knob is refused and says DIG will be set again");
+        knobRefusesTX = NO;
+        [knobCmds removeAllObjects];
+        knobField.stringValue = @"E";
+        [knobStation txSendClicked:nil];
+        AssertTrue(knobDIGBeforeTX() && knobStation.keyer.isTransmitting, @"the next Send sets DIG before its TX;");
+        [knobStation.keyer abortTransmission];
+        knobRefusesTX = YES;
+        [knobStation toggleManualTransmit];
+        AssertTrue(!knobStation.isManualTuneActive, @"a refused Tune");
+        knobRefusesTX = NO;
+        [knobCmds removeAllObjects];
+        [knobStation toggleManualTransmit];
+        AssertTrue(knobDIGBeforeTX() && knobStation.isManualTuneActive, @"the next Tune sets DIG before its TX;");
+        [knobStation stopManualTune];
+        // DIG chosen in the mode menu keys with plain TX; too: the same, and each entry sets DIG.
+        NSPopUpButton *knobMenu = [knobStation valueForKey:@"modePopup"];
+        [knobMenu selectItemWithTag:6];
+        [knobStation modePopupChanged:knobMenu];
+        [knobStation stopStation];
+        [knobCmds removeAllObjects];
+        [knobStation startStation];
+        AssertTrue([knobCmds containsObject:@"MD6;"], @"DIG chosen in the menu: each entry sets DIG");
+        knobRefusesTX = YES;
+        knobField.stringValue = @"E";
+        [knobStation txSendClicked:nil];
+        knobRefusesTX = NO;
+        [knobCmds removeAllObjects];
+        knobField.stringValue = @"E";
+        [knobStation txSendClicked:nil];
+        AssertTrue(knobDIGBeforeTX() && knobStation.keyer.isTransmitting, @"DIG chosen in the menu: the next Send sets DIG before its TX;");
+        [knobStation.keyer abortTransmission];
+        // USB and LSB in the mode menu key from DIG and go back to their mode, as CW and CW-R do.
+        for (NSNumber *sideband in @[@2, @1]) {
+            [knobMenu selectItemWithTag:sideband.integerValue];
+            [knobStation modePopupChanged:knobMenu];
+            NSString *back = [NSString stringWithFormat:@"RX;MD%ld;", (long)sideband.integerValue];
+            AssertTrue([knobStation.keyer.txPrefixCommand isEqualToString:@"MD6;TX;"] && [knobStation.keyer.rxSuffixCommand isEqualToString:back],
+                       [NSString stringWithFormat:@"the mode menu's MD%ld keys from DIG and goes back with %@", (long)sideband.integerValue, back]);
+            [knobCmds removeAllObjects];
+            knobField.stringValue = @"E";
+            [knobStation txSendClicked:nil];
+            AssertTrue([knobCmds containsObject:@"MD6;TX;"] && knobStation.keyer.isTransmitting, @"a Send in USB or LSB keys from DIG");
+            [knobStation.keyer abortTransmission];
+            AssertTrue([knobCmds containsObject:back], @"its release goes back to the chosen mode");
+        }
+        NSLog(@"PASS: Each entry to CW Station, and a radio found in another mode, sets DIG again.");
         // 12b. In Practice / Sim the decoder button says "STOP SIMULATION", and that is what it does:
         // the simulation stops, the box is unticked and a Tune keyed before the box was ticked is
         // released. It does not listen and sends nothing else to the radio. startListening is

@@ -375,6 +375,7 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
         }
         // The keyer's releases ignore the answer: keep it, so the pane says when RX was not confirmed.
         if ([catCommand hasPrefix:@"RX"]) strongSelf.releaseNotConfirmed = !ok;
+        if (!ok && [catCommand containsString:@"TX;"]) [strongSelf noteTransmitRefused];
         return ok;
     };
     // The same Practice / Sim decision for the keyer's audio: in practice it never opens or feeds
@@ -438,6 +439,14 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
     } else if ([self.operatingMode isEqualToString:@"CW-R"]) {
         self.keyer.txPrefixCommand = @"MD6;TX;";
         self.keyer.rxSuffixCommand = @"RX;MD7;";
+    } else if ([self.operatingMode isEqualToString:@"USB"]) {
+        // CW keys only in DIG (the station core refuses TX; in any other mode): USB and LSB key
+        // from DIG and go back to their mode after the release, as CW and CW-R do.
+        self.keyer.txPrefixCommand = @"MD6;TX;";
+        self.keyer.rxSuffixCommand = @"RX;MD2;";
+    } else if ([self.operatingMode isEqualToString:@"LSB"]) {
+        self.keyer.txPrefixCommand = @"MD6;TX;";
+        self.keyer.rxSuffixCommand = @"RX;MD1;";
     } else {
         self.keyer.txPrefixCommand = @"TX;";
         self.keyer.rxSuffixCommand = @"RX;";
@@ -510,15 +519,15 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
 
 - (void)prepareRadioForCWMode {
     [self updateKeyerRadioOutputDevice];
-    if (self.userHasChosenCustomMode) {
-        [self updateKeyerCommandsForCurrentMode];
-        return;
+    if (!self.userHasChosenCustomMode) {
+        self.operatingMode = @"DIG";
+        if (self.modePopup && self.modePopup.selectedItem.tag != 6) {
+            [self.modePopup selectItemWithTag:6];
+        }
     }
-    self.operatingMode = @"DIG";
-    if (self.modePopup && self.modePopup.selectedItem.tag != 6) {
-        [self.modePopup selectItemWithTag:6];
-    }
-    if (!self.cwModeConfiguredOnRadio) {
+    // DIG, by default or chosen in the menu, keys with a plain TX;: MD6; goes out once per entry,
+    // and again after a TX; was refused. The other modes carry MD6; in their own TX prefix.
+    if ([self.operatingMode isEqualToString:@"DIG"] && !self.cwModeConfiguredOnRadio) {
         if (self.serialCommandSender) {
             BOOL sent = self.serialCommandSender(@"MD6;");
             if (sent) {
@@ -530,6 +539,13 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
         }
     }
     [self updateKeyerCommandsForCurrentMode];
+}
+
+// A refused TX; (the mode knob turned to CW, FM or anything else inside the tab, a radio slow to
+// apply MD6;, VOX on) clears the MD6; latch, so the next Send or Tune sets DIG first.
+- (void)noteTransmitRefused {
+    self.cwModeConfiguredOnRadio = NO;
+    if (self.logHandler) self.logHandler(@"CW Station: TX; refused: DIG (MD6;) will be set again on the next Send or Tune.");
 }
 
 - (void)modePopupChanged:(NSPopUpButton *)sender {
@@ -562,6 +578,9 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
 - (void)stopStation {
     [self stopManualTune];
     [self stopTXMeterPolling];
+    // Another tab may change the radio's mode (an FM preset in Voice): each entry sets DIG again.
+    // In Practice MD6; still goes out on entry, as before.
+    self.cwModeConfiguredOnRadio = NO;
     [self stopAutoCQTimer];
     [self.decoder stopListening];
     // Practice ends here (Esc, leaving CW Station, Quit): the practice QSO must not reach the air
@@ -604,7 +623,10 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
 
     if (!self.userHasChosenCustomMode) {
         // Automatically ensure DIG/CW mode unless the user explicitly selected another mode
-        if (mode.length > 0 && ![mode isEqualToString:@"DIG"] && ![mode isEqualToString:@"CW"] && ![mode isEqualToString:@"CW-R"]) {
+        // The default keying needs DIG: a reading in any other mode (CW and CW-R too) sets it again.
+        if (mode.length > 0 && ![mode isEqualToString:@"DIG"]) {
+            // The radio is in another mode now: MD6; must go out again, whatever was sent before.
+            self.cwModeConfiguredOnRadio = NO;
             [self prepareRadioForCWMode];
         }
     } else if (mode.length > 0) {
@@ -2091,6 +2113,7 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
                 if (self.logHandler) {
                     self.logHandler(@"CW Station: Could not key transceiver to TX (check CAT connection)");
                 }
+                [self noteTransmitRefused];
             }
         }
     } else {

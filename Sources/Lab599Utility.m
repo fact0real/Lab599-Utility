@@ -1248,7 +1248,12 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     self.cwStationController.logHandler = ^(NSString *message) { [weakSelf appendLog:message]; };
     self.cwStationController.serialCommandSender = ^BOOL(NSString *catCommand) {
         NSError *catErr = nil;
-        if (![weakSelf.stationCore.owner isEqual:@"CW"] && !weakSelf.stationCore.ownsTX &&
+        // A release (RX;, RX;MD3;, RX;MD7;) can come from the keyer's time-out queue, off the
+        // main thread, so it reads no AppKit state here. It needs no owner change either: only
+        // TX;, MD6; and FA (sent from the main thread) need CW to be the owner, and the core
+        // refuses an RX; from a keyer that is not the owner, as before.
+        BOOL release = [catCommand hasPrefix:@"RX"];
+        if (!release && ![weakSelf.stationCore.owner isEqual:@"CW"] && !weakSelf.stationCore.ownsTX &&
             weakSelf.operationPicker.selectedSegment == 10) {
             [weakSelf.stationCore selectOwner:@"CW" port:[weakSelf currentStationPort] error:nil];
         }

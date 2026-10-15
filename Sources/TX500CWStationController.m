@@ -115,6 +115,7 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
 @property (nonatomic, strong) NSButton *txTuneButton;
 @property (nonatomic, strong) NSButton *txAbortButton;
 @property (nonatomic, assign, readwrite) BOOL isManualTuneActive;
+@property (nonatomic, assign) double manualTuneCutoffSeconds; // 0 = the 10 s default; tests shorten it
 @property (nonatomic, strong) NSMutableArray<NSButton *> *macroButtons;
 
 // UI Controls - Live Transmit Telemetry (PWR & SWR)
@@ -1964,14 +1965,11 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
                 self.txAbortButton.enabled = YES;
                 self.carrierLockStatusLabel.stringValue = @"● TX (TUNING)";
                 self.carrierLockStatusLabel.textColor = [NSColor systemRedColor];
-                [self.keyer startContinuousCarrierWithPitchHz:self.keyer.sidetonePitchHz];
                 [self startTXMeterPolling];
-                if (self.logHandler) {
-                    self.logHandler(@"CW Station: Transceiver keyed to TX (Manual Tune)");
-                }
-                // Automatic 10-second safety cutoff timer for Tune
+                // Automatic safety cutoff for Tune, armed before the carrier so nothing below can skip it
+                double cutoff = self.manualTuneCutoffSeconds > 0 ? self.manualTuneCutoffSeconds : 10.0;
                 __weak typeof(self) weakSelf = self;
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(10.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(cutoff * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                     typeof(self) strongSelf = weakSelf;
                     if (strongSelf && strongSelf.isManualTuneActive) {
                         [strongSelf stopManualTransmit];
@@ -1980,6 +1978,10 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
                         }
                     }
                 });
+                [self.keyer startContinuousCarrierWithPitchHz:self.keyer.sidetonePitchHz];
+                if (self.logHandler) {
+                    self.logHandler(@"CW Station: Transceiver keyed to TX (Manual Tune)");
+                }
             } else {
                 if (self.logHandler) {
                     self.logHandler(@"CW Station: Could not key transceiver to TX (check CAT connection)");

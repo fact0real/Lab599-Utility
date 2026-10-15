@@ -15,6 +15,26 @@
 #import "TX500CloudSyncEngine.h"
 #import <objc/runtime.h>
 
+// Stand-ins for the sidetone engine and player that only raise, as AVAudioEngine does when it was
+// stopped by an output change. No audio device is opened: the format is a plain description.
+@interface RaisingSidetoneEngine : NSObject
+@end
+@implementation RaisingSidetoneEngine
+- (id)mainMixerNode { return self; }
+- (AVAudioFormat *)outputFormatForBus:(NSUInteger)bus { (void)bus; return [[AVAudioFormat alloc] initStandardFormatWithSampleRate:48000.0 channels:1]; }
+- (void)stop {}
+@end
+@interface RaisingSidetonePlayer : NSObject
+@end
+@implementation RaisingSidetonePlayer
+- (BOOL)isPlaying { return NO; }
+- (void)stop {}
+- (void)play { [NSException raise:@"CWStationTests" format:@"sidetone engine not running"]; }
+- (void)scheduleBuffer:(AVAudioPCMBuffer *)buffer atTime:(AVAudioTime *)when options:(AVAudioPlayerNodeBufferOptions)options completionHandler:(void (^)(void))handler {
+    (void)buffer; (void)when; (void)options; (void)handler; [NSException raise:@"CWStationTests" format:@"sidetone engine not running"];
+}
+@end
+
 // Station button actions the tests press directly (no window is opened).
 @interface TX500CWStationController (ButtonsForTests)
 - (void)rosterAnswerClicked:(NSButton *)sender;
@@ -265,6 +285,57 @@ int main(int argc, const char * argv[]) {
         AssertTrue([sentCommands containsObject:@"RX;"], @"Keyer unkeys with RX;");
         AssertTrue(!keyer.isTransmitting, @"Keyer transmission terminated");
         NSLog(@"PASS: Keyer audio-based Morse transmission and PTT sequencing verified.");
+
+        // 6b. The release timers are armed before any sound. A sidetone that raises (the engine
+        // stopped by an output change) neither escapes the keyer nor skips the RX; release; a Morse
+        // audio stage that raises still gets RX; at the estimated end; and the Tune cutoff is armed
+        // before the carrier starts. "E" at 45 WPM has the 0.2 s floor estimate.
+        TX500CWKeyer *soundKeyer = [[TX500CWKeyer alloc] init];
+        soundKeyer.wpm = 45;
+        __block NSMutableArray<NSString *> *soundCmds = [NSMutableArray array];
+        __block NSMutableArray<NSString *> *soundLog = [NSMutableArray array];
+        soundKeyer.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) { [soundCmds addObject:catCommand]; return YES; };
+        soundKeyer.logHandler = ^(NSString *line) { [soundLog addObject:line]; };
+        [soundKeyer setValue:[RaisingSidetoneEngine new] forKey:@"sidetoneEngine"];
+        [soundKeyer setValue:[RaisingSidetonePlayer new] forKey:@"sidetonePlayer"];
+        [soundKeyer setValue:@YES forKey:@"sidetoneEngineReady"];
+        BOOL raised = NO;
+        @try { [soundKeyer transmitText:@"E" targetCall:@"" rst:@"" name:@"" qth:@""]; } @catch (NSException *e) { (void)e; raised = YES; }
+        AssertTrue(!raised && soundKeyer.isTransmitting && [soundCmds containsObject:@"TX;"], @"A raising sidetone does not stop the transmission");
+        AssertTrue(![[soundKeyer valueForKey:@"sidetoneEngineReady"] boolValue], @"A raising sidetone is switched off for the session");
+        BOOL sidetoneLogged = NO; for (NSString *line in soundLog) if ([line containsString:@"sidetone"]) sidetoneLogged = YES;
+        AssertTrue(sidetoneLogged, @"The console says the sidetone is off");
+        [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.7]];
+        AssertTrue(!soundKeyer.isTransmitting && [soundCmds containsObject:@"RX;"], @"RX; still goes out at the estimated end after a sidetone failure");
+        Method morseAudioMethod = class_getInstanceMethod([TX500CWKeyer class], NSSelectorFromString(@"playMorseAudioForText:wpm:pitchHz:token:"));
+        IMP morseAudioOriginal = method_setImplementation(morseAudioMethod, imp_implementationWithBlock(^double(id k, NSString *t, NSInteger w, double p, NSUInteger tok) {
+            (void)k; (void)t; (void)w; (void)p; (void)tok; [NSException raise:@"CWStationTests" format:@"Morse audio failed"]; return 0; }));
+        [soundCmds removeAllObjects];
+        raised = NO;
+        @try { [soundKeyer transmitText:@"E" targetCall:@"" rst:@"" name:@"" qth:@""]; } @catch (NSException *e) { (void)e; raised = YES; }
+        AssertTrue(raised && [soundCmds containsObject:@"TX;"], @"The Morse audio stage raised after TX; (what the app's event loop swallows)");
+        [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.7]];
+        AssertTrue(!soundKeyer.isTransmitting && [soundCmds containsObject:@"RX;"], @"RX; goes out at the estimated end even when the audio stage raised");
+        method_setImplementation(morseAudioMethod, morseAudioOriginal);
+        [soundKeyer setValue:@YES forKey:@"sidetoneEngineReady"];
+        raised = NO;
+        @try { [soundKeyer startContinuousCarrierWithPitchHz:650.0]; } @catch (NSException *e) { (void)e; raised = YES; }
+        AssertTrue(!raised && [[soundKeyer valueForKey:@"isContinuousCarrier"] boolValue], @"A raising sidetone does not stop the tuning carrier");
+        [soundKeyer stopContinuousCarrier];
+        TX500CWStationController *tuneStation = [TX500CWStationController new];
+        __block NSMutableArray<NSString *> *tuneCmds = [NSMutableArray array];
+        tuneStation.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) { [tuneCmds addObject:catCommand]; return YES; };
+        [tuneStation setValue:@0.2 forKey:@"manualTuneCutoffSeconds"];
+        Method carrierMethod = class_getInstanceMethod([TX500CWKeyer class], @selector(startContinuousCarrierWithPitchHz:));
+        IMP carrierOriginal = method_setImplementation(carrierMethod, imp_implementationWithBlock(^(id k, double p) { (void)k; (void)p; [NSException raise:@"CWStationTests" format:@"carrier failed"]; }));
+        raised = NO;
+        @try { [tuneStation toggleManualTransmit]; } @catch (NSException *e) { (void)e; raised = YES; }
+        method_setImplementation(carrierMethod, carrierOriginal);
+        AssertTrue(raised && tuneStation.isManualTuneActive && [tuneCmds containsObject:@"TX;"], @"The carrier stage raised after TX;");
+        AssertTrue([tuneStation valueForKey:@"txMeterPollingTimer"] != nil, @"Meter polling was started before the carrier");
+        [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.6]];
+        AssertTrue(!tuneStation.isManualTuneActive && [tuneCmds containsObject:@"RX;"], @"The Tune cutoff armed before the carrier still releases the radio");
+        NSLog(@"PASS: Release timers and the Tune cutoff are armed before any sound.");
 
         // 7. Test QSO Assistant Pattern Detection & Callsign Extraction
         TX500CWQSOAssistant *assistant = [[TX500CWQSOAssistant alloc] init];

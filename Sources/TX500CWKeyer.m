@@ -205,6 +205,14 @@ static NSString *CWKeyerFindBestUSBAudioOutputUID(void) {
     }
 }
 
+// The sidetone is a convenience. When AVAudioEngine refuses (it stops after an output device or
+// format change), switch it off for this session and say so, instead of raising out of a
+// transmission and skipping what follows.
+- (void)disableSidetoneAfterFailure:(NSException *)exception {
+    self.sidetoneEngineReady = NO;
+    if (self.logHandler) self.logHandler([NSString stringWithFormat:@"CW sidetone unavailable (%@); transmitting without sidetone.", exception.reason ?: exception.name]);
+}
+
 static void CWKeyerRadioOutputCallback(void *inUserData,
                                        AudioQueueRef inAQ,
                                        AudioQueueBufferRef inBuffer) {
@@ -471,16 +479,20 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
 
     // 1. Play local sidetone to Mac speakers/headphones
     if (self.sidetoneEnabled && self.sidetoneEngineReady && self.sidetonePlayer) {
-        AVAudioFormat *sideFmt = [self.sidetoneEngine.mainMixerNode outputFormatForBus:0];
-        if (sideFmt && sideFmt.sampleRate > 0) {
-            NSMutableArray<NSDictionary *> *sideIntervals = buildIntervalsForRate(sideFmt.sampleRate);
-            AVAudioPCMBuffer *sideBuf = TX500GenerateMorsePCMBuffer(sideFmt, sideIntervals, pitch, self.sidetoneVolume * 0.28f);
-            if (sideBuf && token == self.transmissionGeneration && self.isTransmitting) {
-                [self.sidetonePlayer scheduleBuffer:sideBuf atTime:nil options:0 completionHandler:nil];
-                if (!self.sidetonePlayer.isPlaying) {
-                    [self.sidetonePlayer play];
+        @try {
+            AVAudioFormat *sideFmt = [self.sidetoneEngine.mainMixerNode outputFormatForBus:0];
+            if (sideFmt && sideFmt.sampleRate > 0) {
+                NSMutableArray<NSDictionary *> *sideIntervals = buildIntervalsForRate(sideFmt.sampleRate);
+                AVAudioPCMBuffer *sideBuf = TX500GenerateMorsePCMBuffer(sideFmt, sideIntervals, pitch, self.sidetoneVolume * 0.28f);
+                if (sideBuf && token == self.transmissionGeneration && self.isTransmitting) {
+                    [self.sidetonePlayer scheduleBuffer:sideBuf atTime:nil options:0 completionHandler:nil];
+                    if (!self.sidetonePlayer.isPlaying) {
+                        [self.sidetonePlayer play];
+                    }
                 }
             }
+        } @catch (NSException *exception) {
+            [self disableSidetoneAfterFailure:exception];
         }
     }
 
@@ -610,8 +622,8 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
         }
     }
 
-    // 2. Synthesize and play authentic Morse code audio to Mac speakers & Radio USB Audio
-    double totalEstSec = [self playMorseAudioForText:expanded wpm:clampedWPM pitchHz:self.sidetonePitchHz token:token];
+    // 2. Arm the release first: the completion and the watchdog must depend on nothing below.
+    double totalEstSec = [self estimatedDurationForText:expanded wpm:clampedWPM];
 
     // 3. Completion callback when transmission finishes
     __weak typeof(self) weakSelf = self;
@@ -646,6 +658,9 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
             [strongSelf abortTransmission];
         }
     });
+
+    // 5. Synthesize and play authentic Morse code audio to Mac speakers & Radio USB Audio
+    [self playMorseAudioForText:expanded wpm:clampedWPM pitchHz:self.sidetonePitchHz token:token];
 }
 
 - (void)abortTransmission {
@@ -688,25 +703,29 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
     pthread_mutex_unlock(&_radioAudioLock);
 
     if (self.sidetoneEngineReady && self.sidetonePlayer && self.sidetoneEnabled) {
-        AVAudioFormat *fmt = [self.sidetoneEngine.mainMixerNode outputFormatForBus:0];
-        if (fmt && fmt.sampleRate > 0) {
-            double sampleRate = fmt.sampleRate;
-            NSUInteger frames = (NSUInteger)sampleRate;
-            AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:fmt frameCapacity:(AVAudioFrameCount)frames];
-            buffer.frameLength = (AVAudioFrameCount)frames;
-            double omega = 2.0 * M_PI * pitch / sampleRate;
-            float vol = self.sidetoneVolume * 0.20f;
-            for (int ch = 0; ch < (int)fmt.channelCount; ch++) {
-                float *data = buffer.floatChannelData[ch];
-                double phase = 0;
-                for (NSUInteger i = 0; i < frames; i++) {
-                    data[i] = vol * sin(phase);
-                    phase += omega;
+        @try {
+            AVAudioFormat *fmt = [self.sidetoneEngine.mainMixerNode outputFormatForBus:0];
+            if (fmt && fmt.sampleRate > 0) {
+                double sampleRate = fmt.sampleRate;
+                NSUInteger frames = (NSUInteger)sampleRate;
+                AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:fmt frameCapacity:(AVAudioFrameCount)frames];
+                buffer.frameLength = (AVAudioFrameCount)frames;
+                double omega = 2.0 * M_PI * pitch / sampleRate;
+                float vol = self.sidetoneVolume * 0.20f;
+                for (int ch = 0; ch < (int)fmt.channelCount; ch++) {
+                    float *data = buffer.floatChannelData[ch];
+                    double phase = 0;
+                    for (NSUInteger i = 0; i < frames; i++) {
+                        data[i] = vol * sin(phase);
+                        phase += omega;
+                    }
                 }
+                [self.sidetonePlayer stop];
+                [self.sidetonePlayer scheduleBuffer:buffer atTime:nil options:AVAudioPlayerNodeBufferLoops completionHandler:nil];
+                [self.sidetonePlayer play];
             }
-            [self.sidetonePlayer stop];
-            [self.sidetonePlayer scheduleBuffer:buffer atTime:nil options:AVAudioPlayerNodeBufferLoops completionHandler:nil];
-            [self.sidetonePlayer play];
+        } @catch (NSException *exception) {
+            [self disableSidetoneAfterFailure:exception];
         }
     }
 }

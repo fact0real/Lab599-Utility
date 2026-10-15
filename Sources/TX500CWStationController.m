@@ -2020,6 +2020,11 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
             return;
         }
         [self prepareRadioForCWMode];
+        // No TX; before the radio's audio output is open and running: the carrier needs it.
+        if (![self.keyer ensureRadioAudioReady]) {
+            if (self.logHandler) self.logHandler(@"CW Station: TX (Tune) not started: the radio audio output is not available.");
+            return;
+        }
         NSString *txCmd = self.keyer.txPrefixCommand.length > 0 ? self.keyer.txPrefixCommand : @"TX;";
         if (self.serialCommandSender) {
             BOOL ok = self.serialCommandSender(txCmd);

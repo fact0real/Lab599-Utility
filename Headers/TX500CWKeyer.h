@@ -64,6 +64,8 @@ NS_ASSUME_NONNULL_BEGIN
 // The output that will carry the transmit audio: the profile's radioOutputDeviceUID, else the
 // pair, else nil. Never a device picked by its transport (the first USB output of the Mac).
 - (nullable NSString *)radioAudioTargetUID;
+// YES only when the radio's output queue is open and running; the station calls it before keying.
+- (BOOL)ensureRadioAudioReady;
 @property (nonatomic, copy, nullable) NSString *txPrefixCommand;
 @property (nonatomic, copy, nullable) NSString *rxSuffixCommand;
 // Called on the main thread after the time-out silenced and released the radio.

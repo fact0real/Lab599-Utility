@@ -419,6 +419,55 @@ int main(int argc, const char * argv[]) {
                    [[routeStation.keyer radioAudioTargetUID] isEqualToString:@"profile-out"], @"the station never overwrites the profile's output");
         method_setImplementation(firstUSBMethod, firstUSBOriginal);
         NSLog(@"PASS: CW transmit audio goes only to the radio's own output.");
+        // 6c (continued). No keying before the radio's audio output is open: with the output
+        // refused, Send and TX (Tune) send no TX;, start nothing and say why. Practice needs no
+        // radio output. With the output ready (twice in a row, from the queue already open) the
+        // keying is unchanged.
+        Method readyMethod = class_getInstanceMethod([TX500CWKeyer class], @selector(ensureRadioAudioReady));
+        __block NSUInteger readyCalls = 0;
+        IMP readyOriginal = method_setImplementation(readyMethod, imp_implementationWithBlock(^BOOL(id k) { (void)k; readyCalls++; return NO; }));
+        TX500CWStationController *readyStation = [TX500CWStationController new];
+        readyStation.keyer.myCallsign = @"EA3JIC";
+        readyStation.keyer.wpm = 45;
+        __block NSMutableArray<NSString *> *readyCmds = [NSMutableArray array];
+        __block NSMutableArray<NSString *> *readyLog = [NSMutableArray array];
+        readyStation.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) { [readyCmds addObject:catCommand]; return YES; };
+        readyStation.logHandler = ^(NSString *line) { [readyLog addObject:line]; };
+        NSUInteger readyHistory = readyStation.keyer.sentHistory.count;
+        NSTextField *readyStatus = [readyStation valueForKey:@"carrierLockStatusLabel"];
+        [readyStation.keyer transmitText:@"E" targetCall:@"" rst:@"" name:@"" qth:@""];
+        AssertTrue(readyCalls == 1 && ![readyCmds containsObject:@"TX;"] && !readyStation.keyer.isTransmitting &&
+                   readyStation.keyer.sentHistory.count == readyHistory && ![readyStatus.stringValue containsString:@"ON THE AIR"],
+                   @"no audio output, no keying");
+        [readyStation toggleManualTransmit];
+        BOOL tuneRefusalLogged = NO; for (NSString *line in readyLog) if ([line containsString:@"not started"]) tuneRefusalLogged = YES;
+        AssertTrue(![readyCmds containsObject:@"TX;"] && !readyStation.isManualTuneActive && tuneRefusalLogged,
+                   @"no audio output, no Tune");
+        NSButton *readyPractice = [readyStation valueForKey:@"simulationCheckbox"];
+        readyPractice.state = NSControlStateValueOn;
+        [readyStation toggleSimulation:readyPractice];
+        readyCalls = 0;
+        [readyStation.keyer transmitText:@"E" targetCall:@"" rst:@"" name:@"" qth:@""];
+        AssertTrue(readyStation.keyer.isTransmitting && readyCalls == 0, @"practice needs no radio output");
+        [readyStation.keyer abortTransmission];
+        readyPractice.state = NSControlStateValueOff;
+        [readyStation toggleSimulation:readyPractice];
+        method_setImplementation(readyMethod, readyOriginal);
+        // The queue already open on the chosen output answers YES from its properties alone.
+        readyStation.keyer.radioOutputDeviceUID = @"radio-out";
+        [readyStation.keyer setValue:@YES forKey:@"radioQueueReady"];
+        [readyStation.keyer setValue:@"radio-out" forKey:@"activeRadioUID"];
+        AssertTrue([readyStation.keyer ensureRadioAudioReady] && [readyStation.keyer ensureRadioAudioReady],
+                   @"the queue already open on the radio output is ready every time");
+        for (int send = 0; send < 2; send++) {
+            [readyCmds removeAllObjects];
+            [readyStation.keyer transmitText:@"E" targetCall:@"" rst:@"" name:@"" qth:@""];
+            AssertTrue([readyCmds containsObject:@"TX;"] && readyStation.keyer.isTransmitting, @"with the output ready the keying is unchanged");
+            [readyStation.keyer abortTransmission];
+        }
+        [readyStation.keyer setValue:@NO forKey:@"radioQueueReady"];
+        [readyStation.keyer setValue:nil forKey:@"activeRadioUID"];
+        NSLog(@"PASS: No keying before the radio audio output is ready.");
 
         // 7. Test QSO Assistant Pattern Detection & Callsign Extraction
         TX500CWQSOAssistant *assistant = [[TX500CWQSOAssistant alloc] init];
@@ -624,7 +673,7 @@ int main(int argc, const char * argv[]) {
         // ensureRadioAudioReady is counted while this runs (in tests it opens nothing anyway).
         Method radioAudioMethod = class_getInstanceMethod([TX500CWKeyer class], NSSelectorFromString(@"ensureRadioAudioReady"));
         __block NSUInteger radioAudioCalls = 0;
-        IMP radioAudioOriginal = method_setImplementation(radioAudioMethod, imp_implementationWithBlock(^(id k) { (void)k; radioAudioCalls++; }));
+        IMP radioAudioOriginal = method_setImplementation(radioAudioMethod, imp_implementationWithBlock(^BOOL(id k) { (void)k; radioAudioCalls++; return YES; }));
         TX500CWStationController *simKeyerStation = [TX500CWStationController new];
         simKeyerStation.keyer.myCallsign = @"EA3JIC";
         __block NSMutableArray<NSString *> *simKeyerCmds = [NSMutableArray array];

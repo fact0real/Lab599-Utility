@@ -280,15 +280,20 @@ static void CWKeyerRadioOutputCallback(void *inUserData,
     self.activeRadioUID = nil;
 }
 
-- (void)ensureRadioAudioReady {
-    if (NSProcessInfo.processInfo.environment[@"TX500_TEST_MODE"].boolValue) return;
-
+// YES only when the radio's output queue is open and running. The station and transmitText ask
+// before anything is keyed: a missing or wrong route must not key the radio with no modulation.
+- (BOOL)ensureRadioAudioReady {
     NSString *targetUID = [self radioAudioTargetUID];
-    if (!targetUID.length) {
-        return;
+    // The queue already open on the chosen output (decided from properties only, before the
+    // test mode below, so the tests see this path too).
+    if (targetUID.length && self.radioQueueReady && [self.activeRadioUID isEqualToString:targetUID]) {
+        return YES;
     }
-    if (self.radioQueueReady && [self.activeRadioUID isEqualToString:targetUID]) {
-        return;
+    if (NSProcessInfo.processInfo.environment[@"TX500_TEST_MODE"].boolValue) return YES;
+
+    if (!targetUID.length) {
+        if (self.logHandler) self.logHandler(@"[CW TX blocked] No radio transmit output: choose it in Station.");
+        return NO;
     }
     [self teardownRadioAudio];
 
@@ -310,8 +315,9 @@ static void CWKeyerRadioOutputCallback(void *inUserData,
                                           0,
                                           &_radioOutputQueue);
     if (status != noErr) {
-        NSLog(@"TX500CWKeyer: AudioQueueNewOutput failed with status %d", (int)status);
-        return;
+        _radioOutputQueue = NULL;
+        if (self.logHandler) self.logHandler([NSString stringWithFormat:@"[CW TX blocked] Radio transmit output %@ could not be opened (AudioQueueNewOutput %d).", targetUID, (int)status]);
+        return NO;
     }
 
     CFStringRef uidRef = (__bridge CFStringRef)targetUID;
@@ -320,10 +326,10 @@ static void CWKeyerRadioOutputCallback(void *inUserData,
                                    &uidRef,
                                    sizeof(uidRef));
     if (status != noErr) {
-        NSLog(@"TX500CWKeyer: AudioQueueSetProperty current device failed (%d) for UID %@", (int)status, targetUID);
         AudioQueueDispose(_radioOutputQueue, true);
         _radioOutputQueue = NULL;
-        return;
+        if (self.logHandler) self.logHandler([NSString stringWithFormat:@"[CW TX blocked] Radio transmit output %@ is not available (set device %d): choose it again in Station.", targetUID, (int)status]);
+        return NO;
     }
 
     for (int i = 0; i < 3; i++) {
@@ -338,14 +344,29 @@ static void CWKeyerRadioOutputCallback(void *inUserData,
     }
 
     status = AudioQueueStart(_radioOutputQueue, NULL);
-    if (status == noErr) {
-        self.radioQueueReady = YES;
-        self.activeRadioUID = targetUID;
-        NSLog(@"TX500CWKeyer: Radio AudioQueue ready on %@", targetUID);
-    } else {
-        NSLog(@"TX500CWKeyer: AudioQueueStart failed (%d)", (int)status);
+    if (status != noErr) {
         [self teardownRadioAudio];
+        if (self.logHandler) self.logHandler([NSString stringWithFormat:@"[CW TX blocked] Radio transmit output %@ did not start (AudioQueueStart %d).", targetUID, (int)status]);
+        return NO;
     }
+    // IsRunning follows the device start, not the AudioQueueStart call (a USB codec can take a
+    // moment to start): wait for it, at most 1 s, once per opening of the queue.
+    UInt32 running = 0;
+    for (int tries = 0; tries <= 100; tries++) {
+        UInt32 size = sizeof(running);
+        status = AudioQueueGetProperty(_radioOutputQueue, kAudioQueueProperty_IsRunning, &running, &size);
+        if (status != noErr || running) break;
+        [NSThread sleepForTimeInterval:0.01];
+    }
+    if (status != noErr || !running) {
+        [self teardownRadioAudio];
+        if (self.logHandler) self.logHandler([NSString stringWithFormat:@"[CW TX blocked] Radio transmit output %@ is not running (status %d).", targetUID, (int)status]);
+        return NO;
+    }
+    self.radioQueueReady = YES;
+    self.activeRadioUID = targetUID;
+    NSLog(@"TX500CWKeyer: Radio AudioQueue ready on %@", targetUID);
+    return YES;
 }
 
 static NSDictionary<NSString *, NSString *> *TX500MorseCodeMap(void) {
@@ -512,8 +533,6 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
     BOOL practice = self.practiceModeActive && self.practiceModeActive();
     if (practice) {
         if (self.radioQueueReady) [self teardownRadioAudio];
-    } else {
-        [self ensureRadioAudioReady];
     }
     if (!practice && self.radioQueueReady) {
         NSMutableArray<NSDictionary *> *radIntervals = buildIntervalsForRate(48000.0);
@@ -608,6 +627,9 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
     }
 
     [self abortTransmission];
+    // No keying before the radio's audio output is open and running (practice opens none).
+    BOOL practice = self.practiceModeActive && self.practiceModeActive();
+    if (!practice && ![self ensureRadioAudioReady]) return;
     NSUInteger token=self.transmissionGeneration;
     self.isTransmitting = YES;
     self.activeBufferText = expanded;

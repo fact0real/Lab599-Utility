@@ -85,6 +85,9 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
 @property (nonatomic, strong) NSButton *simulationCheckbox;
 @property (nonatomic, strong) NSPopUpButton *modePopup;
 @property (nonatomic, strong, nullable) NSTimer *autoCQMonitorTimer;
+// The last RX; was not confirmed by the radio. Atomic: the keyer's time-out sends its RX; from its own
+// queue, so this is written off the main thread too, and read on the main thread.
+@property (atomic, assign) BOOL releaseNotConfirmed;
 @property (nonatomic, strong) NSSlider *pitchSlider;
 @property (nonatomic, strong) NSTextField *pitchValueLabel;
 @property (nonatomic, strong) NSButton *afcCheckbox;
@@ -356,11 +359,14 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
     // Keyer -> Serial Sender & Log
     self.keyer.serialCommandSender = ^BOOL(NSString *catCommand) {
         typeof(self) strongSelf = weakSelf;
-        if (strongSelf.decoder.isSimulationActive) return YES;
+        if (strongSelf.decoder.isSimulationActive) { strongSelf.releaseNotConfirmed = NO; return YES; }
+        BOOL ok = NO;
         if (strongSelf && strongSelf.serialCommandSender) {
-            return strongSelf.serialCommandSender(catCommand);
+            ok = strongSelf.serialCommandSender(catCommand);
         }
-        return NO;
+        // The keyer's releases ignore the answer: keep it, so the pane says when RX was not confirmed.
+        if ([catCommand hasPrefix:@"RX"]) strongSelf.releaseNotConfirmed = !ok;
+        return ok;
     };
     // The same Practice / Sim decision for the keyer's audio: in practice it never opens or feeds
     // the radio output. (The CAT gate above returns YES on purpose, so it cannot serve for this.)
@@ -399,6 +405,7 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
             if (!strongSelf.isManualTuneActive) {
                 [strongSelf stopTXMeterPolling];
             }
+            if (!strongSelf.isManualTuneActive && strongSelf.releaseNotConfirmed) [strongSelf showReleaseNotConfirmed];
         }
         (void)text;
     };
@@ -2097,13 +2104,23 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
         [self.keyer stopContinuousCarrier];
         [self stopTXMeterPolling];
         NSString *rxCmd = self.keyer.rxSuffixCommand.length > 0 ? self.keyer.rxSuffixCommand : @"RX;";
-        if (self.serialCommandSender) {
-            self.serialCommandSender(rxCmd);
-        }
-        if (self.logHandler) {
+        BOOL released = self.serialCommandSender && self.serialCommandSender(rxCmd);
+        self.releaseNotConfirmed = !released;
+        if (!released) {
+            [self showReleaseNotConfirmed];
+        } else if (self.logHandler) {
             self.logHandler(@"CW Station: Transceiver returned to RX");
         }
     }
+}
+
+// The radio did not confirm RX: say so, and keep ABORT usable (it sends RX; again).
+- (void)showReleaseNotConfirmed {
+    self.carrierLockStatusLabel.stringValue = @"● TX? RX NOT CONFIRMED";
+    self.carrierLockStatusLabel.textColor = [NSColor systemRedColor];
+    self.txAbortButton.enabled = YES;
+    if (self.logHandler)
+        self.logHandler(@"CW Station: RX NOT confirmed by the radio: press ABORT again, or Esc (Stop all), and check the radio's PTT.");
 }
 
 #pragma mark - Live Transmit Telemetry Polling (PWR & SWR)

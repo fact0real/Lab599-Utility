@@ -1081,6 +1081,56 @@ int main(int argc, const char * argv[]) {
                    @"with the retune accepted the answer goes out");
         [retuneStation.keyer abortTransmission];
         NSLog(@"PASS: The wideband Answer goes out only after the radio accepted the retune.");
+        // 13d. A radio that does not confirm RX (still in TX, or its PTT held): the pane says so in
+        // red instead of LISTENING, and ABORT stays enabled, since it sends RX; again. A confirmed RX
+        // clears it. The keyer's own release at the end of a message is checked the same way.
+        TX500CWStationController *rxStation = [TX500CWStationController new];
+        rxStation.keyer.myCallsign = @"EA3JIC";
+        rxStation.assistant.myCallsign = @"EA3JIC";
+        __block BOOL rxRefused = YES;
+        __block NSMutableArray<NSString *> *rxCmds = [NSMutableArray array];
+        __block NSMutableArray<NSString *> *rxLog = [NSMutableArray array];
+        rxStation.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) {
+            [rxCmds addObject:catCommand];
+            return !(rxRefused && [catCommand hasPrefix:@"RX"]);
+        };
+        rxStation.logHandler = ^(NSString *line) { [rxLog addObject:line]; };
+        NSTextField *rxLabel = [rxStation valueForKey:@"carrierLockStatusLabel"];
+        NSButton *rxAbort = [rxStation valueForKey:@"txAbortButton"];
+        NSUInteger (^rxCount)(void) = ^NSUInteger {
+            NSUInteger n = 0;
+            for (NSString *cmd in rxCmds) if ([cmd hasPrefix:@"RX"]) n++;
+            return n;
+        };
+        [rxStation toggleManualTransmit];
+        AssertTrue(rxStation.isManualTuneActive, @"Tune keys the radio before the RX test");
+        [rxLog removeAllObjects];
+        [rxStation toggleManualTransmit];
+        BOOL rxClaimsReturned = NO;
+        for (NSString *line in rxLog) if ([line containsString:@"returned to RX"]) rxClaimsReturned = YES;
+        AssertTrue(!rxStation.isManualTuneActive && [rxLog.lastObject containsString:@"RX NOT confirmed"] && !rxClaimsReturned &&
+                   [rxLabel.stringValue isEqualToString:@"● TX? RX NOT CONFIRMED"] && rxAbort.enabled,
+                   @"an unconfirmed RX is said and ABORT stays usable");
+        NSUInteger rxBefore = rxCount();
+        [rxStation performSelector:@selector(txAbortClicked:) withObject:nil];
+        AssertTrue(rxCount() == rxBefore + 1 && rxAbort.enabled && [rxLabel.stringValue isEqualToString:@"● TX? RX NOT CONFIRMED"],
+                   @"ABORT re-sends RX;");
+        rxRefused = NO;
+        [rxStation performSelector:@selector(txAbortClicked:) withObject:nil];
+        AssertTrue([rxLabel.stringValue isEqualToString:@"○ LISTENING"] && !rxAbort.enabled, @"a confirmed RX clears it");
+        rxRefused = YES;
+        rxStation.keyer.wpm = 45;
+        [rxStation.keyer transmitText:@"E" targetCall:@"" rst:@"" name:@"" qth:@""];
+        AssertTrue(rxStation.keyer.isTransmitting, @"the keyer sends E before its own release");
+        [rxLog removeAllObjects];
+        [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.7]];
+        BOOL rxKeyerSays = NO;
+        for (NSString *line in rxLog) if ([line containsString:@"RX NOT confirmed"]) rxKeyerSays = YES;
+        AssertTrue(!rxStation.keyer.isTransmitting && [rxLabel.stringValue isEqualToString:@"● TX? RX NOT CONFIRMED"] && rxAbort.enabled && rxKeyerSays,
+                   @"the message's own release is checked too");
+        rxRefused = NO;
+        [rxStation.keyer abortTransmission];
+        NSLog(@"PASS: An unconfirmed RX is said as such and ABORT stays enabled.");
 
         decoder.preserveDeviceSelection=YES; decoder.selectedAudioDeviceUID=@"station-test-missing-input";
         [decoder refreshAudioDevices];

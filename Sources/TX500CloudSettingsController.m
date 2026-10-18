@@ -9,6 +9,7 @@
 
 #import "TX500CloudSettingsController.h"
 #import "TX500SecretStore.h"
+#import "TX500TimeDiscipline.h"
 #import "TX500CloudSyncEngine.h"
 #import "TX500WebAuthenticatorController.h"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
@@ -90,7 +91,7 @@ NSString * const TX500CloudSettingsDidChangeNotification = @"TX500CloudSettingsD
     _settingsView.translatesAutoresizingMaskIntoConstraints = NO;
 
     // Segmented Tab Selector
-    NSArray *titles = @[@"LoTW", @"QRZ.com", @"Club Log", @"eQSL.cc", @"HamQTH"];
+    NSArray *titles = @[@"LoTW", @"QRZ.com", @"Club Log", @"eQSL.cc", @"HamQTH", @"Privacy"];
     self.tabSegment = [NSSegmentedControl segmentedControlWithLabels:titles
                                                         trackingMode:NSSegmentSwitchTrackingSelectOne
                                                               target:self
@@ -156,9 +157,59 @@ NSString * const TX500CloudSettingsDidChangeNotification = @"TX500CloudSettingsD
     [self.tabView addTabViewItem:[self createClubLogTabItem]];
     [self.tabView addTabViewItem:[self createEQSLTabItem]];
     [self.tabView addTabViewItem:[self createHamQTHTabItem]];
+    [self.tabView addTabViewItem:[self createPrivacyTabItem]];
     if (self.tabView.numberOfTabViewItems > 0) {
         [self.tabView selectTabViewItemAtIndex:0];
     }
+}
+
+- (NSTabViewItem *)createPrivacyTabItem {
+    NSTabViewItem *item = [[NSTabViewItem alloc] initWithIdentifier:@"privacy"];
+    NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 640, 470)];
+    scroll.hasVerticalScroller = YES;
+    scroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    NSView *content = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 640, 620)];
+    content.autoresizingMask = NSViewWidthSizable;
+    scroll.documentView = content;
+    item.view = scroll;
+    NSArray *options = @[
+        @[@"TX500_Cloud_AutoUploadEnabled", @"Automatically upload newly saved QSOs"],
+        @[@"TX500_Cloud_UploadQRZ", @"Enable QRZ uploads"],
+        @[@"TX500_Cloud_UploadClubLog", @"Enable Club Log uploads"],
+        @[@"TX500_Cloud_UploadEQSL", @"Enable eQSL uploads"],
+        @[@"TX500_Cloud_UploadLoTW", @"Enable LoTW uploads"],
+        @[@"TX500_UploadShareNameAndQTH", @"Share names, QTH and station profile descriptions"],
+        @[@"TX500_UploadShareContactDetails", @"Share contact email and precise grids (over 6 characters)"],
+        @[@"TX500_UploadShareFreeText", @"Share operator comments"],
+        @[@"TX500_NetworkTimeEnabled", @"Allow internet time synchronization (NTP)"]
+    ];
+    CGFloat y = 575;
+    for (NSArray *option in options) {
+        NSButton *button = [NSButton checkboxWithTitle:option[1] target:self action:@selector(privacyOptionChanged:)];
+        button.identifier = option[0];
+        button.state = [NSUserDefaults.standardUserDefaults boolForKey:option[0]] ? NSControlStateValueOn : NSControlStateValueOff;
+        button.frame = NSMakeRect(20, y, 600, 24);
+        button.autoresizingMask = NSViewWidthSizable;
+        [content addSubview:button];
+        y -= 38;
+    }
+    NSTextField *note = [NSTextField wrappingLabelWithString:@"Changes apply immediately. All options start off. Service switches apply to automatic and manual cloud uploads; the automatic-upload switch applies to new QSOs only. Local data and manual ADIF exports keep every field.\n\nLoTW always receives signing fields and grids up to 6 characters; TQSL adds its configured station location. Other services receive contact and award fields plus only the optional groups selected above.\n\nInternet time contacts time.cloudflare.com, time.apple.com and time.nist.gov over UDP 123 when enabled and Time Sync or FT8 is opened, then every 15 minutes. Your IP address and a clock timestamp are exposed. No HTTPS clock fallback is used."];
+    note.frame = NSMakeRect(20, 15, 600, 200);
+    note.autoresizingMask = NSViewWidthSizable;
+    note.font = [NSFont systemFontOfSize:12];
+    note.textColor = NSColor.secondaryLabelColor;
+    [content addSubview:note];
+    return item;
+}
+
+- (void)privacyOptionChanged:(NSButton *)sender {
+    BOOL enabled = sender.state == NSControlStateValueOn;
+    [NSUserDefaults.standardUserDefaults setBool:enabled forKey:sender.identifier];
+    if ([sender.identifier isEqualToString:@"TX500_NetworkTimeEnabled"]) {
+        // Opt-in itself does not contact a server; opening Time Sync or starting FT8 does.
+        if (!enabled) [[TX500DisciplinedClock sharedClock] stopAutomaticNetworkSynchronization];
+    }
+    [NSNotificationCenter.defaultCenter postNotificationName:TX500CloudSettingsDidChangeNotification object:self];
 }
 
 - (void)tabChanged:(id)sender {

@@ -118,9 +118,7 @@
             [TX500CWMacro macroWithId:8 label:@"F8 Info" template:@"NAME {NAME} QTH {QTH} BK"]
         ]];
 
-        if (!NSProcessInfo.processInfo.environment[@"TX500_TEST_MODE"].boolValue) {
-            [self setupSidetoneAudio];
-        }
+
     }
     return self;
 }
@@ -610,6 +608,10 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
         return intervals;
     };
 
+    if (self.sidetoneEnabled && !self.sidetoneEngine &&
+        !NSProcessInfo.processInfo.environment[@"TX500_TEST_MODE"].boolValue) {
+        [self setupSidetoneAudio];
+    }
     // 1. Play local sidetone to Mac speakers/headphones
     if (self.sidetoneEnabled && self.sidetoneEngineReady && self.sidetonePlayer && [self localSidetoneRouteIsSafe]) {
         @try {

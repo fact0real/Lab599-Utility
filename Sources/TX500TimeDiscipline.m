@@ -416,58 +416,16 @@ static void EncodeNTP(uint8_t *p, double unixTime) {
     return success;
 }
 
-- (BOOL)queryHTTPSTimeURL:(NSURL *)url measurement:(NTPMeasurement *)outMeasurement {
-    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url
-        cachePolicy:NSURLRequestReloadIgnoringLocalAndRemoteCacheData timeoutInterval:3.0];
-    request.HTTPMethod = @"HEAD";
-    [request setValue:@"no-cache" forHTTPHeaderField:@"Cache-Control"];
-    double m1 = [self monotonicTime];
-    dispatch_semaphore_t done = dispatch_semaphore_create(0);
-    __block NSHTTPURLResponse *httpResponse = nil;
-    __block NSError *taskError = nil;
-    NSURLSessionDataTask *task = [NSURLSession.sharedSession dataTaskWithRequest:request
-        completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-            (void)data;
-            if ([response isKindOfClass:NSHTTPURLResponse.class]) httpResponse = (NSHTTPURLResponse *)response;
-            taskError = error;
-            dispatch_semaphore_signal(done);
-        }];
-    [task resume];
-    if (dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 4 * NSEC_PER_SEC)) != 0) {
-        [task cancel]; return NO;
-    }
-    double m4 = [self monotonicTime];
-    if (taskError || httpResponse.statusCode < 200 || httpResponse.statusCode >= 500) return NO;
-    NSString *dateValue = nil;
-    for (id key in httpResponse.allHeaderFields) {
-        if ([[key description] caseInsensitiveCompare:@"Date"] == NSOrderedSame) {
-            dateValue = [httpResponse.allHeaderFields[key] description]; break;
-        }
-    }
-    if (!dateValue.length) return NO;
-    NSDateFormatter *formatter = [NSDateFormatter new];
-    formatter.locale = [[NSLocale alloc] initWithLocaleIdentifier:@"en_US_POSIX"];
-    formatter.timeZone = [NSTimeZone timeZoneForSecondsFromGMT:0];
-    formatter.dateFormat = @"EEE',' dd MMM yyyy HH':'mm':'ss 'GMT'";
-    NSDate *serverDate = [formatter dateFromString:dateValue];
-    if (!serverDate) return NO;
-    double rtt = m4 - m1;
-    if (!isfinite(rtt) || rtt < 0.0 || rtt > 3.5) return NO;
-    // HTTP Date has one-second granularity. Its midpoint plus half the RTT is
-    // the least-biased estimate at receipt; quantization dominates sigma.
-    outMeasurement->referenceUTC = serverDate.timeIntervalSince1970 + 0.5 + rtt * 0.5;
-    outMeasurement->monotonic = m4;
-    outMeasurement->uncertainty = Clamp(0.5 + rtt * 0.5, 0.50, 2.0);
-    outMeasurement->offset = outMeasurement->referenceUTC - [self utcTimeIntervalForMonotonicTime:m4];
-    outMeasurement->delay = rtt;
-    return fabs(outMeasurement->offset) <= 5.0;
-}
-
 - (void)synchronizeNetworkNowWithCompletion:(void (^)(BOOL, NSString *))completion {
+    if (![NSUserDefaults.standardUserDefaults boolForKey:@"TX500_NetworkTimeEnabled"]) {
+        if (completion) completion(NO, @"Network time is disabled in Cloud Settings > Privacy.");
+        return;
+    }
     dispatch_async(_networkQueue, ^{
         NSArray<NSString *> *servers = @[@"time.cloudflare.com", @"time.apple.com", @"time.nist.gov"];
         NSMutableArray<NSDictionary *> *samples = [NSMutableArray array];
         for (NSString *server in servers) {
+            if (![NSUserDefaults.standardUserDefaults boolForKey:@"TX500_NetworkTimeEnabled"]) break;
             NTPMeasurement measurement;
             if ([self queryNTPServer:server measurement:&measurement]) {
                 double local = [self utcTimeIntervalForMonotonicTime:measurement.monotonic];
@@ -477,30 +435,13 @@ static void EncodeNTP(uint8_t *p, double unixTime) {
                     @"sigma": @(measurement.uncertainty), @"delay": @(measurement.delay)}];
             }
         }
-        BOOL usedHTTPSFallback = samples.count < 2;
-        if (usedHTTPSFallback) {
-            NSArray<NSURL *> *urls = @[
-                [NSURL URLWithString:@"https://www.google.com/generate_204"],
-                [NSURL URLWithString:@"https://cp.cloudflare.com/generate_204"],
-                [NSURL URLWithString:@"https://www.microsoft.com/favicon.ico"]
-            ];
-            for (NSURL *url in urls) {
-                NTPMeasurement measurement;
-                if ([self queryHTTPSTimeURL:url measurement:&measurement]) {
-                    [samples addObject:@{@"server": url.host ?: @"HTTPS", @"value": @(measurement.offset),
-                        @"weight": @(1.0 / (measurement.uncertainty * measurement.uncertainty)),
-                        @"mono": @(measurement.monotonic), @"reference": @(measurement.referenceUTC),
-                        @"sigma": @(measurement.uncertainty), @"delay": @(measurement.delay), @"https": @YES}];
-                }
-            }
-        }
         BOOL accepted = NO;
         NSString *detail;
-        if (samples.count >= 2) {
+        if (samples.count >= 2 && [NSUserDefaults.standardUserDefaults boolForKey:@"TX500_NetworkTimeEnabled"]) {
             double median = WeightedMedian(samples, @"value");
             NSMutableArray *inliers = [NSMutableArray array];
             for (NSDictionary *sample in samples) {
-                double agreementWindow = usedHTTPSFallback ? 1.10 : 0.100;
+                double agreementWindow = 0.100;
                 if (fabs([sample[@"value"] doubleValue] - median) <= agreementWindow) [inliers addObject:sample];
             }
             if (inliers.count >= 2) {
@@ -511,33 +452,23 @@ static void EncodeNTP(uint8_t *p, double unixTime) {
                 double combinedOffset = WeightedMedian(inliers, @"value");
                 double localAtCommon = [self utcTimeIntervalForMonotonicTime:commonMono];
                 double sigma = fmax([best[@"sigma"] doubleValue], 0.005);
-                if (usedHTTPSFallback) {
-                    NSMutableArray *spreadValues = [NSMutableArray arrayWithCapacity:inliers.count];
-                    for (NSDictionary *sample in inliers) {
-                        [spreadValues addObject:@{@"spread": @(fabs([sample[@"value"] doubleValue] - combinedOffset)),
-                                                  @"weight": sample[@"weight"]}];
-                    }
-                    double robustSpread = 1.4826 * WeightedMedian(spreadValues, @"spread");
-                    sigma = Clamp(sigma / sqrt((double)inliers.count) + robustSpread, 0.50, 1.50);
-                }
                 accepted = [self acceptUTCReference:localAtCommon + combinedOffset atMonotonicTime:commonMono
                                     uncertaintySeconds:sigma source:TX500TimeTrustStateNetwork stationCount:0];
                 detail = [NSString stringWithFormat:@"%lu time sources agreed%@; offset %+.3f s, uncertainty %.3f s.",
-                    (unsigned long)inliers.count, usedHTTPSFallback ? @" (TLS/HTTPS fallback active)" : @" via NTP",
+                    (unsigned long)inliers.count, @" via NTP",
                     combinedOffset, sigma];
-            } else detail = usedHTTPSFallback ?
-                @"Internet time sources responded but did not agree within the HTTPS safety window." :
-                @"NTP sources responded but did not agree within 100 ms.";
+            } else detail = @"NTP sources responded but did not agree within 100 ms.";
         } else detail = [NSString stringWithFormat:@"Only %lu independent internet time source responded; at least two are required.", (unsigned long)samples.count];
         if (completion) dispatch_async(dispatch_get_main_queue(), ^{ completion(accepted, detail); });
     });
 }
 
 - (void)startAutomaticNetworkSynchronization {
+    if (![NSUserDefaults.standardUserDefaults boolForKey:@"TX500_NetworkTimeEnabled"]) return;
     @synchronized (self) {
         if (_networkTimer) return;
         _networkTimer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, _networkQueue);
-        dispatch_source_set_timer(_networkTimer, dispatch_time(DISPATCH_TIME_NOW, 15 * NSEC_PER_SEC),
+        dispatch_source_set_timer(_networkTimer, DISPATCH_TIME_NOW,
                                   15 * 60 * NSEC_PER_SEC, 5 * NSEC_PER_SEC);
         __weak typeof(self) weakSelf = self;
         dispatch_source_set_event_handler(_networkTimer, ^{ [weakSelf synchronizeNetworkNowWithCompletion:nil]; });

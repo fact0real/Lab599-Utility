@@ -74,7 +74,6 @@ static NSTextField *Label(NSString *text, BOOL bold, CGFloat size, NSColor *colo
     self.filteredItems = self.allItems;
 
     [self buildUI];
-    [self fetchCatalogFromWeb];
     return self;
 }
 

@@ -232,6 +232,113 @@ static void AssertTrue(BOOL condition, NSString *message) {
     }
 }
 
+static void TestUploadPrivacy(void) {
+    NSString *suite = [@"Lab599UploadPrivacy-" stringByAppendingString:NSUUID.UUID.UUIDString];
+    NSUserDefaults *defaults = [[NSUserDefaults alloc] initWithSuiteName:suite];
+    NSArray *keys = @[@"TX500_UploadShareNameAndQTH", @"TX500_UploadShareContactDetails", @"TX500_UploadShareFreeText"];
+    for (NSString *key in keys) AssertTrue(![defaults boolForKey:key], @"Privacy options default off");
+    NSDictionary *fields = @{@"call":@"0ZZ9ZZ", @"QSO_DATE":@"20261018", @"TIME_ON":@"120000", @"BAND":@"20m", @"MODE":@"FT8",
+        @"NAME":@"Test Op", @"QTH":@"Test Town", @"EMAIL":@"op@example.invalid", @"COMMENT":@"a <EMAIL:4>fake comment",
+        @"GRIDSQUARE":@"AA00AA00", @"MY_GRIDSQUARE":@"BB11BB11", @"MY_NAME":@"Local Name", @"MY_CITY":@"Local Town", @"MY_RIG":@"Rig", @"MY_ANTENNA":@"Dipole",
+        @"STATION_CALLSIGN":@"0ZZ0ZZ", @"MY_STATE":@"CA", @"STATE":@"CA", @"COUNTRY":@"Test Country", @"MY_CNTY":@"Test County",
+        @"APP_PRIVATE":@"secret", @"NAME_INTL":@"secret", @"MY_CALL":@"0ZZ0ZZ", @"LOTW_QSL_SENT":@"Y", @"INVENTED":@"secret"};
+    NSMutableString *input = [NSMutableString string];
+    for (NSString *key in fields) [input appendFormat:@"<%@:%lu>%@ ", key, (unsigned long)[fields[key] lengthOfBytesUsingEncoding:NSUTF8StringEncoding], fields[key]];
+    [input appendString:@"<EOR>"];
+    for (NSString *service in @[@"QRZ", @"ClubLog", @"eQSL", @"LoTW"]) {
+        NSString *filtered = [TX500CloudSyncEngine filteredUploadRecord:input service:service defaults:defaults];
+        AssertTrue([filtered containsString:@"<CALL:6>0ZZ9ZZ"] && [filtered containsString:@"<MY_GRIDSQUARE:6>BB11BB"], @"Core fields and truncated station grid retained");
+        for (NSString *key in @[@"NAME", @"QTH", @"EMAIL", @"COMMENT", @"MY_NAME", @"MY_CITY", @"MY_RIG", @"MY_ANTENNA", @"APP_PRIVATE", @"NAME_INTL", @"MY_CALL", @"LOTW_QSL_SENT", @"INVENTED"])
+            AssertTrue(![filtered containsString:[NSString stringWithFormat:@"<%@:", key]], @"Default upload excludes personal, internal and unknown fields");
+        if (![service isEqualToString:@"LoTW"]) AssertTrue([filtered containsString:@"<GRIDSQUARE:6>AA00AA"], @"Other-station grid limited to 6");
+        else AssertTrue(![filtered containsString:@"<GRIDSQUARE:"], @"LoTW omits other-station grid");
+    }
+    for (NSString *key in keys) {
+        [defaults setBool:YES forKey:key];
+        NSString *text = [TX500CloudSyncEngine filteredUploadRecord:input service:@"QRZ" defaults:defaults];
+        AssertTrue([text containsString:@"<NAME:"] == [key isEqualToString:keys[0]], @"Name sharing is independent");
+        AssertTrue([text containsString:@"<EMAIL:18>op@example.invalid"] == [key isEqualToString:keys[1]], @"Email sharing is independent");
+        AssertTrue([text containsString:@"<COMMENT:"] == [key isEqualToString:keys[2]], @"Comments sharing is independent");
+        if ([key isEqualToString:keys[2]]) AssertTrue([text containsString:fields[@"COMMENT"]], @"Comment text is preserved and embedded tags do not become fields");
+        [defaults setBool:NO forKey:key];
+    }
+    for (NSString *key in keys) [defaults setBool:YES forKey:key];
+    NSString *precise = [TX500CloudSyncEngine filteredUploadRecord:input service:@"eQSL" defaults:defaults];
+    AssertTrue([precise containsString:@"<GRIDSQUARE:8>AA00AA00"] && [precise containsString:@"<MY_GRIDSQUARE:8>BB11BB11"], @"Precise grids require opt-in");
+    NSString *lotw = [TX500CloudSyncEngine filteredUploadRecord:input service:@"LoTW" defaults:defaults];
+    AssertTrue(![lotw containsString:@"<NAME:"] && ![lotw containsString:@"<EMAIL:"] && ![lotw containsString:@"<COMMENT:"] && [lotw containsString:@"<MY_GRIDSQUARE:6>BB11BB"], @"LoTW ignores optional switches");
+    for (NSString *grid in @[@"AA00", @"AA00AA00", @"ZZ00", @"AA00A", @"AA00AA00ZZ", @"AA00AA00<EMAIL:4>oops"]) {
+        NSString *raw = [NSString stringWithFormat:@"<GRIDSQUARE:%lu>%@<EOR>", (unsigned long)grid.length, grid];
+        NSString *text = [TX500CloudSyncEngine filteredUploadRecord:raw service:@"QRZ" defaults:defaults];
+        BOOL valid = [grid isEqualToString:@"AA00"] || [grid isEqualToString:@"AA00AA00"];
+        AssertTrue([text containsString:@"<GRIDSQUARE:"] == valid, @"Invalid locators dropped; 4 and 8 character locators accepted");
+    }
+    AssertTrue([[TX500CloudSyncEngine filteredUploadRecord:@"<call:3>ABC<NAME:0><EMAIL:100>x" service:@"QRZ" defaults:defaults] isEqualToString:@"<EOR>\n"], @"Malformed lengths fail closed");
+    AssertTrue([[TX500CloudSyncEngine filteredUploadRecord:input service:@"unknown" defaults:defaults] isEqualToString:@"<EOR>\n"], @"Unknown services fail closed");
+    TX500LogRecord *record = [TX500LogRecord new];
+    record.callsign = @"0ZZ9ZZ"; record.email = @"op@example.invalid"; record.name = @"Test Op"; record.qth = @"Test Town"; record.grid = @"AA00AA00"; record.notes = @"Local comment";
+    NSString *local = record.adifRecordString;
+    AssertTrue([local containsString:@"<EMAIL:"] && [local containsString:@"<GRIDSQUARE:8>"] && [local containsString:@"<COMMENT:"], @"Local ADIF retains personal data");
+    for (NSString *service in @[@"QRZ", @"ClubLog", @"eQSL", @"LoTW"]) {
+        NSString *document = [TX500CloudSyncEngine uploadDocumentForRecords:@[record, record] service:service];
+        AssertTrue([document containsString:@"<EOH>"] && [[document componentsSeparatedByString:@"<EOR>"] count] == 3 && ![document containsString:@"<EMAIL:"], @"Upload documents filter every record");
+    }
+    NSString *source = [NSString stringWithContentsOfFile:@"Sources/TX500CloudSyncEngine.m" encoding:NSUTF8StringEncoding error:NULL];
+    AssertTrue(![source containsString:@"exportADIFToFileURL:"] && [source containsString:@"uploadADIFForRecord:r service:@\"LoTW\""] && [source containsString:@"uploadDocumentForRecords:records service:@\"LoTW\""], @"Whole-log and selected LoTW routes use upload projection");
+    for (NSString *service in @[@"QRZ", @"ClubLog", @"eQSL", @"LoTW"])
+        AssertTrue([source containsString:[NSString stringWithFormat:@"uploadDocumentForRecords:@[record] service:@\"%@\"", service]], @"Every single-QSO provider uses upload projection");
+    [defaults removePersistentDomainForName:suite];
+    NSLog(@"PASS: upload allowlists, independent opt-ins, LoTW isolation, grids, parser boundaries, route coverage and local preservation.");
+}
+
+static void TestPrivacyControls(void) {
+    [NSApplication sharedApplication];
+    TX500CloudSettingsController *controller = [TX500CloudSettingsController new];
+    NSTabView *tabs = [controller valueForKey:@"tabView"];
+    AssertTrue(tabs.numberOfTabViewItems == 6, @"Cloud settings exposes a Privacy tab");
+    NSScrollView *scroll = (NSScrollView *)[tabs tabViewItemAtIndex:5].view;
+    NSView *content = scroll.documentView;
+    NSInteger switches = 0;
+    for (NSView *view in content.subviews) {
+        if (![view isKindOfClass:NSButton.class]) continue;
+        NSButton *button = (NSButton *)view;
+        switches++;
+        AssertTrue(button.state == NSControlStateValueOff, @"Privacy controls show default-off settings");
+        button.state = NSControlStateValueOn;
+        [NSApp sendAction:button.action to:controller from:button];
+        AssertTrue([NSUserDefaults.standardUserDefaults boolForKey:button.identifier], @"Privacy control persists its exact option");
+        button.state = NSControlStateValueOff;
+        [NSApp sendAction:button.action to:controller from:button];
+    }
+    AssertTrue(switches == 9, @"Automatic, per-service, personal-field and NTP controls are available");
+    // Render the actual tab document in a visible host hierarchy, without scroll clipping.
+    scroll.documentView = nil;
+    NSWindow *reviewWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 640, 620) styleMask:NSWindowStyleMaskBorderless backing:NSBackingStoreBuffered defer:NO];
+    reviewWindow.contentView = content;
+    for (NSString *name in @[@"light", @"dark"]) {
+        NSAppearanceName appearance = [name isEqualToString:@"light"] ? NSAppearanceNameAqua : NSAppearanceNameDarkAqua;
+        content.appearance = [NSAppearance appearanceNamed:appearance];
+        reviewWindow.appearance = content.appearance;
+        for (NSNumber *width in @[@640, @900]) {
+            [reviewWindow setContentSize:NSMakeSize(width.doubleValue, 620)];
+            [content setFrameSize:NSMakeSize(width.doubleValue, 620)];
+            [content layoutSubtreeIfNeeded];
+            NSBitmapImageRep *bitmap = [content bitmapImageRepForCachingDisplayInRect:content.bounds];
+            NSGraphicsContext *context = [NSGraphicsContext graphicsContextWithBitmapImageRep:bitmap];
+            [NSGraphicsContext saveGraphicsState];
+            NSGraphicsContext.currentContext = context;
+            [content.appearance performAsCurrentDrawingAppearance:^{
+                [NSColor.windowBackgroundColor setFill];
+                NSRectFill(content.bounds);
+                [content displayRectIgnoringOpacity:content.bounds inContext:context];
+            }];
+            [NSGraphicsContext restoreGraphicsState];
+            NSString *path = [NSString stringWithFormat:@"/tmp/lab-privacy-%@-%@.png", name, width];
+            [[bitmap representationUsingType:NSBitmapImageFileTypePNG properties:@{}] writeToFile:path atomically:YES];
+        }
+    }
+}
+
 int main(int argc, const char * argv[]) {
     char testRootTemplate[] = "/tmp/Lab599LogbookTests.XXXXXX";
     char *testRoot = mkdtemp(testRootTemplate);
@@ -242,6 +349,15 @@ int main(int argc, const char * argv[]) {
     @autoreleasepool {
         (void)argc; (void)argv;
         NSLog(@"Running TX-500 Logbook & Cloud Ecosystem Tests...");
+
+        // A fresh suite is injected before controllers/engines are created. Runtime
+        // changes to CFFIXED_USER_HOME alone do not isolate macOS preference daemons.
+        NSString *preferencesSuite = [@"Lab599CloudTests-" stringByAppendingString:NSUUID.UUID.UUIDString];
+        NSUserDefaults *testDefaults = [[NSUserDefaults alloc] initWithSuiteName:preferencesSuite];
+        Method defaultsMethod = class_getClassMethod(NSUserDefaults.class, @selector(standardUserDefaults));
+        IMP realDefaults = method_setImplementation(defaultsMethod, imp_implementationWithBlock(^NSUserDefaults *{ return testDefaults; }));
+        TestUploadPrivacy();
+        TestPrivacyControls();
 
         // 1. Temporary SQLite Database Setup
         NSString *tempDBPath = [NSTemporaryDirectory() stringByAppendingPathComponent:
@@ -570,6 +686,9 @@ int main(int argc, const char * argv[]) {
         AssertTrue([syncSummary containsString:@"No cloud service is enabled and configured"], @"Sync with no service configured sends nothing, and says so");
         AssertTrue(TX500StoreSecret(@"TX500_QRZ_APIKey", @"test-qrz-key") && TX500StoreSecret(@"TX500_ClubLog_APIKey", @"test-clublog-key") &&
                    TX500StoreSecret(@"TX500_EQSL_Password", @"test-eqsl-word"), @"Stored isolated test service keys");
+        AssertTrue([cloud enabledConfiguredServices].count == 0, @"Configured accounts do not enable uploads by default");
+        for (NSString *key in @[@"TX500_Cloud_UploadQRZ", @"TX500_Cloud_UploadClubLog", @"TX500_Cloud_UploadEQSL", @"TX500_Cloud_AutoUploadEnabled"])
+            [syncDefaults setBool:YES forKey:key];
         [syncDefaults setObject:@"clublog-login" forKey:@"TX500_ClubLog_Email"];
         [syncDefaults setObject:@"EA3JIC" forKey:@"TX500_EQSL_Username"];
         AssertTrue([[cloud enabledConfiguredServices] isEqualToArray:(@[@"QRZ", @"eQSL"])] && [cloud servicesForUpload:@[@"ClubLog"]].count == 0,
@@ -589,7 +708,7 @@ int main(int argc, const char * argv[]) {
         [syncDefaults setBool:NO forKey:@"TX500_Cloud_AutoUploadEnabled"];
         AssertTrue([cloud servicesForUpload:nil].count == 0 && [[cloud servicesForUpload:(@[@"QRZ", @"eQSL"])] isEqualToArray:(@[@"QRZ", @"eQSL"])],
                    @"AutoUpload off stops the upload after a QSO, not a sync");
-        [syncDefaults removeObjectForKey:@"TX500_Cloud_AutoUploadEnabled"];
+        [syncDefaults setBool:YES forKey:@"TX500_Cloud_AutoUploadEnabled"];
         // QRZ's answer: OK, or a duplicate whatever its case, from QRZ itself
         NSHTTPURLResponse *qrzOK = [[NSHTTPURLResponse alloc] initWithURL:[NSURL URLWithString:@"https://logbook.qrz.com/api"] statusCode:200 HTTPVersion:@"HTTP/1.1" headerFields:nil];
         NSHTTPURLResponse *qrzElsewhere = [[NSHTTPURLResponse alloc] initWithURL:[NSURL URLWithString:@"https://example.org/api"] statusCode:200 HTTPVersion:@"HTTP/1.1" headerFields:nil];
@@ -757,7 +876,7 @@ int main(int argc, const char * argv[]) {
         }];
         AssertTrue(offDone && SyncSendsOfTestContacts(beforeOff).count == 0 && [[cloud enabledConfiguredServices] isEqualToArray:(@[@"QRZ", @"ClubLog"])],
                    @"Sync: eQSL with its upload key set to NO is not sent to");
-        [syncDefaults removeObjectForKey:@"TX500_Cloud_UploadEQSL"];
+        [syncDefaults setBool:YES forKey:@"TX500_Cloud_UploadEQSL"];
         StopRecordingSyncSends();
 
         // over the whole run, no QSO went twice to a service, nor to one where it was UPLOADED or CONFIRMED (six sends:
@@ -828,7 +947,7 @@ int main(int argc, const char * argv[]) {
         AssertTrue(badKeyRun.count == 4 && [badKeyRun[0] hasSuffix:@":QRZ,eQSL"] && [badKeyRun[1] hasSuffix:@":QRZ,eQSL"] &&
                    [badKeyRun[2] hasSuffix:@":eQSL"] && [badKeyRun[3] isEqualToString:@"LoTW download"] && leftOnQRZ &&
                    [syncConsole.string rangeOfString:@"QRZ: [0-9]+ already there, 2 failed, stopped after 2 failures in a row, 1 left pending\\." options:NSRegularExpressionSearch].location != NSNotFound &&
-                   [syncConsole.string containsString:@"eQSL: 3 uploaded"] && [syncConsole.string containsString:@"Not checked: LoTW (not configured, or turned off by a hidden setting)."] &&
+                   [syncConsole.string containsString:@"eQSL: 3 uploaded"] && [syncConsole.string containsString:@"Not checked: LoTW (not configured, or disabled in Cloud Settings)."] &&
                    [[syncLog contactWithUUID:leftOnQRZ.uuid].qrzStatus isEqualToString:@"NONE"],
                    [NSString stringWithFormat:@"QRZ refusing: asked twice, then left out for the rest of the sync; eQSL and the download go on; the summary says so: %@", badKeyRun]);
         SyncFailing = nil;
@@ -846,9 +965,9 @@ int main(int argc, const char * argv[]) {
         }];
         AssertTrue(RunMainLoopUntil(^BOOL { return offLaterSummary != nil; }), @"The sync with eQSL's upload key set to NO on the way finishes");
         SyncAfterSend = nil;
-        [syncDefaults removeObjectForKey:@"TX500_Cloud_UploadEQSL"];
+        [syncDefaults setBool:YES forKey:@"TX500_Cloud_UploadEQSL"];
         AssertTrue(SyncSendCount() == beforeOffLater + 1 && [offLaterSummary hasPrefix:@"Batch sync finished: 1 QSO(s) sent to every service asked, 0 with a service failing."] &&
-                   [offLaterSummary containsString:@"eQSL: 1 uploaded, no longer configured (or turned off by a hidden setting) during the sync, 1 left pending."],
+                   [offLaterSummary containsString:@"eQSL: 1 uploaded, no longer configured (or disabled in Cloud Settings) during the sync, 1 left pending."],
                    [NSString stringWithFormat:@"eQSL's upload key set to NO during a sync: the rest is left pending, not failed: %@", offLaterSummary]);
         [syncLog updateCloudStatusForUUID:offLater2.uuid service:@"eQSL" status:@"UPLOADED" error:nil];
 
@@ -890,7 +1009,7 @@ int main(int argc, const char * argv[]) {
             (void)uploaded; (void)failed; allThereSummary = summary;
         }];
         AssertTrue([allThereSummary containsString:@"Nothing pending on QRZ, Club Log, eQSL for the 1 contact(s) given."] &&
-                   [allThereSummary containsString:@"Not checked: LoTW (not configured, or turned off by a hidden setting)."] && ![allThereSummary containsString:@"already synchronized"],
+                   [allThereSummary containsString:@"Not checked: LoTW (not configured, or disabled in Cloud Settings)."] && ![allThereSummary containsString:@"already synchronized"],
                    [NSString stringWithFormat:@"Nothing pending, LoTW not checked: the summary names both, and never says all is synchronized: %@", allThereSummary]);
 
         // uploads that outlive the sync's wait: the sync goes on, each wait run out counts as a failure in a row
@@ -1000,6 +1119,7 @@ int main(int argc, const char * argv[]) {
         // as a real one can be before its TQSL starts (a Keychain dialog, say): LoTW was taken when it was decided
         Method discoverTQSL = class_getClassMethod([TX500CloudSyncEngine class], @selector(discoverTQSLBinaryPath));
         IMP realDiscoverTQSL = method_setImplementation(discoverTQSL, imp_implementationWithBlock(^NSString *(id cls) { (void)cls; return @"/usr/bin/true"; }));
+        [syncDefaults setBool:YES forKey:@"TX500_Cloud_UploadLoTW"];
         [syncDefaults setObject:@"Test Station" forKey:@"TX500_LoTW_StationLocation"];
         AssertTrue([[cloud enabledConfiguredServices] containsObject:@"LoTW"], @"LoTW configured for this check");
         TX500LogRecord *lotw1 = SyncTestContact(@"0SZY", @"UPLOADED", @"UPLOADED", @"UPLOADED", @"NONE");
@@ -1051,7 +1171,7 @@ int main(int argc, const char * argv[]) {
         [cloud syncContacts:nil completion:^(NSInteger uploaded, NSInteger failed, NSString *summary) {
             (void)uploaded; (void)failed; nothingAnywhere = summary;
         }];
-        AssertTrue([nothingAnywhere isEqualToString:@"Nothing pending on QRZ, Club Log, eQSL. Not checked: LoTW (not configured, or turned off by a hidden setting)."],
+        AssertTrue([nothingAnywhere isEqualToString:@"Nothing pending on QRZ, Club Log, eQSL. Not checked: LoTW (not configured, or disabled in Cloud Settings)."],
                    [NSString stringWithFormat:@"Sync All, nothing pending, LoTW not checked: the summary names both: %@", nothingAnywhere]);
 
         // the QSOs never tried go first, those that failed before last: two that always fail on QRZ, listed first,
@@ -1196,6 +1316,7 @@ int main(int argc, const char * argv[]) {
         };
         __block NSString *standInPath = standInTQSL(@"stand-in-tqsl-batch");
         method_setImplementation(discoverTQSL, imp_implementationWithBlock(^NSString *(id cls) { (void)cls; return standInPath; }));
+        [syncDefaults setBool:YES forKey:@"TX500_Cloud_UploadLoTW"];
         [syncDefaults setObject:@"Test Station" forKey:@"TX500_LoTW_StationLocation"];
         AssertTrue(standInPath && [[cloud enabledConfiguredServices] isEqualToArray:@[@"LoTW"]], @"Live TQSL paths: a stand-in tqsl, and LoTW the only service configured");
         TX500LogRecord *live1 = SyncTestContact(@"0SX1", @"UPLOADED", @"UPLOADED", @"UPLOADED", @"NONE");
@@ -1500,6 +1621,8 @@ int main(int argc, const char * argv[]) {
         [[NSFileManager defaultManager] removeItemAtPath:shmPath error:nil];
         [[NSFileManager defaultManager] removeItemAtPath:[NSString stringWithUTF8String:testRoot] error:nil];
 
+        [testDefaults removePersistentDomainForName:preferencesSuite];
+        method_setImplementation(defaultsMethod, realDefaults);
         NSLog(@"ALL 20 LOGBOOK & CLOUD ECOSYSTEM TESTS PASSED SUCCESSFULLY!");
     }
     return 0;

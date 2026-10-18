@@ -1659,12 +1659,6 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     [self appendLog:[NSString stringWithFormat:@"Lab599 Utility %@ (Build %@) initialized.", appVer, appBuild]];
     [self appendLog:@"BL20 protocol engine ready: 57600 baud, 8N1, two-ACK header+payload cycle."];
     [self appendLog:@"TimeSync ready: 9600 baud, TM set/query with clock read-back verification."];
-    [[TX500DisciplinedClock sharedClock] startAutomaticNetworkSynchronization];
-    [[TX500DisciplinedClock sharedClock] synchronizeNetworkNowWithCompletion:^(BOOL success, NSString *detail) {
-        [self appendLog:[NSString stringWithFormat:@"Time discipline: %@", detail]];
-        [self updateClockPreview:nil];
-        if (!success) [self appendLog:@"Time discipline remains in holdover; FT8 radio consensus can refine it after enough independent decodes."];
-    }];
     [self refreshPorts:nil];
     [self updateClockPreview:nil];
     self.clockTimer = [NSTimer scheduledTimerWithTimeInterval:1 target:self selector:@selector(updateClockPreview:) userInfo:nil repeats:YES];
@@ -2208,6 +2202,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     NSInteger operation = self.operationPicker.selectedSegment;
     BOOL isFW = (operation == 0);
     BOOL isSync = (operation == 1);
+    if (isSync) [[TX500DisciplinedClock sharedClock] startAutomaticNetworkSynchronization];
     BOOL isTelemetry = (operation == 2);
     BOOL isScreen = (operation == 3);
     BOOL isTools = (operation >= 4 && operation <= 6);
@@ -2422,7 +2417,10 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     if (isDriver) [self.driverController refreshPortStatus];
 
     self.docsController.view.hidden = !isDocs;
-    if (isDocs) [self.docsController refreshLocalAvailability];
+    if (isDocs) {
+        [self.docsController refreshLocalAvailability];
+        [self.docsController fetchCatalogFromWeb];
+    }
 
     self.helpController.view.hidden = !isHelp;
     if (isHelp) {

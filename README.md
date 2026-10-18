@@ -226,3 +226,7 @@ This is an independent community project, not an official Lab599 application. Th
 Independent software, not an official Lab599 product. GitHub repository: [fact0real/Lab599-Utility](https://github.com/fact0real/Lab599-Utility). Author: EP2AES; [blog](https://ep2aes.asis.sh/); contact: `EP2AES@asis.sh`.
 
 See [LICENSE](LICENSE) (GNU GPL version 3) and [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for the bundled third-party components. Manufacturer executables and firmware files are not included in the release package.
+
+### Privacy and connection controls
+
+See [PRIVACY.md](PRIVACY.md) for startup destinations, opt-in NTP, cloud upload switches and field-sharing policy. Cloud Settings → Privacy controls automatic and per-service uploads and optional personal fields; unset preferences default off.

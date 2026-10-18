@@ -33,6 +33,9 @@ FOUNDATION_EXPORT BOOL TX500QRZResponseIsSuccess(NSURLResponse * _Nullable respo
 @interface TX500CloudSyncEngine : NSObject
 
 + (instancetype)sharedEngine;
++ (NSString *)filteredUploadRecord:(NSString *)text service:(NSString *)service defaults:(NSUserDefaults *)defaults;
++ (NSString *)uploadADIFForRecord:(TX500LogRecord *)record service:(NSString *)service;
++ (NSString *)uploadDocumentForRecords:(NSArray<TX500LogRecord *> *)records service:(NSString *)service;
 
 // Current Activity & History
 @property (nonatomic, copy, readonly) NSString *lastStatusMessage;

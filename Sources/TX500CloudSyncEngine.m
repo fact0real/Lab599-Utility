@@ -6,6 +6,7 @@
 //
 
 #import "TX500SecretStore.h"
+#include <stdlib.h>
 #import "TX500CloudSyncEngine.h"
 #import "TX500WebAuthenticatorController.h"
 
@@ -122,6 +123,68 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
     return outStr;
 }
 
+// Upload-only projection. Manual export and the database keep the original record.
++ (NSString *)uploadADIFForRecord:(TX500LogRecord *)record service:(NSString *)service {
+    return [self filteredUploadRecord:[record adifRecordString] service:service defaults:NSUserDefaults.standardUserDefaults];
+}
+
++ (NSString *)filteredUploadRecord:(NSString *)text service:(NSString *)service defaults:(NSUserDefaults *)defaults {
+    BOOL lotw = [service isEqualToString:@"LoTW"];
+    if (![@[@"QRZ", @"ClubLog", @"eQSL", @"LoTW"] containsObject:service]) return @"<EOR>\n";
+    NSString *core = lotw ?
+        @"CALL QSO_DATE TIME_ON BAND MODE SUBMODE FREQ STATION_CALLSIGN OPERATOR MY_GRIDSQUARE MY_STATE MY_CNTY MY_CQ_ZONE MY_ITU_ZONE MY_IOTA" :
+        @"CALL QSO_DATE TIME_ON TIME_OFF BAND FREQ MODE SUBMODE RST_SENT RST_RCVD TX_PWR COUNTRY DXCC CQZ ITUZ IOTA SIG SIG_INFO STATE SOTA_REF GRIDSQUARE STATION_CALLSIGN OPERATOR MY_GRIDSQUARE MY_STATE MY_CNTY MY_COUNTRY MY_CQ_ZONE MY_ITU_ZONE MY_IOTA MY_SIG MY_SIG_INFO MY_SOTA_REF";
+    NSMutableSet *allowed = [NSMutableSet setWithArray:[core componentsSeparatedByString:@" "]];
+    if (!lotw && [defaults boolForKey:@"TX500_UploadShareNameAndQTH"])
+        [allowed addObjectsFromArray:@[@"NAME", @"QTH", @"MY_NAME", @"MY_CITY", @"MY_RIG", @"MY_ANTENNA"]];
+    BOOL precise = !lotw && [defaults boolForKey:@"TX500_UploadShareContactDetails"];
+    if (precise) [allowed addObject:@"EMAIL"];
+    if (!lotw && [defaults boolForKey:@"TX500_UploadShareFreeText"]) [allowed addObject:@"COMMENT"];
+    NSData *input = [text dataUsingEncoding:NSUTF8StringEncoding];
+    const unsigned char *bytes = input.bytes;
+    NSMutableString *out = [NSMutableString string];
+    NSMutableSet *seen = [NSMutableSet set];
+    NSUInteger cursor = 0;
+    // Length-aware parsing prevents text containing '<EMAIL:...>' from becoming a field.
+    while (cursor < input.length) {
+        while (cursor < input.length && bytes[cursor] != '<') cursor++;
+        if (cursor == input.length) break;
+        NSUInteger start = ++cursor;
+        while (cursor < input.length && bytes[cursor] != '>') cursor++;
+        if (cursor == input.length) return @"<EOR>\n";
+        NSString *header = [[NSString alloc] initWithBytes:bytes + start length:cursor - start encoding:NSASCIIStringEncoding];
+        cursor++;
+        NSArray *parts = [header.uppercaseString componentsSeparatedByString:@":"];
+        if ([parts.firstObject isEqualToString:@"EOR"]) break;
+        if (parts.count < 2 || parts.count > 3) return @"<EOR>\n";
+        NSString *lengthString = parts[1];
+        if (!lengthString.length || [lengthString rangeOfCharacterFromSet:NSCharacterSet.decimalDigitCharacterSet.invertedSet].location != NSNotFound) return @"<EOR>\n";
+        unsigned long long length = strtoull(lengthString.UTF8String, NULL, 10);
+        if (length > input.length - cursor) return @"<EOR>\n";
+        NSString *value = [[NSString alloc] initWithBytes:bytes + cursor length:(NSUInteger)length encoding:NSUTF8StringEncoding];
+        cursor += (NSUInteger)length;
+        NSString *key = parts[0];
+        if (!value || ![allowed containsObject:key] || [seen containsObject:key] ||
+            ![value stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].length) continue;
+        if ([key isEqualToString:@"GRIDSQUARE"] || [key isEqualToString:@"MY_GRIDSQUARE"]) {
+            value = [value stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].uppercaseString;
+            NSRegularExpression *grid = [NSRegularExpression regularExpressionWithPattern:@"^[A-R]{2}[0-9]{2}([A-X]{2}([0-9]{2}([A-X]{2})?)?)?$" options:0 error:NULL];
+            if ([grid numberOfMatchesInString:value options:0 range:NSMakeRange(0, value.length)] != 1) continue;
+            if (!precise && value.length > 6) value = [value substringToIndex:6];
+        }
+        [seen addObject:key];
+        [out appendFormat:@"<%@:%lu>%@ ", key, (unsigned long)[value lengthOfBytesUsingEncoding:NSUTF8StringEncoding], value];
+    }
+    [out appendString:@"<EOR>\n"];
+    return out;
+}
+
++ (NSString *)uploadDocumentForRecords:(NSArray<TX500LogRecord *> *)records service:(NSString *)service {
+    NSMutableString *text = [NSMutableString stringWithString:@"<ADIF_VER:5>3.1.4 <PROGRAMID:14>Lab599 Utility <EOH>\n"];
+    for (TX500LogRecord *record in records) [text appendString:[self uploadADIFForRecord:record service:service]];
+    return text;
+}
+
 + (nullable NSString *)discoverTQSLBinaryPath {
     if (TX500CloudExternalSideEffectsAreDisabled()) return nil;
     NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
@@ -213,7 +276,7 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
     }
 
     NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
-    BOOL autoUpload = [ud objectForKey:@"TX500_Cloud_AutoUploadEnabled"] ? [ud boolForKey:@"TX500_Cloud_AutoUploadEnabled"] : YES;
+    BOOL autoUpload = [ud objectForKey:@"TX500_Cloud_AutoUploadEnabled"] ? [ud boolForKey:@"TX500_Cloud_AutoUploadEnabled"] : NO;
     // the switch is for the upload after a QSO; a sync is asked for by the operator
     if (!services && !autoUpload) {
         if (completion) completion(YES, @"Auto-upload disabled in settings.");
@@ -363,8 +426,12 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
 - (void)performQRZInsert:(TX500LogRecord *)record
                   apiKey:(NSString *)apiKey
               completion:(void (^)(BOOL success, NSString *message))completion {
+    if (![NSUserDefaults.standardUserDefaults boolForKey:@"TX500_Cloud_UploadQRZ"]) {
+        completion(NO, @"QRZ uploads are disabled in Cloud Settings > Privacy.");
+        return;
+    }
     NSString *endpoint = @"https://logbook.qrz.com/api";
-    NSString *adif = [TX500CloudSyncEngine buildSingleRecordADIF:record];
+    NSString *adif = [TX500CloudSyncEngine uploadDocumentForRecords:@[record] service:@"QRZ"];
     NSString *postStr = [NSString stringWithFormat:@"KEY=%@&ACTION=INSERT&ADIF=%@",
                          [self urlEncode:apiKey], [self urlEncode:adif]];
 
@@ -400,8 +467,12 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
                     password:(NSString *)password
                       apiKey:(NSString *)apiKey
                   completion:(void (^)(BOOL success, NSString *message))completion {
+    if (![NSUserDefaults.standardUserDefaults boolForKey:@"TX500_Cloud_UploadClubLog"]) {
+        completion(NO, @"Club Log uploads are disabled in Cloud Settings > Privacy.");
+        return;
+    }
     NSString *endpoint = @"https://clublog.org/realtime.php";
-    NSString *adif = [TX500CloudSyncEngine buildSingleRecordADIF:record];
+    NSString *adif = [TX500CloudSyncEngine uploadDocumentForRecords:@[record] service:@"ClubLog"];
     NSString *postStr = [NSString stringWithFormat:@"email=%@&password=%@&callsign=%@&api=%@&adif=%@",
                          [self urlEncode:email], [self urlEncode:password], [self urlEncode:callsign],
                          [self urlEncode:apiKey], [self urlEncode:adif]];
@@ -436,8 +507,12 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
                  username:(NSString *)username
                  password:(NSString *)password
                completion:(void (^)(BOOL success, NSString *message))completion {
+    if (![NSUserDefaults.standardUserDefaults boolForKey:@"TX500_Cloud_UploadEQSL"]) {
+        completion(NO, @"eQSL uploads are disabled in Cloud Settings > Privacy.");
+        return;
+    }
     NSString *endpoint = @"https://www.eqsl.cc/qslcard/ImportADIF.txt";
-    NSString *adif = [TX500CloudSyncEngine buildSingleRecordADIF:record];
+    NSString *adif = [TX500CloudSyncEngine uploadDocumentForRecords:@[record] service:@"eQSL"];
     NSString *postStr = [NSString stringWithFormat:@"EQSL_USER=%@&EQSL_PSWD=%@&ADIFData=%@",
                          [self urlEncode:username], [self urlEncode:password], [self urlEncode:adif]];
 
@@ -468,8 +543,12 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
                  location:(nullable NSString *)location
                  password:(nullable NSString *)password
                completion:(void (^)(BOOL success, NSString *message))completion {
+    if (![NSUserDefaults.standardUserDefaults boolForKey:@"TX500_Cloud_UploadLoTW"]) {
+        completion(NO, @"LoTW uploads are disabled in Cloud Settings > Privacy.");
+        return;
+    }
     NSString *tempFile = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"tx500_lotw_%@.adi", record.uuid]];
-    NSString *adifContent = [TX500CloudSyncEngine buildSingleRecordADIF:record];
+    NSString *adifContent = [TX500CloudSyncEngine uploadDocumentForRecords:@[record] service:@"LoTW"];
     NSError *writeErr = nil;
     if (![adifContent writeToFile:tempFile atomically:YES encoding:NSUTF8StringEncoding error:&writeErr]) {
         completion(NO, writeErr.localizedDescription);
@@ -505,7 +584,7 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
         [[NSFileManager defaultManager] removeItemAtPath:companionTq8 error:nil];
 
         int code = task.terminationStatus;
-        if (code == 0 || code == 8 || code == 9 || code == 14) {
+        if (code == 0) {
             completion(YES, @"OK");
         } else {
             completion(NO, [NSString stringWithFormat:@"TQSL exited with %d: %@", code, [outStr substringToIndex:MIN(80, outStr.length)]]);
@@ -527,7 +606,7 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
 // What each upload needs (Club Log its email, callsign, password and API key)
 - (NSArray<NSString *> *)enabledConfiguredServices {
     NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
-    BOOL (^enabled)(NSString *) = ^BOOL(NSString *key) { return [ud objectForKey:key] ? [ud boolForKey:key] : YES; };
+    BOOL (^enabled)(NSString *) = ^BOOL(NSString *key) { return [ud objectForKey:key] ? [ud boolForKey:key] : NO; };
     NSMutableArray<NSString *> *services = [NSMutableArray array];
     if (enabled(@"TX500_Cloud_UploadQRZ") && TX500SecretValue(@"TX500_QRZ_APIKey").length > 0) [services addObject:@"QRZ"];
     if (enabled(@"TX500_Cloud_UploadClubLog") && [ud stringForKey:@"TX500_ClubLog_Email"].length > 0 &&
@@ -542,7 +621,7 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
 
 - (NSArray<NSString *> *)servicesForUpload:(nullable NSArray<NSString *> *)requested {
     NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
-    if (!requested && [ud objectForKey:@"TX500_Cloud_AutoUploadEnabled"] && ![ud boolForKey:@"TX500_Cloud_AutoUploadEnabled"]) return @[];
+    if (!requested && ![ud boolForKey:@"TX500_Cloud_AutoUploadEnabled"]) return @[];
     NSMutableArray<NSString *> *sendTo = [NSMutableArray array];
     for (NSString *service in [self enabledConfiguredServices]) {
         if (!requested || [requested containsObject:service]) [sendTo addObject:service];
@@ -623,7 +702,7 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
     for (NSString *service in @[@"QRZ", @"ClubLog", @"eQSL", @"LoTW"]) {
         if (![services containsObject:service]) [notChecked addObject:names[service]];
     }
-    NSString *notCheckedNote = notChecked.count ? [NSString stringWithFormat:@" Not checked: %@ (not configured, or turned off by a hidden setting).",
+    NSString *notCheckedNote = notChecked.count ? [NSString stringWithFormat:@" Not checked: %@ (not configured, or disabled in Cloud Settings).",
                                                    [notChecked componentsJoinedByString:@", "]] : @"";
     TX500LogbookManager *logbook = [TX500LogbookManager sharedManager];
     NSMutableArray<TX500LogRecord *> *pending = [NSMutableArray array];
@@ -794,7 +873,7 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
                 if (leftWaiting[service].integerValue)
                     [parts addObject:[NSString stringWithFormat:@"waiting for TQSL, %ld left pending", (long)leftWaiting[service].integerValue]];
                 if (leftOff[service].integerValue)
-                    [parts addObject:[NSString stringWithFormat:@"no longer configured (or turned off by a hidden setting) during the sync, %ld left pending", (long)leftOff[service].integerValue]];
+                    [parts addObject:[NSString stringWithFormat:@"no longer configured (or disabled in Cloud Settings) during the sync, %ld left pending", (long)leftOff[service].integerValue]];
                 [msg appendFormat:@" %@: %@.", names[service], parts.count ? [parts componentsJoinedByString:@", "] : @"nothing to do"];
             }
             [msg appendString:notCheckedNote];
@@ -815,6 +894,10 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
 }
 
 - (void)uploadFullLogbookToLoTWWithCompletion:(nullable void (^)(BOOL success, NSString *message))completion {
+    if (![NSUserDefaults.standardUserDefaults boolForKey:@"TX500_Cloud_UploadLoTW"]) {
+        if (completion) completion(NO, @"LoTW uploads are disabled in Cloud Settings > Privacy.");
+        return;
+    }
     NSString *tqslPath = [TX500CloudSyncEngine discoverTQSLBinaryPath];
     if (!tqslPath) {
         if (completion) completion(NO, @"TrustedQSL (tqsl) binary not found on this Mac. Please install TQSL from arrl.org.");
@@ -825,10 +908,12 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
     NSString *location = [ud stringForKey:@"TX500_LoTW_StationLocation"];
     NSString *password = TX500SecretValue(@"TX500_LoTW_Password");
 
+    NSArray<TX500LogRecord *> *records = [[TX500LogbookManager sharedManager] allContacts];
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        NSString *tempFile = [NSTemporaryDirectory() stringByAppendingPathComponent:@"tx500_full_lotw.adi"];
+        NSString *tempFile = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"tx500_full_lotw_%@.adi", NSUUID.UUID.UUIDString]];
         NSError *err = nil;
-        if (![[TX500LogbookManager sharedManager] exportADIFToFileURL:[NSURL fileURLWithPath:tempFile] error:&err]) {
+       NSString *adif = [TX500CloudSyncEngine uploadDocumentForRecords:records service:@"LoTW"];
+        if (![adif writeToFile:tempFile atomically:YES encoding:NSUTF8StringEncoding error:&err]) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 if (completion) completion(NO, err.localizedDescription);
             });
@@ -864,13 +949,13 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
             [[NSFileManager defaultManager] removeItemAtPath:companionTq8 error:nil];
 
             int code = task.terminationStatus;
-            BOOL ok = (code == 0 || code == 8 || code == 9 || code == 14);
+            BOOL ok = (code == 0);
             NSString *resultMsg = ok ? @"LoTW Full Batch Uploaded Successfully via TQSL!" :
                 [NSString stringWithFormat:@"LoTW Error (exit %d): %@", code, outStr];
 
             if (ok) {
                 // Mark all uploaded in DB
-                for (TX500LogRecord *r in [[TX500LogbookManager sharedManager] allContacts]) {
+                for (TX500LogRecord *r in records) {
                     [[TX500LogbookManager sharedManager] updateCloudStatusForUUID:r.uuid service:@"LoTW" status:@"UPLOADED" error:nil];
                 }
             }
@@ -888,6 +973,10 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
 }
 
 - (void)signAndUploadContactsToLoTW:(NSArray<TX500LogRecord *> *)records completion:(nullable void (^)(BOOL success, NSString *message))completion {
+    if (![NSUserDefaults.standardUserDefaults boolForKey:@"TX500_Cloud_UploadLoTW"]) {
+        if (completion) completion(NO, @"LoTW uploads are disabled in Cloud Settings > Privacy.");
+        return;
+    }
     if (TX500CloudExternalSideEffectsAreDisabled()) {
         if (completion) completion(YES, @"TQSL LoTW upload suppressed in test mode.");
         return;
@@ -923,7 +1012,7 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
         NSString *tempFile = [NSTemporaryDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"tx500_lotw_batch_%@.adi", [[NSUUID UUID] UUIDString]]];
         NSMutableString *adif = [NSMutableString stringWithFormat:@"Lab599 TX-500 LoTW Export\n<ADIF_VER:5>3.1.4 <PROGRAMID:14>Lab599 Utility <EOH>\n\n"];
         for (TX500LogRecord *r in targets) {
-            [adif appendString:[r adifRecordString]];
+            [adif appendString:[TX500CloudSyncEngine uploadADIFForRecord:r service:@"LoTW"]];
         }
 
         NSError *err = nil;
@@ -963,7 +1052,7 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
             [[NSFileManager defaultManager] removeItemAtPath:companionTq8 error:nil];
 
             int code = task.terminationStatus;
-            BOOL ok = (code == 0 || code == 8 || code == 9 || code == 14);
+            BOOL ok = (code == 0);
             NSString *resultMsg = ok ?
                 [NSString stringWithFormat:@"Successfully signed & uploaded %ld QSO(s) to LoTW via TQSL!", (long)targets.count] :
                 [NSString stringWithFormat:@"TQSL exited with code %d: %@", code, [outStr substringToIndex:MIN(100, outStr.length)]];

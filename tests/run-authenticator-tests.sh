@@ -6,6 +6,7 @@ clang -O1 -g -Wall -Wextra -Werror -Wno-unused-parameter -fobjc-arc -mmacosx-ver
  -framework Cocoa -framework WebKit -framework Security -framework UniformTypeIdentifiers -lsqlite3 \
  -DTX500_TEST_SECRET_STORE -IHeaders -ISources -IHeaders/cft8 -ISources/cft8 \
  tests/AuthenticatorTests.m Sources/TX500WebAuthenticatorController.m Sources/TX500CloudSettingsController.m \
+ Sources/TX500TimeDiscipline.m Sources/TX500FT8Message.m \
  Sources/TX500CloudSyncEngine.m Sources/TX500LogbookManager.m -o build/AuthenticatorTests
 if [ "${1:-}" = "--build-only" ]; then exit 0; fi
 TEST_ROOT=$(mktemp -d /tmp/Lab599AuthenticatorTests.XXXXXX)

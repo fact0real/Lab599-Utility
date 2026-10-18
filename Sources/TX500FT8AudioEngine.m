@@ -75,6 +75,9 @@ static dispatch_queue_t TX500FT8DecodeQueue(void) {
     BOOL _isTuning;
     double _carrierPhase;
     NSUInteger _tuneGeneration;
+    BOOL _tuneSafetyRXConfirmed; // guarded by @synchronized(self)
+    BOOL _tuneSafetyMuted; // guarded by _txBufferLock, also on the watchdog queue
+    dispatch_queue_t _tuneSafetyQueue;
 
     // Simulated Station Tracking
     NSInteger _simQSOStage;
@@ -307,6 +310,7 @@ static void FT8AudioQueueOutputCallback(void *inUserData,
         _txSlotParity = TX500FT8SlotParityEven;
         _isTransmitArmed = NO;
         _maximumTuneSeconds = 15.0;
+        _tuneSafetyQueue = dispatch_queue_create("com.lab599.ft8.tune-safety", DISPATCH_QUEUE_SERIAL);
         _lastProcessedSlotIndex = INT64_MIN;
         // Simulation mode defaults to NO (Live Radio Mode) so connected TX-500 transceivers operate on air.
         // It is only enabled if explicitly passed via CLI arguments or toggled by the operator in the current session.
@@ -1175,132 +1179,135 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
 }
 
 - (void)beginTransmission {
-    if (self.queuedTxMessage.length == 0 || _receiveReleaseInProgress) return;
-    // Never transmit on the air without the operator's own callsign.
-    if (!self.isSimulationMode && !self.hasOperatorCallsign) {
-        self.isTransmitArmed = NO;
-        _autoParityLocked = -1;
-        if (self.logHandler) self.logHandler(@"[FT8 TX blocked] Enter your callsign in Station before transmitting.");
-        return;
-    }
-    _receiveRecoveryStalled = NO;
-    if (!self.isSimulationMode && (self.dialFrequencyHz == 0 ||
-        (self.requiresVerifiedCATDial && !self.catDialAndModeVerified))) {
-        self.isTransmitArmed = NO;
-        _autoParityLocked = -1;
-        if (self.logHandler) self.logHandler(@"[FT8 TX blocked] Radio dial frequency and DIG mode have not been verified over CAT.");
-        return;
-    }
-    TX500TimeSnapshot *time = [[TX500DisciplinedClock sharedClock] snapshot];
-    if (!self.isSimulationMode && !time.transmitAllowed) {
-        if (time.uncertaintySeconds > 3.5) {
+    @synchronized (self) {
+        if (_isTuning) return;
+        if (self.queuedTxMessage.length == 0 || _receiveReleaseInProgress) return;
+        // Never transmit on the air without the operator's own callsign.
+        if (!self.isSimulationMode && !self.hasOperatorCallsign) {
+            self.isTransmitArmed = NO;
+            _autoParityLocked = -1;
+            if (self.logHandler) self.logHandler(@"[FT8 TX blocked] Enter your callsign in Station before transmitting.");
+            return;
+        }
+        _receiveRecoveryStalled = NO;
+        if (!self.isSimulationMode && (self.dialFrequencyHz == 0 ||
+            (self.requiresVerifiedCATDial && !self.catDialAndModeVerified))) {
+            self.isTransmitArmed = NO;
+            _autoParityLocked = -1;
+            if (self.logHandler) self.logHandler(@"[FT8 TX blocked] Radio dial frequency and DIG mode have not been verified over CAT.");
+            return;
+        }
+        TX500TimeSnapshot *time = [[TX500DisciplinedClock sharedClock] snapshot];
+        if (!self.isSimulationMode && !time.transmitAllowed) {
+            if (time.uncertaintySeconds > 3.5) {
+                self.isTransmitArmed = NO;
+                _autoParityLocked = -1;
+                if (self.logHandler) {
+                    self.logHandler([NSString stringWithFormat:@"[FT8 TX blocked] Time uncertainty is %.3f s (%@). Receive until network or radio timing is trustworthy.",
+                                     time.uncertaintySeconds, time.sourceDescription]);
+                }
+                return;
+            }
+        }
+
+        NSString *msgText = [self.queuedTxMessage uppercaseString];
+        unsigned char tones[FT8808_MAX_TONES];
+        int numTones = tx500_ft8_encode_message([msgText UTF8String], self.protocol, tones, FT8808_MAX_TONES);
+        if (numTones <= 0) {
             self.isTransmitArmed = NO;
             _autoParityLocked = -1;
             if (self.logHandler) {
-                self.logHandler([NSString stringWithFormat:@"[FT8 TX blocked] Time uncertainty is %.3f s (%@). Receive until network or radio timing is trustworthy.",
-                                 time.uncertaintySeconds, time.sourceDescription]);
+                self.logHandler([NSString stringWithFormat:@"[%@ Error] Failed to encode text: '%@'", self.modeName, msgText]);
             }
             return;
         }
-    }
 
-    NSString *msgText = [self.queuedTxMessage uppercaseString];
-    unsigned char tones[FT8808_MAX_TONES];
-    int numTones = tx500_ft8_encode_message([msgText UTF8String], self.protocol, tones, FT8808_MAX_TONES);
-    if (numTones <= 0) {
-        self.isTransmitArmed = NO;
-        _autoParityLocked = -1;
-        if (self.logHandler) {
-            self.logHandler([NSString stringWithFormat:@"[%@ Error] Failed to encode text: '%@'", self.modeName, msgText]);
+        float synthAudioFreq = self.txAudioFrequencyHz;
+        _fakeItVfoShiftHz = 0;
+        if (self.splitFakeItEnabled && (self.txAudioFrequencyHz < 1000.0f || self.txAudioFrequencyHz > 2000.0f)) {
+            // Center audio transmission tone at 1500 Hz for optimal transmitter passband and minimal harmonic leakage
+            synthAudioFreq = 1500.0f;
+            _fakeItVfoShiftHz = (int64_t)round(self.txAudioFrequencyHz - 1500.0f);
+            uint64_t shiftedVfo = (uint64_t)((int64_t)self.dialFrequencyHz + _fakeItVfoShiftHz);
+            if (self.serialCommandSender && !self.isSimulationMode) {
+                NSString *faCmd = [NSString stringWithFormat:@"FA%011llu;", (unsigned long long)shiftedVfo];
+                if(!self.serialCommandSender(faCmd)) {
+                    _fakeItVfoShiftHz=0; self.isTransmitArmed=NO;
+                    if(self.logHandler) self.logHandler(@"[TX blocked] Split frequency change failed.");
+                    return;
+                }
+                if (self.logHandler) {
+                    self.logHandler([NSString stringWithFormat:@"[Split / Fake It] Shifted TX VFO by %+lld Hz to %llu Hz (audio tone centered at 1500 Hz)",
+                                     _fakeItVfoShiftHz, (unsigned long long)shiftedVfo]);
+                }
+            }
         }
-        return;
-    }
 
-    float synthAudioFreq = self.txAudioFrequencyHz;
-    _fakeItVfoShiftHz = 0;
-    if (self.splitFakeItEnabled && (self.txAudioFrequencyHz < 1000.0f || self.txAudioFrequencyHz > 2000.0f)) {
-        // Center audio transmission tone at 1500 Hz for optimal transmitter passband and minimal harmonic leakage
-        synthAudioFreq = 1500.0f;
-        _fakeItVfoShiftHz = (int64_t)round(self.txAudioFrequencyHz - 1500.0f);
-        uint64_t shiftedVfo = (uint64_t)((int64_t)self.dialFrequencyHz + _fakeItVfoShiftHz);
-        if (self.serialCommandSender && !self.isSimulationMode) {
-            NSString *faCmd = [NSString stringWithFormat:@"FA%011llu;", (unsigned long long)shiftedVfo];
-            if(!self.serialCommandSender(faCmd)) {
-                _fakeItVfoShiftHz=0; self.isTransmitArmed=NO;
-                if(self.logHandler) self.logHandler(@"[TX blocked] Split frequency change failed.");
+        [_txBufferLock lock];
+        _txBufferTotalSamples = tx500_ft8_synthesize(tones, numTones, synthAudioFreq,
+                                                     self.protocol, FT8_SAMPLE_RATE,
+                                                     _txBuffer, FT8_MAX_SLOT_SAMPLES);
+        _txBufferReadIndex = 0;
+        BOOL synthesisFailed = _txBufferTotalSamples <= 0;
+        if (synthesisFailed) {
+            _txBufferTotalSamples = 0;
+            _activeTxToneCount = 0;
+        } else {
+            memcpy(_activeTxTones, tones, (size_t)numTones);
+            _activeTxToneCount = numTones;
+            _activeTxSamplesPerSymbol = self.protocol == TX500_FT8_PROTOCOL_FT4 ? 576 : 1920;
+            _activeTxBaseAudioHz = synthAudioFreq;
+        }
+        [_txBufferLock unlock];
+
+        if (synthesisFailed) {
+            self.isTransmitArmed = NO;
+            _autoParityLocked = -1;
+            if (_fakeItVfoShiftHz) {
+                [self restoreNominalDialAfterFakeIt];
+                _fakeItVfoShiftHz = 0;
+            }
+            if (self.logHandler) self.logHandler(@"[FT8 TX blocked] Audio synthesis failed; radio PTT was not keyed.");
+            return;
+        }
+
+        [self resetSWRReading];
+
+        // Request confirmed PTT from the shared station transport before exposing audio.
+        // Note: Do NOT send MD6; here. The radio is already in DIG mode; sending MD6; at TX trigger
+        // disrupts microcontroller timing and causes dropped PTT commands.
+        if (!self.isSimulationMode) {
+            BOOL keyed=self.pttControlHandler ? self.pttControlHandler(YES) : (self.serialCommandSender ? self.serialCommandSender(@"TX;") : NO);
+            if(!keyed) {
+                _isTransmitting=NO; _isTuning=NO; self.isTransmitArmed=NO;
+                if(self.pttControlHandler) self.pttControlHandler(NO);
+                else if(self.serialCommandSender) self.serialCommandSender(@"RX;");
+                if(_fakeItVfoShiftHz) {
+                    [self restoreNominalDialAfterFakeIt];
+                    _fakeItVfoShiftHz=0;
+                }
+                [_txBufferLock lock]; _txBufferTotalSamples=0; _txBufferReadIndex=0; _activeTxToneCount=0; [_txBufferLock unlock];
+                if(self.logHandler) self.logHandler(@"[TX blocked] PTT was not confirmed; audio transmission cancelled.");
+                if(self.onTransmitStateChanged) self.onTransmitStateChanged(NO,@"");
                 return;
             }
-            if (self.logHandler) {
-                self.logHandler([NSString stringWithFormat:@"[Split / Fake It] Shifted TX VFO by %+lld Hz to %llu Hz (audio tone centered at 1500 Hz)",
-                                 _fakeItVfoShiftHz, (unsigned long long)shiftedVfo]);
-            }
         }
-    }
 
-    [_txBufferLock lock];
-    _txBufferTotalSamples = tx500_ft8_synthesize(tones, numTones, synthAudioFreq,
-                                                 self.protocol, FT8_SAMPLE_RATE,
-                                                 _txBuffer, FT8_MAX_SLOT_SAMPLES);
-    _txBufferReadIndex = 0;
-    BOOL synthesisFailed = _txBufferTotalSamples <= 0;
-    if (synthesisFailed) {
-        _txBufferTotalSamples = 0;
-        _activeTxToneCount = 0;
-    } else {
-        memcpy(_activeTxTones, tones, (size_t)numTones);
-        _activeTxToneCount = numTones;
-        _activeTxSamplesPerSymbol = self.protocol == TX500_FT8_PROTOCOL_FT4 ? 576 : 1920;
-        _activeTxBaseAudioHz = synthAudioFreq;
-    }
-    [_txBufferLock unlock];
-
-    if (synthesisFailed) {
-        self.isTransmitArmed = NO;
-        _autoParityLocked = -1;
-        if (_fakeItVfoShiftHz) {
-            [self restoreNominalDialAfterFakeIt];
-            _fakeItVfoShiftHz = 0;
+        _isTransmitting=YES;
+        _activeTransmissionWasSimulation = self.isSimulationMode;
+        if (!self.repeatArmedTransmission) self.isTransmitArmed = NO;
+        if (self.logHandler) {
+            NSString *pttMethod = self.isSimulationMode ? @"[Simulation - No RF]" : @"[CAT TX confirmed]";
+            self.logHandler([NSString stringWithFormat:@"[FT8 TX ON] Sending '%@' at %.0f Hz %@",
+                             msgText, synthAudioFreq, pttMethod]);
         }
-        if (self.logHandler) self.logHandler(@"[FT8 TX blocked] Audio synthesis failed; radio PTT was not keyed.");
-        return;
-    }
 
-    [self resetSWRReading];
-
-    // Request confirmed PTT from the shared station transport before exposing audio.
-    // Note: Do NOT send MD6; here. The radio is already in DIG mode; sending MD6; at TX trigger
-    // disrupts microcontroller timing and causes dropped PTT commands.
-    if (!self.isSimulationMode) {
-        BOOL keyed=self.pttControlHandler ? self.pttControlHandler(YES) : (self.serialCommandSender ? self.serialCommandSender(@"TX;") : NO);
-        if(!keyed) {
-            _isTransmitting=NO; _isTuning=NO; self.isTransmitArmed=NO;
-            if(self.pttControlHandler) self.pttControlHandler(NO);
-            else if(self.serialCommandSender) self.serialCommandSender(@"RX;");
-            if(_fakeItVfoShiftHz) {
-                [self restoreNominalDialAfterFakeIt];
-                _fakeItVfoShiftHz=0;
-            }
-            [_txBufferLock lock]; _txBufferTotalSamples=0; _txBufferReadIndex=0; _activeTxToneCount=0; [_txBufferLock unlock];
-            if(self.logHandler) self.logHandler(@"[TX blocked] PTT was not confirmed; audio transmission cancelled.");
-            if(self.onTransmitStateChanged) self.onTransmitStateChanged(NO,@"");
-            return;
+        if (self.onTransmitStateChanged) {
+            self.onTransmitStateChanged(YES, msgText);
         }
-    }
 
-    _isTransmitting=YES;
-    _activeTransmissionWasSimulation = self.isSimulationMode;
-    if (!self.repeatArmedTransmission) self.isTransmitArmed = NO;
-    if (self.logHandler) {
-        NSString *pttMethod = self.isSimulationMode ? @"[Simulation - No RF]" : @"[CAT TX confirmed]";
-        self.logHandler([NSString stringWithFormat:@"[FT8 TX ON] Sending '%@' at %.0f Hz %@",
-                         msgText, synthAudioFreq, pttMethod]);
+        [self startSWRPolling];
     }
-
-    if (self.onTransmitStateChanged) {
-        self.onTransmitStateChanged(YES, msgText);
-    }
-
-    [self startSWRPolling];
 }
 
 - (void)endTransmission {
@@ -1647,65 +1654,95 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
 #pragma mark - Carrier Tune Mode
 
 - (void)startTuneCarrier {
-    if (!self.isSimulationMode && (self.dialFrequencyHz == 0 ||
-        (self.requiresVerifiedCATDial && !self.catDialAndModeVerified))) {
-        if (self.logHandler) self.logHandler(@"[Tune blocked] Radio dial frequency and DIG mode have not been verified over CAT.");
-        return;
-    }
-    if (_receiveReleaseInProgress) {
-        if (self.logHandler) self.logHandler(@"[Tune blocked] Waiting for the radio to confirm RX.");
-        return;
-    }
-    [self resetSWRReading];
-    _isTuning = NO;
-    _carrierPhase = 0.0;
-    if (!self.isSimulationMode) {
-        BOOL keyed=self.pttControlHandler ? self.pttControlHandler(YES) : (self.serialCommandSender ? self.serialCommandSender(@"TX;") : NO);
-        if(!keyed) {
-            _isTransmitting=NO; _isTuning=NO; self.isTransmitArmed=NO;
-            if(self.pttControlHandler) self.pttControlHandler(NO);
-            else if(self.serialCommandSender) self.serialCommandSender(@"RX;");
-            if(self.logHandler) self.logHandler(@"[TX blocked] PTT was not confirmed; audio transmission cancelled.");
-            if(self.onTransmitStateChanged) self.onTransmitStateChanged(NO,@"");
+    @synchronized (self) {
+        if (_isTuning || _isTransmitting) return;
+        if (!self.isSimulationMode && (self.dialFrequencyHz == 0 ||
+            (self.requiresVerifiedCATDial && !self.catDialAndModeVerified))) {
+            if (self.logHandler) self.logHandler(@"[Tune blocked] Radio dial frequency and DIG mode have not been verified over CAT.");
             return;
         }
-    }
-    _isTuning=YES;
-    NSUInteger tune = ++_tuneGeneration;
-    _activeTransmissionWasSimulation = self.isSimulationMode;
-    if (self.logHandler) {
-        NSString *pttMethod = self.isSimulationMode ? @"[Simulation - No RF]" : @"[CAT TX confirmed]";
-        self.logHandler([NSString stringWithFormat:@"[Tune Carrier] Tone at %.0f Hz started %@", self.txAudioFrequencyHz, pttMethod]);
-    }
-    [self startSWRPolling];
-    // A carrier left on must not stay keyed until someone presses STOP. The
-    // deadline is wall-clock time and belongs to this carrier only.
-    NSTimeInterval limit = self.maximumTuneSeconds;
-    if (limit > 0.0) {
-        __weak typeof(self) weakSelf = self;
-        dispatch_after(dispatch_walltime(NULL, (int64_t)(limit * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            typeof(self) strongSelf = weakSelf;
-            if (!strongSelf || !strongSelf->_isTuning || tune != strongSelf->_tuneGeneration) return;
-            if (strongSelf.logHandler) strongSelf.logHandler([NSString stringWithFormat:@"[Tune Carrier] Safety cutoff after %.0f s", limit]);
-            [strongSelf stopTuneCarrier];
-        });
+        if (_receiveReleaseInProgress) {
+            if (self.logHandler) self.logHandler(@"[Tune blocked] Waiting for the radio to confirm RX.");
+            return;
+        }
+        [self resetSWRReading];
+        _isTuning = NO;
+        _carrierPhase = 0.0;
+        if (!self.isSimulationMode) {
+            BOOL keyed=self.pttControlHandler ? self.pttControlHandler(YES) : (self.serialCommandSender ? self.serialCommandSender(@"TX;") : NO);
+            if(!keyed) {
+                _isTransmitting=NO; _isTuning=NO; self.isTransmitArmed=NO;
+                if(self.pttControlHandler) self.pttControlHandler(NO);
+                else if(self.serialCommandSender) self.serialCommandSender(@"RX;");
+                if(self.logHandler) self.logHandler(@"[TX blocked] PTT was not confirmed; audio transmission cancelled.");
+                if(self.onTransmitStateChanged) self.onTransmitStateChanged(NO,@"");
+                return;
+            }
+        }
+        [_txBufferLock lock];
+        _tuneSafetyRXConfirmed = NO;
+        _tuneSafetyMuted = NO;
+        _isTuning=YES;
+        [_txBufferLock unlock];
+        NSUInteger tune = ++_tuneGeneration;
+        _activeTransmissionWasSimulation = self.isSimulationMode;
+        if (self.logHandler) {
+            NSString *pttMethod = self.isSimulationMode ? @"[Simulation - No RF]" : @"[CAT TX confirmed]";
+            self.logHandler([NSString stringWithFormat:@"[Tune Carrier] Tone at %.0f Hz started %@", self.txAudioFrequencyHz, pttMethod]);
+        }
+        [self startSWRPolling];
+        // A carrier left on must not stay keyed until someone presses STOP. The
+        // deadline is wall-clock time and belongs to this carrier only.
+        NSTimeInterval limit = isfinite(self.maximumTuneSeconds) && self.maximumTuneSeconds > 0 ? MIN(15.0, self.maximumTuneSeconds) : 15.0;
+        if (limit > 0.0) {
+            __weak typeof(self) weakSelf = self;
+            dispatch_after(dispatch_walltime(NULL, (int64_t)(limit * NSEC_PER_SEC)), _tuneSafetyQueue, ^{
+                typeof(self) strongSelf = weakSelf;
+                if (!strongSelf) return;
+                @synchronized (strongSelf) {
+                    if (!strongSelf->_isTuning || tune != strongSelf->_tuneGeneration) return;
+                    [strongSelf->_txBufferLock lock];
+                    strongSelf->_tuneSafetyMuted = YES;
+                    [strongSelf->_txBufferLock unlock];
+                    // Silence and request RX independently of the UI. Keep the tune state latched until
+                    // the main thread enters confirmed RX recovery, so it cannot rearm in the meantime.
+                    if (!strongSelf->_activeTransmissionWasSimulation) {
+                        if (strongSelf.pttControlHandler) strongSelf->_tuneSafetyRXConfirmed = strongSelf.pttControlHandler(NO);
+                        else if (strongSelf.serialCommandSender) strongSelf->_tuneSafetyRXConfirmed = strongSelf.serialCommandSender(@"RX;");
+                    }
+                    dispatch_async(dispatch_get_main_queue(), ^{
+                        @synchronized (strongSelf) {
+                            if (!strongSelf->_isTuning || tune != strongSelf->_tuneGeneration) return;
+                            if (strongSelf.logHandler) strongSelf.logHandler([NSString stringWithFormat:@"[Tune Carrier] Safety cutoff after %.0f s", limit]);
+                            [strongSelf stopTuneCarrier];
+                        }
+                    });
+                }
+            });
+        }
     }
 }
 
 - (void)stopTuneCarrier {
-    if (!_isTuning) return;
-    _isTuning = NO;
-    [self stopSWRPolling];
-    // Reuse the confirmed RX recovery path. Marking the muted carrier as TX
-    // keeps all new transmissions blocked until the radio answers PT0.
-    _isTransmitting = YES;
-    _receiveReleaseInProgress = YES;
-    _receiveReleaseRequiresCATConfirmation = !_activeTransmissionWasSimulation;
-    _receiveReleaseRequestInFlight = NO;
-    _receiveReleaseAttempt = 0;
-    NSUInteger releaseGeneration = ++_receiveReleaseGeneration;
-    if (self.logHandler) self.logHandler(@"[Tune Carrier] Tone muted; confirming RX.");
-    [self requestReceiveReleaseForGeneration:releaseGeneration];
+    @synchronized (self) {
+        if (!_isTuning) return;
+        ++_tuneGeneration;
+        [_txBufferLock lock];
+        _isTuning = NO;
+        _tuneSafetyMuted = YES;
+        [_txBufferLock unlock];
+        [self stopSWRPolling];
+        // Reuse the confirmed RX recovery path. Marking the muted carrier as TX
+        // keeps all new transmissions blocked until the radio answers PT0.
+        _isTransmitting = YES;
+        _receiveReleaseInProgress = YES;
+        _receiveReleaseRequiresCATConfirmation = !_activeTransmissionWasSimulation && !_tuneSafetyRXConfirmed;
+        _receiveReleaseRequestInFlight = NO;
+        _receiveReleaseAttempt = 0;
+        NSUInteger releaseGeneration = ++_receiveReleaseGeneration;
+        if (self.logHandler) self.logHandler(@"[Tune Carrier] Tone muted; confirming RX.");
+        [self requestReceiveReleaseForGeneration:releaseGeneration];
+    }
 }
 
 #pragma mark - Audio Samples Processing
@@ -1759,6 +1796,12 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
 }
 
 - (void)renderOutgoingAudioSamples:(float *)samples count:(UInt32)count {
+    [_txBufferLock lock];
+    if (_isTuning && _tuneSafetyMuted) {
+        memset(samples, 0, count * sizeof(float));
+        [_txBufferLock unlock];
+        return;
+    }
     if (_isTuning) {
         double freq = self.txAudioFrequencyHz;
         double phaseInc = 2.0 * M_PI * freq / (double)FT8_SAMPLE_RATE;
@@ -1767,10 +1810,10 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
             _carrierPhase += phaseInc;
             if (_carrierPhase > 2.0 * M_PI) _carrierPhase -= 2.0 * M_PI;
         }
+        [_txBufferLock unlock];
         return;
     }
 
-    [_txBufferLock lock];
     if (!_isTransmitting || _txBufferReadIndex >= _txBufferTotalSamples) {
         memset(samples, 0, count * sizeof(float));
         [_txBufferLock unlock];

@@ -346,7 +346,7 @@ int main(int argc, const char * argv[]) {
         tuneEngine.maximumTuneSeconds = 0;
         [tuneEngine startTuneCarrier];
         [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.5]];
-        AssertTrue(tuneEngine.isTuning, @"a tune limit of 0 disables the cutoff");
+        AssertTrue(tuneEngine.isTuning, @"a zero tune limit retains the default 15-second safety ceiling");
         [tuneEngine stopTuneCarrier];
         AssertTrue(WaitUntil(^BOOL{ return tuneReleases == 4 && !tuneEngine.isReceiveRecoveryPending; }, 1.0),
                    @"STOP still ends a carrier without a limit");
@@ -1269,6 +1269,26 @@ int main(int argc, const char * argv[]) {
         AssertTrue([missingRoute.selectedInputDeviceUID isEqual:@"station-test-missing-input"], @"Missing FT8 input is never silently replaced");
         NSError *routeError=nil;
         AssertTrue(![missingRoute startMonitoring:&routeError] && routeError!=nil && !missingRoute.isMonitoring, @"Missing FT8 route blocks start with a useful error");
+        // The carrier watchdog must silence audio and send RX even while AppKit is blocked.
+        TX500FT8AudioEngine *busyTune = [TX500FT8AudioEngine new];
+        busyTune.isSimulationMode = NO;
+        busyTune.maximumTuneSeconds = 0.04;
+        NSObject *busyLock = [NSObject new];
+        __block NSUInteger busyReleases = 0;
+        busyTune.pttControlHandler = ^BOOL(BOOL active) {
+            if (!active) { @synchronized (busyLock) { busyReleases++; } }
+            return YES;
+        };
+        [busyTune startTuneCarrier];
+        [NSThread sleepForTimeInterval:0.16];
+        float muted[128];
+        [busyTune renderOutgoingAudioSamples:muted count:128];
+        BOOL silent = YES;
+        for (NSUInteger i = 0; i < 128; i++) if (muted[i] != 0) silent = NO;
+        @synchronized (busyLock) { AssertTrue(silent && busyReleases == 1, @"A blocked main thread cannot delay FT8 carrier mute or RX"); }
+        AssertTrue(WaitUntil(^BOOL { return !busyTune.isTuning && !busyTune.isReceiveRecoveryPending; }, 1),
+                   @"Watchdog cleanup completes confirmed RX recovery");
+        NSLog(@"PASS: FT8 carrier watchdog releases independently of the main thread.");
         NSLog(@"ALL FT8 & FT4 DIGITAL SUITE TESTS PASSED SUCCESSFULLY! (100%%)");
         [[NSFileManager defaultManager] removeItemAtPath:[NSString stringWithUTF8String:testRoot] error:nil];
     }

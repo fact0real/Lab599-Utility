@@ -30,8 +30,9 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, assign) BOOL useCutNumbers; // 599 -> 5NN
 @property (nonatomic, copy) NSString *myCallsign; // Empty until set; {MYCALL} macros need it.
 // Hard transmit time-out, independent of the sidetone, the release timers and the main thread: a
-// message longer than this is refused up front, and whatever is still on the air when it elapses
-// is silenced and released (RX;). Defaults: 120 s for a message, 15 s for the tuning carrier.
+// message longer than this is refused up front (hard ceiling 120 s), and whatever is still on the air when it elapses
+// is silenced and RX is requested. Defaults/ceilings: 120 s for a message, 15 s for the carrier.
+// Zero, negative and nonfinite values retain the default safety limit.
 @property (nonatomic, assign) NSTimeInterval maximumTransmitSeconds;
 @property (nonatomic, assign) NSTimeInterval maximumCarrierSeconds;
 
@@ -80,7 +81,7 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)transmitText:(NSString *)text targetCall:(NSString *)call rst:(NSString *)rst name:(NSString *)name qth:(NSString *)qth;
 - (void)abortTransmission;
 - (void)triggerMacroAtIndex:(NSInteger)index targetCall:(NSString *)call rst:(NSString *)rst name:(NSString *)name qth:(NSString *)qth;
-- (void)startContinuousCarrierWithPitchHz:(double)pitch;
+- (BOOL)startContinuousCarrierWithPitchHz:(double)pitch;
 - (void)stopContinuousCarrier;
 
 // Auto-CQ

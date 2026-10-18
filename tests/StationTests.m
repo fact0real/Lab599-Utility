@@ -150,6 +150,49 @@ static void TestHandoff(void) {
     return nil;
 }
 @end
+// Hold a release immediately after it announces priority, before it takes the CAT lock.
+// This makes the formerly narrow cancellation race deterministic without a physical port.
+@interface TX500StationCore (ReleasePriorityTests)
+- (void)beginReleaseRequest;
+@end
+@interface PausingReleaseCore : TX500StationCore
+@property BOOL pauseNextRelease;
+@property dispatch_semaphore_t releaseAnnounced, allowRelease;
+@end
+@implementation PausingReleaseCore
+- (void)beginReleaseRequest {
+    [super beginReleaseRequest];
+    if (self.pauseNextRelease) {
+        self.pauseNextRelease = NO;
+        dispatch_semaphore_signal(self.releaseAnnounced);
+        dispatch_semaphore_wait(self.allowRelease, dispatch_time(DISPATCH_TIME_NOW, 2*NSEC_PER_SEC));
+    }
+}
+@end
+static void TestQueuedReleasePriority(void) {
+    PausingReleaseCore *core = [PausingReleaseCore new];
+    FakeDeadlineRadio *radio = [FakeDeadlineRadio new];
+    core.transportFactory = ^id(NSString *path) { (void)path; return radio; };
+    [core selectOwner:@"CW" port:@"fake-priority" error:nil];
+    Check([core transmit:YES owner:@"CW" error:nil], @"Priority fixture keys CW");
+    core.releaseAnnounced = dispatch_semaphore_create(0);
+    core.allowRelease = dispatch_semaphore_create(0);
+    core.pauseNextRelease = YES;
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    [NSThread detachNewThreadWithBlock:^{ [core releaseOwnedTX:nil]; dispatch_semaphore_signal(done); }];
+    Check(dispatch_semaphore_wait(core.releaseAnnounced, dispatch_time(DISPATCH_TIME_NOW,NSEC_PER_SEC)) == 0,
+          @"Release priority is announced before waiting for CAT");
+    NSUInteger failures = core.failureCount;
+    Check(![core query:@"RM0;RM;" timeout:0.1 error:nil] && radio.meterReads == 0,
+          @"A meter arriving after the release request cannot overtake RX");
+    Check([[core query:@"PT;" error:nil] isEqual:@"PT1;"], @"Release priority does not suppress ordinary status reads");
+    Check(core.failureCount == failures, @"A skipped meter read is not reported as a CAT failure");
+    dispatch_semaphore_signal(core.allowRelease);
+    Check(dispatch_semaphore_wait(done,dispatch_time(DISPATCH_TIME_NOW,NSEC_PER_SEC)) == 0 && !core.ownsTX,
+          @"The queued release completes");
+    [core query:@"RM0;RM;" timeout:0.05 error:nil];
+    Check(radio.meterReads == 1, @"Normal meter reads resume after release");
+}
 static void TestReadDeadline(void) {
     TX500StationCore *c=[TX500StationCore new]; FakeDeadlineRadio *r=[FakeDeadlineRadio new]; c.transportFactory=^id(NSString *p){(void)p;return r;};
     [c selectOwner:@"CW" port:@"fake-deadline" error:nil];
@@ -220,6 +263,7 @@ static void TestLostReplyKeepsTX(void) {
     Check(![c3 transmit:YES owner:@"Digital" error:nil] && ![r3.commands containsObject:@"TX;"],@"TX refused when the radio state and PT cannot be read");
     TestReadDeadline();
     TestReleaseOutrunsRead();
+    TestQueuedReleasePriority();
     TestHandoff();
 }
 static void TestStore(NSURL *root) {

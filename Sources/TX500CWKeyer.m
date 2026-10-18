@@ -64,6 +64,7 @@
     dispatch_queue_t _timeoutQueue;
     dispatch_source_t _transmitTimeout;
     id<NSObject> _transmitActivity;
+    BOOL _activeTransmissionWasPractice;
 }
 
 // Kept for callers outside CW transmit: no transmit path uses it any more. The first USB output
@@ -169,7 +170,9 @@
 
 // Never call with _radioAudioLock held (updateSleepActivity takes it).
 - (void)setIsTransmitting:(BOOL)isTransmitting {
+    pthread_mutex_lock(&_radioAudioLock);
     _isTransmitting = isTransmitting;
+    pthread_mutex_unlock(&_radioAudioLock);
     [self updateSleepActivity];
 }
 
@@ -235,9 +238,46 @@ static NSString *CWKeyerFindBestUSBAudioOutputUID(void) {
 
 #pragma mark - Sidetone & Radio Audio Setup
 
+// Never send the local sidetone to a USB/virtual/network output, even if it is the Mac default.
+static BOOL CWLocalOutputDevice(AudioDeviceID device) {
+    UInt32 transport = 0, size = sizeof(transport);
+    AudioObjectPropertyAddress address = {kAudioDevicePropertyTransportType, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
+    if (AudioObjectGetPropertyData(device, &address, 0, NULL, &size, &transport) != noErr || transport != kAudioDeviceTransportTypeBuiltIn) return NO;
+    address.mSelector = kAudioDevicePropertyStreams;
+    address.mScope = kAudioObjectPropertyScopeOutput;
+    size = 0;
+    return AudioObjectGetPropertyDataSize(device, &address, 0, NULL, &size) == noErr && size > 0;
+}
+
+- (BOOL)localSidetoneRouteIsSafe {
+    // Unit tests inject objects that raise without opening CoreAudio.
+    if (NSProcessInfo.processInfo.environment[@"TX500_TEST_MODE"].boolValue) return YES;
+    AudioUnit unit = self.sidetoneEngine.outputNode.audioUnit;
+    AudioDeviceID device = kAudioObjectUnknown;
+    UInt32 size = sizeof(device);
+    return unit && AudioUnitGetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &device, &size) == noErr && CWLocalOutputDevice(device);
+}
+
+- (BOOL)bindLocalSidetoneOutput {
+    AudioObjectPropertyAddress address = {kAudioHardwarePropertyDevices, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
+    UInt32 size = 0;
+    if (AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &address, 0, NULL, &size) != noErr || !size) return NO;
+    NSMutableData *data = [NSMutableData dataWithLength:size];
+    if (AudioObjectGetPropertyData(kAudioObjectSystemObject, &address, 0, NULL, &size, data.mutableBytes) != noErr) return NO;
+    AudioDeviceID *devices = data.mutableBytes;
+    AudioUnit unit = self.sidetoneEngine.outputNode.audioUnit;
+    for (NSUInteger i = 0; i < size / sizeof(AudioDeviceID); i++) {
+        AudioDeviceID device = devices[i];
+        if (CWLocalOutputDevice(device) && unit && AudioUnitSetProperty(unit, kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0, &device, sizeof(device)) == noErr)
+            return [self localSidetoneRouteIsSafe];
+    }
+    return NO;
+}
+
 - (void)setupSidetoneAudio {
     @try {
         self.sidetoneEngine = [[AVAudioEngine alloc] init];
+        if (![self bindLocalSidetoneOutput]) { self.sidetoneEngine = nil; return; }
         self.sidetonePlayer = [[AVAudioPlayerNode alloc] init];
         [self.sidetoneEngine attachNode:self.sidetonePlayer];
 
@@ -266,6 +306,15 @@ static NSString *CWKeyerFindBestUSBAudioOutputUID(void) {
 - (void)disableSidetoneAfterFailure:(NSException *)exception {
     self.sidetoneEngineReady = NO;
     if (self.logHandler) self.logHandler([NSString stringWithFormat:@"CW sidetone unavailable (%@); transmitting without sidetone.", exception.reason ?: exception.name]);
+}
+
+// Local audio teardown must never prevent the independent CAT release path.
+- (void)stopLocalSidetoneSafely {
+    @try {
+        if (self.sidetonePlayer.isPlaying) [self.sidetonePlayer stop];
+    } @catch (NSException *exception) {
+        [self disableSidetoneAfterFailure:exception];
+    }
 }
 
 static void CWKeyerRadioOutputCallback(void *inUserData,
@@ -562,7 +611,7 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
     };
 
     // 1. Play local sidetone to Mac speakers/headphones
-    if (self.sidetoneEnabled && self.sidetoneEngineReady && self.sidetonePlayer) {
+    if (self.sidetoneEnabled && self.sidetoneEngineReady && self.sidetonePlayer && [self localSidetoneRouteIsSafe]) {
         @try {
             AVAudioFormat *sideFmt = [self.sidetoneEngine.mainMixerNode outputFormatForBus:0];
             if (sideFmt && sideFmt.sampleRate > 0) {
@@ -669,100 +718,117 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
 }
 
 - (void)transmitText:(NSString *)text targetCall:(NSString *)call rst:(NSString *)rst name:(NSString *)name qth:(NSString *)qth {
-    // Anything the operator sends (Send, a macro, an Answer, the next step) starts or continues a
-    // QSO: Auto-CQ must not call again on top of it.
-    if (self.isAutoCQActive && !self.autoCQSending) {
-        [self stopAutoCQ];
-        if (self.logHandler) self.logHandler(@"Auto-CQ stopped: the operator is sending.");
-    }
-    if ([self blocksMissingCallsignForTemplate:text]) return;
-    NSString *expanded = [self expandTemplate:text targetCall:call rst:rst name:name qth:qth];
-    if (expanded.length == 0) return;
-    NSInteger limitWPM = fmax(3, fmin(45, self.wpm));
-    double limitEstimate = [self estimatedDurationForText:expanded wpm:limitWPM];
-    if (self.maximumTransmitSeconds > 0 && limitEstimate > self.maximumTransmitSeconds) {
-        if (self.logHandler) self.logHandler([NSString stringWithFormat:@"[CW TX blocked] %.0f s at %ld WPM is longer than the %.0f s transmit limit: shorten the text or raise the speed.", limitEstimate, (long)limitWPM, self.maximumTransmitSeconds]);
-        return;
-    }
-
-    [self abortTransmission];
-    // No keying before the radio's audio output is open and running (practice opens none).
-    BOOL practice = self.practiceModeActive && self.practiceModeActive();
-    if (!practice && ![self ensureRadioAudioReady]) return;
-    NSUInteger token=self.transmissionGeneration;
-    self.isTransmitting = YES;
-    self.activeBufferText = expanded;
-    self.currentlyTransmittingChar = @"";
-
-    [self.internalSentHistory insertObject:expanded atIndex:0];
-    if (self.internalSentHistory.count > 40) {
-        [self.internalSentHistory removeLastObject];
-    }
-
-    if (self.onTransmitStateChanged) {
-        self.onTransmitStateChanged(YES, expanded);
-    }
-
-    // 1. Send Keyer Speed Command: KS<wpm>;
-    NSInteger clampedWPM = fmax(3, fmin(45, self.wpm));
-    if (self.logHandler) {
-        self.logHandler([NSString stringWithFormat:@"CW TX (%ld WPM): %@", (long)clampedWPM, expanded]);
-    }
-
-    // Hard time-out first: it depends on nothing below (a refused TX; cancels it through the abort).
-    [self armTransmitTimeoutSeconds:self.maximumTransmitSeconds];
-
-    // 1. Key transceiver into TX mode
-    if (self.serialCommandSender) {
-        NSString *cmd = self.txPrefixCommand.length > 0 ? self.txPrefixCommand : @"TX;";
-        BOOL ok = self.serialCommandSender(cmd);
-        if (!ok) {
-            [self abortTransmission];
+    @synchronized (self) {
+        // Anything the operator sends (Send, a macro, an Answer, the next step) starts or continues a
+        // QSO: Auto-CQ must not call again on top of it.
+        if (self.isAutoCQActive && !self.autoCQSending) {
+            [self stopAutoCQ];
+            if (self.logHandler) self.logHandler(@"Auto-CQ stopped: the operator is sending.");
+        }
+        if ([self blocksMissingCallsignForTemplate:text]) return;
+        NSString *expanded = [self expandTemplate:text targetCall:call rst:rst name:name qth:qth];
+        if (expanded.length == 0) return;
+        NSCharacterSet *supported = [NSCharacterSet characterSetWithCharactersInString:@"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 /?=+,.\n\r\t"];
+        if (expanded.length > 4096 || [expanded rangeOfCharacterFromSet:supported.invertedSet].location != NSNotFound) {
+            if (self.logHandler) self.logHandler(@"[CW TX blocked] Use supported Morse letters, digits and punctuation; maximum 4096 characters.");
             return;
         }
+        expanded = [[expanded componentsSeparatedByCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] componentsJoinedByString:@" "];
+        NSInteger limitWPM = fmax(3, fmin(45, self.wpm));
+        double limitEstimate = [self estimatedDurationForText:expanded wpm:limitWPM];
+        NSTimeInterval messageLimit = isfinite(self.maximumTransmitSeconds) && self.maximumTransmitSeconds > 0 ? MIN(120.0, self.maximumTransmitSeconds) : 120.0;
+        if (limitEstimate > messageLimit) {
+            if (self.logHandler) self.logHandler([NSString stringWithFormat:@"[CW TX blocked] %.0f s at %ld WPM is longer than the %.0f s transmit limit: shorten the text or raise the speed.", limitEstimate, (long)limitWPM, messageLimit]);
+            return;
+        }
+
+        [self abortTransmission];
+        // No keying before the radio's audio output is open and running (practice opens none).
+        BOOL practice = self.practiceModeActive && self.practiceModeActive();
+        if (!practice && ![self ensureRadioAudioReady]) return;
+        _activeTransmissionWasPractice = practice;
+        NSUInteger token=self.transmissionGeneration;
+        self.isTransmitting = YES;
+        self.activeBufferText = expanded;
+        self.currentlyTransmittingChar = @"";
+
+        [self.internalSentHistory insertObject:expanded atIndex:0];
+        if (self.internalSentHistory.count > 40) {
+            [self.internalSentHistory removeLastObject];
+        }
+
+        if (self.onTransmitStateChanged) {
+            self.onTransmitStateChanged(YES, expanded);
+        }
+
+        // 1. Send Keyer Speed Command: KS<wpm>;
+        NSInteger clampedWPM = fmax(3, fmin(45, self.wpm));
+        if (self.logHandler) {
+            self.logHandler([NSString stringWithFormat:@"CW TX (%ld WPM): %@", (long)clampedWPM, expanded]);
+        }
+
+        // Hard time-out first: it depends on nothing below (a refused TX; cancels it through the abort).
+        [self armTransmitTimeoutSeconds:messageLimit];
+
+        // 1. Key transceiver into TX mode
+        if (!practice && self.serialCommandSender) {
+            NSString *cmd = self.txPrefixCommand.length > 0 ? self.txPrefixCommand : @"TX;";
+            BOOL ok = self.serialCommandSender(cmd);
+            if (!ok) {
+                [self abortTransmission];
+                return;
+            }
+        }
+
+        // 2. Arm the release first: the completion and the watchdog must depend on nothing below.
+        double totalEstSec = [self estimatedDurationForText:expanded wpm:clampedWPM];
+
+        // 3. Completion callback when transmission finishes
+        __weak typeof(self) weakSelf = self;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(totalEstSec * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            typeof(self) strongSelf = weakSelf;
+            @synchronized (strongSelf) {
+                if (strongSelf && token == strongSelf.transmissionGeneration && strongSelf.isTransmitting) {
+                    strongSelf.isTransmitting = NO;
+                    [strongSelf cancelTransmitTimeout];
+                    strongSelf.activeBufferText = @"";
+                    strongSelf.currentlyTransmittingChar = @"";
+                    pthread_mutex_lock(&strongSelf->_radioAudioLock);
+                    strongSelf->_isContinuousCarrier = NO;
+                    [strongSelf releaseRadioBufferLocked];
+                    pthread_mutex_unlock(&strongSelf->_radioAudioLock);
+                    [strongSelf updateSleepActivity];
+                    [strongSelf stopLocalSidetoneSafely];
+                    // Release TX back to RX
+                    if (!strongSelf->_activeTransmissionWasPractice && strongSelf.serialCommandSender) {
+                        NSString *rxCmd = strongSelf.rxSuffixCommand.length > 0 ? strongSelf.rxSuffixCommand : @"RX;";
+                        strongSelf.serialCommandSender(rxCmd);
+                    }
+                    if (strongSelf.onTransmitStateChanged) {
+                        strongSelf.onTransmitStateChanged(NO, @"");
+                    }
+                }
+            }
+        });
+
+        // 4. Backup release request if audio completion is delayed
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((totalEstSec + 0.35) * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            typeof(self) strongSelf = weakSelf;
+            @synchronized (strongSelf) {
+                if (strongSelf && token == strongSelf.transmissionGeneration && strongSelf.isTransmitting) {
+                    [strongSelf abortTransmission];
+                }
+            }
+        });
+
+        // 5. Synthesize and play authentic Morse code audio to Mac speakers & Radio USB Audio
+        @try {
+            [self playMorseAudioForText:expanded wpm:clampedWPM pitchHz:self.sidetonePitchHz token:token];
+        } @catch (NSException *exception) {
+            [self abortTransmission];
+            if (self.logHandler) self.logHandler([NSString stringWithFormat:@"CW audio failed; RX requested: %@", exception.reason]);
+        }
     }
-
-    // 2. Arm the release first: the completion and the watchdog must depend on nothing below.
-    double totalEstSec = [self estimatedDurationForText:expanded wpm:clampedWPM];
-
-    // 3. Completion callback when transmission finishes
-    __weak typeof(self) weakSelf = self;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(totalEstSec * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        typeof(self) strongSelf = weakSelf;
-        if (strongSelf && token == strongSelf.transmissionGeneration && strongSelf.isTransmitting) {
-            strongSelf.isTransmitting = NO;
-            [strongSelf cancelTransmitTimeout];
-            strongSelf.activeBufferText = @"";
-            strongSelf.currentlyTransmittingChar = @"";
-            pthread_mutex_lock(&strongSelf->_radioAudioLock);
-            strongSelf->_isContinuousCarrier = NO;
-            [strongSelf releaseRadioBufferLocked];
-            pthread_mutex_unlock(&strongSelf->_radioAudioLock);
-            [strongSelf updateSleepActivity];
-            if (strongSelf.sidetonePlayer.isPlaying) {
-                [strongSelf.sidetonePlayer stop];
-            }
-            // Release TX back to RX
-            if (strongSelf.serialCommandSender) {
-                NSString *rxCmd = strongSelf.rxSuffixCommand.length > 0 ? strongSelf.rxSuffixCommand : @"RX;";
-                strongSelf.serialCommandSender(rxCmd);
-            }
-            if (strongSelf.onTransmitStateChanged) {
-                strongSelf.onTransmitStateChanged(NO, @"");
-            }
-        }
-    });
-
-    // 4. Safety Watchdog Timer: Guarantees radio returns to RX even if audio buffer completion has any delay
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((totalEstSec + 0.35) * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        typeof(self) strongSelf = weakSelf;
-        if (strongSelf && token == strongSelf.transmissionGeneration && strongSelf.isTransmitting) {
-            [strongSelf abortTransmission];
-        }
-    });
-
-    // 5. Synthesize and play authentic Morse code audio to Mac speakers & Radio USB Audio
-    [self playMorseAudioForText:expanded wpm:clampedWPM pitchHz:self.sidetonePitchHz token:token];
 }
 
 - (void)abortTransmission {
@@ -771,139 +837,156 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
 
 // release NO: the time-out has already sent RX; from its own queue.
 - (void)abortTransmissionReleasingRadio:(BOOL)release {
-    [self cancelTransmitTimeout];
-    self.transmissionGeneration++;
-    self.isTransmitting = NO;
-    self.activeBufferText = @"";
-    self.currentlyTransmittingChar = @"";
+    @synchronized (self) {
+        [self cancelTransmitTimeout];
+        self.transmissionGeneration++;
+        self.isTransmitting = NO;
+        self.activeBufferText = @"";
+        self.currentlyTransmittingChar = @"";
 
-    pthread_mutex_lock(&_radioAudioLock);
-    _isContinuousCarrier = NO;
-    [self releaseRadioBufferLocked];
-    pthread_mutex_unlock(&_radioAudioLock);
-    [self updateSleepActivity];
+        pthread_mutex_lock(&_radioAudioLock);
+        _isContinuousCarrier = NO;
+        [self releaseRadioBufferLocked];
+        pthread_mutex_unlock(&_radioAudioLock);
+        [self updateSleepActivity];
 
-    if (self.sidetonePlayer.isPlaying) {
-        [self.sidetonePlayer stop];
-    }
+        [self stopLocalSidetoneSafely];
 
-    if (release && self.serialCommandSender) {
-        NSString *rxCmd = self.rxSuffixCommand.length > 0 ? self.rxSuffixCommand : @"RX;";
-        self.serialCommandSender(rxCmd);
-    }
+        if (release && self.serialCommandSender && !(self.practiceModeActive && self.practiceModeActive())) {
+            NSString *rxCmd = self.rxSuffixCommand.length > 0 ? self.rxSuffixCommand : @"RX;";
+            self.serialCommandSender(rxCmd);
+        }
 
-    if (self.onTransmitStateChanged) {
-        self.onTransmitStateChanged(NO, @"");
-    }
-}
-
-- (void)startContinuousCarrierWithPitchHz:(double)pitch {
-    if (self.practiceModeActive && self.practiceModeActive()) {
-        if (self.radioQueueReady) [self teardownRadioAudio];
-        if (self.logHandler) self.logHandler(@"Practice / Sim: the tuning carrier is not sent to the radio.");
-        return;
-    }
-    [self ensureRadioAudioReady];
-    pthread_mutex_lock(&_radioAudioLock);
-    _isContinuousCarrier = YES;
-    _carrierFrequency = (pitch > 100.0) ? pitch : 650.0;
-    _carrierAmplitude = 0.85f;
-    _carrierPhase = 0.0;
-    // Hard time-out, armed before the sound starts (the queue cannot render while the lock is held).
-    [self armTransmitTimeoutSeconds:self.maximumCarrierSeconds];
-    pthread_mutex_unlock(&_radioAudioLock);
-    [self updateSleepActivity];
-
-    if (self.sidetoneEngineReady && self.sidetonePlayer && self.sidetoneEnabled) {
-        @try {
-            AVAudioFormat *fmt = [self.sidetoneEngine.mainMixerNode outputFormatForBus:0];
-            if (fmt && fmt.sampleRate > 0) {
-                double sampleRate = fmt.sampleRate;
-                NSUInteger frames = (NSUInteger)sampleRate;
-                AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:fmt frameCapacity:(AVAudioFrameCount)frames];
-                buffer.frameLength = (AVAudioFrameCount)frames;
-                double omega = 2.0 * M_PI * pitch / sampleRate;
-                float vol = self.sidetoneVolume * 0.20f;
-                for (int ch = 0; ch < (int)fmt.channelCount; ch++) {
-                    float *data = buffer.floatChannelData[ch];
-                    double phase = 0;
-                    for (NSUInteger i = 0; i < frames; i++) {
-                        data[i] = vol * sin(phase);
-                        phase += omega;
-                    }
-                }
-                [self.sidetonePlayer stop];
-                [self.sidetonePlayer scheduleBuffer:buffer atTime:nil options:AVAudioPlayerNodeBufferLoops completionHandler:nil];
-                [self.sidetonePlayer play];
-            }
-        } @catch (NSException *exception) {
-            [self disableSidetoneAfterFailure:exception];
+        if (self.onTransmitStateChanged) {
+            self.onTransmitStateChanged(NO, @"");
         }
     }
 }
 
-- (void)stopContinuousCarrier {
-    pthread_mutex_lock(&_radioAudioLock);
-    _isContinuousCarrier = NO;
-    pthread_mutex_unlock(&_radioAudioLock);
-    [self updateSleepActivity];
-    if (!self.isTransmitting) [self cancelTransmitTimeout]; // a message in flight keeps its own time-out
+- (BOOL)startContinuousCarrierWithPitchHz:(double)pitch {
+    @synchronized (self) {
+        if (self.practiceModeActive && self.practiceModeActive()) {
+            if (self.radioQueueReady) [self teardownRadioAudio];
+            if (self.logHandler) self.logHandler(@"Practice / Sim: the tuning carrier is not sent to the radio.");
+            return NO;
+        }
+        if (![self ensureRadioAudioReady]) { [self abortTransmission]; return NO; }
+        self.transmissionGeneration++;
+        _activeTransmissionWasPractice = NO;
+        pthread_mutex_lock(&_radioAudioLock);
+        _isContinuousCarrier = YES;
+        _carrierFrequency = (pitch > 100.0) ? pitch : 650.0;
+        _carrierAmplitude = 0.85f;
+        _carrierPhase = 0.0;
+        // Hard time-out, armed before the sound starts (the queue cannot render while the lock is held).
+        NSTimeInterval carrierLimit = isfinite(self.maximumCarrierSeconds) && self.maximumCarrierSeconds > 0 ? MIN(15.0, self.maximumCarrierSeconds) : 15.0;
+        [self armTransmitTimeoutSeconds:carrierLimit];
+        pthread_mutex_unlock(&_radioAudioLock);
+        [self updateSleepActivity];
 
-    if (self.sidetonePlayer.isPlaying) {
-        [self.sidetonePlayer stop];
+        if (self.sidetoneEngineReady && self.sidetonePlayer && self.sidetoneEnabled && [self localSidetoneRouteIsSafe]) {
+            @try {
+                AVAudioFormat *fmt = [self.sidetoneEngine.mainMixerNode outputFormatForBus:0];
+                if (fmt && fmt.sampleRate > 0) {
+                    double sampleRate = fmt.sampleRate;
+                    NSUInteger frames = (NSUInteger)sampleRate;
+                    AVAudioPCMBuffer *buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:fmt frameCapacity:(AVAudioFrameCount)frames];
+                    buffer.frameLength = (AVAudioFrameCount)frames;
+                    double omega = 2.0 * M_PI * pitch / sampleRate;
+                    float vol = self.sidetoneVolume * 0.20f;
+                    for (int ch = 0; ch < (int)fmt.channelCount; ch++) {
+                        float *data = buffer.floatChannelData[ch];
+                        double phase = 0;
+                        for (NSUInteger i = 0; i < frames; i++) {
+                            data[i] = vol * sin(phase);
+                            phase += omega;
+                        }
+                    }
+                    [self.sidetonePlayer stop];
+                    [self.sidetonePlayer scheduleBuffer:buffer atTime:nil options:AVAudioPlayerNodeBufferLoops completionHandler:nil];
+                    [self.sidetonePlayer play];
+                }
+            } @catch (NSException *exception) {
+                [self disableSidetoneAfterFailure:exception];
+            }
+        }
+        return YES;
+    }
+}
+
+- (void)stopContinuousCarrier {
+    @synchronized (self) {
+        pthread_mutex_lock(&_radioAudioLock);
+        _isContinuousCarrier = NO;
+        pthread_mutex_unlock(&_radioAudioLock);
+        [self updateSleepActivity];
+        if (!self.isTransmitting) [self cancelTransmitTimeout]; // a message in flight keeps its own time-out
+
+        [self stopLocalSidetoneSafely];
     }
 }
 
 #pragma mark - Transmit time-out
 
 // Armed before any sound and cancelled by every normal stop. It runs on its own queue with a
-// wall-clock deadline, so a sidetone exception, a blocked main thread or a sleep/wake cycle
-// cannot postpone it: the audio is silenced under the lock first, then RX; goes out through the
-// sender, then the state and the pane are cleared on the main thread.
+// wall-clock deadline, independently of AppKit's run loop. Radio transitions are serialized so
+// an old release cannot overtake a replacement TX. Delivery still depends on process scheduling,
+// the CAT transport and an awake Mac; this is not a hardware watchdog.
 - (void)armTransmitTimeoutSeconds:(NSTimeInterval)seconds {
-    [self cancelTransmitTimeout];
-    if (seconds <= 0) return;
-    dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, _timeoutQueue);
-    __weak typeof(self) weakSelf = self;
-    dispatch_source_set_event_handler(timer, ^{
-        typeof(self) strongSelf = weakSelf;
-        dispatch_source_cancel(timer);
-        if (!strongSelf) return;
-        pthread_mutex_lock(&strongSelf->_radioAudioLock);
-        BOOL carrier = strongSelf->_isContinuousCarrier;
-        strongSelf->_isContinuousCarrier = NO;
-        strongSelf->_radioTxBufferReadIndex = strongSelf->_radioTxBufferTotalSamples;
-        pthread_mutex_unlock(&strongSelf->_radioAudioLock);
-        if (!carrier && !strongSelf.isTransmitting) return;   // ended normally; nothing to do
-        NSUInteger token = strongSelf.transmissionGeneration;
-        BOOL released = NO;
-        if (strongSelf.serialCommandSender) {
-            NSString *rxCmd = strongSelf.rxSuffixCommand.length > 0 ? strongSelf.rxSuffixCommand : @"RX;";
-            released = strongSelf.serialCommandSender(rxCmd);
-        }
-        dispatch_async(dispatch_get_main_queue(), ^{
-            typeof(self) mainSelf = weakSelf;
-            if (!mainSelf) return;
-            // A newer message started on the main thread after this RX; went out: it is keyed with its
-            // own time-out, so it is not cleared here (clearing it would leave the radio keyed).
-            if (!carrier && mainSelf.transmissionGeneration != token) {
-                if (mainSelf.logHandler) mainSelf.logHandler([NSString stringWithFormat:@"CW TX time-out: %.0f s on the air, RX; sent; a newer transmission had already started and keeps its own time-out.", seconds]);
-                return;
+    @synchronized (self) {
+        [self cancelTransmitTimeout];
+        if (!isfinite(seconds) || seconds <= 0) seconds = 120.0;
+        dispatch_source_t timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, _timeoutQueue);
+        __weak dispatch_source_t weakTimer = timer;
+        __weak typeof(self) weakSelf = self;
+        dispatch_source_set_event_handler(timer, ^{
+            typeof(self) strongSelf = weakSelf;
+            dispatch_source_t firedTimer = weakTimer;
+            if (!strongSelf || !firedTimer) return;
+            @synchronized (strongSelf) {
+                if (strongSelf->_transmitTimeout != firedTimer) return;
+                dispatch_source_cancel(firedTimer);
+                pthread_mutex_lock(&strongSelf->_radioAudioLock);
+                BOOL carrier = strongSelf->_isContinuousCarrier;
+                strongSelf->_isContinuousCarrier = NO;
+                strongSelf->_radioTxBufferReadIndex = strongSelf->_radioTxBufferTotalSamples;
+                pthread_mutex_unlock(&strongSelf->_radioAudioLock);
+                if (!carrier && !strongSelf.isTransmitting) return;   // ended normally; nothing to do
+                NSUInteger token = strongSelf.transmissionGeneration;
+                BOOL released = strongSelf->_activeTransmissionWasPractice;
+                if (!released && strongSelf.serialCommandSender) {
+                    NSString *rxCmd = strongSelf.rxSuffixCommand.length > 0 ? strongSelf.rxSuffixCommand : @"RX;";
+                    released = strongSelf.serialCommandSender(rxCmd);
+                }
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    typeof(self) mainSelf = weakSelf;
+                    if (!mainSelf) return;
+                    @synchronized (mainSelf) {
+                        // A newer message started on the main thread after this RX; went out: it is keyed with its
+                        // own time-out, so it is not cleared here (clearing it would leave the radio keyed).
+                        if (mainSelf.transmissionGeneration != token) {
+                            if (mainSelf.logHandler) mainSelf.logHandler([NSString stringWithFormat:@"CW TX time-out: %.0f s on the air, RX; sent; a newer transmission had already started and keeps its own time-out.", seconds]);
+                            return;
+                        }
+                        [mainSelf abortTransmissionReleasingRadio:!released];
+                        if (mainSelf.logHandler) mainSelf.logHandler([NSString stringWithFormat:@"CW TX time-out: %.0f s on the air, transmission stopped%@.", seconds, released ? @" and RX; sent" : @"; RX; not confirmed, check the radio"]);
+                        if (mainSelf.onTransmitTimedOut) mainSelf.onTransmitTimedOut(seconds);
+                    }
+                });
             }
-            [mainSelf abortTransmissionReleasingRadio:!released];
-            if (mainSelf.logHandler) mainSelf.logHandler([NSString stringWithFormat:@"CW TX time-out: %.0f s on the air, transmission stopped%@.", seconds, released ? @" and RX; sent" : @"; RX; not confirmed, check the radio"]);
-            if (mainSelf.onTransmitTimedOut) mainSelf.onTransmitTimedOut(seconds);
         });
-    });
-    dispatch_source_set_timer(timer, dispatch_walltime(NULL, (int64_t)(seconds * NSEC_PER_SEC)), DISPATCH_TIME_FOREVER, (uint64_t)(0.05 * NSEC_PER_SEC));
-    _transmitTimeout = timer;
-    dispatch_resume(timer);
+        dispatch_source_set_timer(timer, dispatch_walltime(NULL, (int64_t)(seconds * NSEC_PER_SEC)), DISPATCH_TIME_FOREVER, (uint64_t)(0.05 * NSEC_PER_SEC));
+        _transmitTimeout = timer;
+        dispatch_resume(timer);
+    }
 }
 
 - (void)cancelTransmitTimeout {
-    if (_transmitTimeout) {
-        dispatch_source_cancel(_transmitTimeout);
-        _transmitTimeout = nil;
+    @synchronized (self) {
+        if (_transmitTimeout) {
+            dispatch_source_cancel(_transmitTimeout);
+            _transmitTimeout = nil;
+        }
     }
 }
 

@@ -6,6 +6,17 @@ A native macOS application for the Lab599 TX-500 family of transceivers. It incl
 
 [Download v2.284](https://github.com/fact0real/Lab599-Utility/releases/tag/2.284) · [In-app Help guide](Resources/Help/index.html) · [راهنمای فارسی](QUICKSTART-FA.md) · [Build instructions](UPDATER-README.md) · [Report an issue](https://github.com/fact0real/Lab599-Utility/issues/new)
 
+## Local review build: v2.285 (Build 291)
+
+The local source includes reviewed CW/FT8 transmit-safety fixes from EA3JIC's
+2026-10-15 report. Practice/Sim suppresses CW CAT and radio audio, missing RX
+confirmation keeps the transmitter fault latched, and independent watchdogs
+bound CW messages and tuning carriers. Local CW sidetone uses built-in Mac audio.
+See [2.285 notes](RELEASE-NOTES-2.285.md) and the
+[detailed proposal review and hardware limits](docs/EA3JIC-REVIEW-20261018.md).
+This local build has not been published; the download links below still refer
+to the published 2.284 release.
+
 ## Download and install
 
 Download `Lab599-Utility-v2.284-macOS-universal.zip` from the [v2.284 release](https://github.com/fact0real/Lab599-Utility/releases/tag/2.284). Extract the ZIP and move `Lab599 Utility.app` to `/Applications`. The ZIP contains the app, offline illustrated Help, English and Persian guides, and license notices; manufacturer firmware is not included.

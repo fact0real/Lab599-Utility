@@ -12,6 +12,7 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
     BOOL _ownsTX, _faulted;
     NSUInteger _queryCount, _failureCount, _receiveFailureStreak;
     double _lastLatency;
+    NSUInteger _releaseRequests; // guarded by @synchronized(self), including requests waiting for _lock
     Lab599Cancellation *_pendingRead; // the meter read in flight; guarded by @synchronized(self)
 }
 - (instancetype)init { if((self=[super init])) { _lock=[NSRecursiveLock new]; _owner=@""; _port=@""; _status=@"Disconnected"; _snapshot=@{}; [self cacheState]; } return self; }
@@ -72,7 +73,16 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
     // waiting out the read. Only meter reads (RM...) take one: a frequency, mode or PT read of any
     // screen is never cut and gets its reply.
     Lab599Cancellation *token=[command hasPrefix:@"RM"] ? [Lab599Cancellation new] : nil;
-    if(token) { @synchronized(self) { _pendingRead=token; } }
+    if(token) {
+        @synchronized(self) {
+            if (_releaseRequests) {
+                if (error) *error=TXVoiceError(@"Meter read skipped while RX release is pending.");
+                [_lock unlock];
+                return nil;
+            }
+            _pendingRead=token;
+        }
+    }
     // A transport without deadlines (the in-memory test radios) keeps the old form.
     if([_transport respondsToSelector:@selector(query:timeout:cancellation:error:)])
         reply=[_transport query:command timeout:timeout cancellation:token error:error];
@@ -90,7 +100,8 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
 }
 // Called before a release takes the lock: a meter read in flight ends within one serial
 // slice (40 ms) instead of holding the RX; of ABORT, Esc or the keyer's time-out behind it.
-- (void)interruptPendingRead { @synchronized(self) { _pendingRead.cancelled=YES; } }
+- (void)beginReleaseRequest { @synchronized(self) { _releaseRequests++; _pendingRead.cancelled=YES; } }
+- (void)endReleaseRequest { @synchronized(self) { _releaseRequests--; } }
 - (NSDictionary *)readState:(NSError **)error {
     [_lock lock]; double start=Lab599MonotonicTime(); NSDictionary *s=[_transport readState:error]; _queryCount++; _lastLatency=(Lab599MonotonicTime()-start)*1000;
     if(s) { _snapshot=[s copy]; [self publish:[s[@"tx"] boolValue] ? @"Radio is transmitting" : @"Radio verified • receiving"]; }
@@ -98,122 +109,128 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
     [self cacheState]; [_lock unlock]; return s;
 }
 - (BOOL)transmit:(BOOL)active owner:(NSString *)owner error:(NSError **)error {
-    if(!active) [self interruptPendingRead];
-    [_lock lock];
-    if(![self allowed:owner error:error]) { [self cacheState]; [_lock unlock]; return NO; }
-    if(active && _faulted) { [self reject:@"PTT state is unresolved. Stop and confirm RX before another transmission." error:error]; [self cacheState]; [_lock unlock]; return NO; }
-    if(!active && !_ownsTX) {
-        // Do not trust only the host-side ownership bit. A lost CAT reply can
-        // leave the transceiver keyed even though the caller has already
-        // unwound its TX state. Confirm PT0 and force RX when necessary.
-        NSString *pt=[_transport query:@"PT;" error:error];
-        if([pt isEqual:@"PT0;"]) { _faulted=NO; [self cacheState]; [_lock unlock]; return YES; }
-        _ownsTX=YES; // PT1, or no reply: force RX; below and let the read-back decide.
-    }
-    if(active && !_ownsTX) {
-        NSDictionary *s=[self readState:nil];
-        BOOL isAlreadyTX = NO;
-        if(s) {
-            isAlreadyTX = [s[@"tx"] boolValue];
-            // CW keys the radio with TX; and modulates it over USB audio: VOX would key it outside
-            // the app's control, so it must be off (as before 2.283). Digital clears VOX itself (VX0;).
-            if(![owner isEqual:@"Digital"] && [s[@"vox"] boolValue]) {
-                [self reject:@"TX blocked: turn VOX off before transmitting." error:error];
+    BOOL releaseRequested = !active;
+    if (releaseRequested) [self beginReleaseRequest];
+    @try {
+        [_lock lock];
+        if(![self allowed:owner error:error]) { [self cacheState]; [_lock unlock]; return NO; }
+        if(active && _faulted) { [self reject:@"PTT state is unresolved. Stop and confirm RX before another transmission." error:error]; [self cacheState]; [_lock unlock]; return NO; }
+        if(!active && !_ownsTX) {
+            // Do not trust only the host-side ownership bit. A lost CAT reply can
+            // leave the transceiver keyed even though the caller has already
+            // unwound its TX state. Confirm PT0 and force RX when necessary.
+            NSString *pt=[_transport query:@"PT;" error:error];
+            if([pt isEqual:@"PT0;"]) { _faulted=NO; [self cacheState]; [_lock unlock]; return YES; }
+            _ownsTX=YES; // PT1, or no reply: force RX; below and let the read-back decide.
+        }
+        if(active && !_ownsTX) {
+            NSDictionary *s=[self readState:nil];
+            BOOL isAlreadyTX = NO;
+            if(s) {
+                isAlreadyTX = [s[@"tx"] boolValue];
+                // CW keys the radio with TX; and modulates it over USB audio: VOX would key it outside
+                // the app's control, so it must be off (as before 2.283). Digital clears VOX itself (VX0;).
+                if(![owner isEqual:@"Digital"] && [s[@"vox"] boolValue]) {
+                    [self reject:@"TX blocked: turn VOX off before transmitting." error:error];
+                    [self cacheState]; [_lock unlock]; return NO;
+                }
+                // CW modulates the radio over USB audio, which only DIG (MD6) takes: in FM or AM a
+                // keyed radio sends a full carrier whatever the audio holds. The custom CW modes'
+                // MD6;TX; prefix is split by send:, so MD6; is written before this check runs.
+                if([owner isEqual:@"CW"] && [s[@"mode"] integerValue]!=6) {
+                    [self reject:[NSString stringWithFormat:@"TX blocked: the radio is in MD%ld; CW needs DIG (MD6).",(long)[s[@"mode"] integerValue]] error:error];
+                    [self cacheState]; [_lock unlock]; return NO;
+                }
+            } else {
+                // The state could not be read, so VOX is unknown: only Digital, which clears VOX itself, may go on.
+                if(![owner isEqual:@"Digital"]) {
+                    [self reject:@"TX blocked: the radio state could not be read (VOX unknown)." error:error];
+                    [self cacheState]; [_lock unlock]; return NO;
+                }
+                NSString *pt = [_transport query:@"PT;" error:nil];
+                if(![pt isEqual:@"PT0;"]) { [self reject:@"TX blocked: the radio did not confirm RX." error:error]; [self cacheState]; [_lock unlock]; return NO; }
+            }
+            if(isAlreadyTX) {
+                [self reject:@"TX blocked: radio must be receiving." error:error];
                 [self cacheState]; [_lock unlock]; return NO;
             }
-            // CW modulates the radio over USB audio, which only DIG (MD6) takes: in FM or AM a
-            // keyed radio sends a full carrier whatever the audio holds. The custom CW modes'
-            // MD6;TX; prefix is split by send:, so MD6; is written before this check runs.
-            if([owner isEqual:@"CW"] && [s[@"mode"] integerValue]!=6) {
-                [self reject:[NSString stringWithFormat:@"TX blocked: the radio is in MD%ld; CW needs DIG (MD6).",(long)[s[@"mode"] integerValue]] error:error];
-                [self cacheState]; [_lock unlock]; return NO;
-            }
-        } else {
-            // The state could not be read, so VOX is unknown: only Digital, which clears VOX itself, may go on.
-            if(![owner isEqual:@"Digital"]) {
-                [self reject:@"TX blocked: the radio state could not be read (VOX unknown)." error:error];
-                [self cacheState]; [_lock unlock]; return NO;
-            }
-            NSString *pt = [_transport query:@"PT;" error:nil];
-            if(![pt isEqual:@"PT0;"]) { [self reject:@"TX blocked: the radio did not confirm RX." error:error]; [self cacheState]; [_lock unlock]; return NO; }
+            _ownsTX=YES; [self cacheState]; // A lost acknowledgement must still be followed by RX cleanup.
         }
-        if(isAlreadyTX) {
-            [self reject:@"TX blocked: radio must be receiving." error:error];
-            [self cacheState]; [_lock unlock]; return NO;
-        }
-        _ownsTX=YES; [self cacheState]; // A lost acknowledgement must still be followed by RX cleanup.
-    }
-    BOOL ok=[_transport setTransmit:active error:error];
-    if(ok) { NSMutableDictionary *s=[_snapshot mutableCopy]; s[@"tx"]=@(active); _snapshot=[s copy]; }
-    if(!active) {
-        if(ok) {
-            _ownsTX=NO; _faulted=NO; _receiveFailureStreak=0;
-        } else {
-            NSString *ptCheck=[_transport query:@"PT;" error:nil];
-            if(ptCheck && [ptCheck isEqual:@"PT0;"]) {
-                _ownsTX=NO; _faulted=NO; _receiveFailureStreak=0; ok=YES;
+        BOOL ok=[_transport setTransmit:active error:error];
+        if(ok) { NSMutableDictionary *s=[_snapshot mutableCopy]; s[@"tx"]=@(active); _snapshot=[s copy]; }
+        if(!active) {
+            if(ok) {
+                _ownsTX=NO; _faulted=NO; _receiveFailureStreak=0;
+            } else {
+                NSString *ptCheck=[_transport query:@"PT;" error:nil];
+                if(ptCheck && [ptCheck isEqual:@"PT0;"]) {
+                    _ownsTX=NO; _faulted=NO; _receiveFailureStreak=0; ok=YES;
+                }
             }
         }
-    }
-    if(!ok) _faulted=YES;
-    if(!ok) _failureCount++;
-    if(!ok && !active) {
-        _receiveFailureStreak++;
-        // A USB serial adapter can retain a stale descriptor after an RF or
-        // cable transient. Reopen it periodically while preserving TX ownership
-        // and the fault latch. Only a later PT0 readback may clear either.
-        if(_receiveFailureStreak >= 2 && (_receiveFailureStreak-2)%3 == 0) {
-            [_transport close];
-            _transport=self.transportFactory ? self.transportFactory(_port) : [[TX500VoiceCATRadio alloc] initWithPort:_port];
+        if(!ok) _faulted=YES;
+        if(!ok) _failureCount++;
+        if(!ok && !active) {
+            _receiveFailureStreak++;
+            // A USB serial adapter can retain a stale descriptor after an RF or
+            // cable transient. Reopen it periodically while preserving TX ownership
+            // and the fault latch. Only a later PT0 readback may clear either.
+            if(_receiveFailureStreak >= 2 && (_receiveFailureStreak-2)%3 == 0) {
+                [_transport close];
+                _transport=self.transportFactory ? self.transportFactory(_port) : [[TX500VoiceCATRadio alloc] initWithPort:_port];
+            }
         }
-    }
-    [self publish:ok ? (active ? @"TX confirmed" : @"RX confirmed") : @"PTT acknowledgement missing • press Stop and check the radio"];
-    [self cacheState]; [_lock unlock]; return ok;
+        [self publish:ok ? (active ? @"TX confirmed" : @"RX confirmed") : @"PTT acknowledgement missing • press Stop and check the radio"];
+        [self cacheState]; [_lock unlock]; return ok;
+    } @finally { if (releaseRequested) [self endReleaseRequest]; }
 }
 - (BOOL)send:(NSString *)command owner:(NSString *)owner error:(NSError **)error {
-    if([command containsString:@"RX;"]) [self interruptPendingRead]; // RX;, KY ;RX;, RX;MD3;...
-    [_lock lock]; if(![self allowed:owner error:error] || !command.length || ![command hasSuffix:@";"]) { [self cacheState]; [_lock unlock]; return NO; }
-    if([command isEqual:@"KY ;RX;"]) {
-        BOOL released=[self releaseOwnedTX:error]; [self cacheState]; [_lock unlock]; return released;
-    }
-    BOOL ok=YES;
-    for(NSString *part in [command componentsSeparatedByString:@";"]) {
-        if(!part.length) continue;
-        if([part isEqual:@"TX"] || [part isEqual:@"TX1"]) { ok=[self transmit:YES owner:owner error:error]; }
-        else if([part isEqual:@"RX"]) ok=[self transmit:NO owner:owner error:error];
-        else if([part hasPrefix:@"KY"]) {
-            if(_faulted) {
-                NSString *pt = [_transport query:@"PT;" error:nil];
-                if ([pt isEqual:@"PT0;"]) _faulted = NO;
-                else { ok=[self reject:@"Confirm RX before sending more CW." error:error]; break; }
-            }
-            BOOL empty=[[part substringFromIndex:2] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet].length==0;
-            if(empty && !_ownsTX) continue;
-            if(!empty && !_ownsTX) {
-                NSString *pt = [_transport query:@"PT;" error:nil];
-                BOOL isTX = (pt && ![pt isEqual:@"PT0;"]);
-                if(isTX) { ok=[self reject:@"CW blocked: radio must be receiving." error:error]; break; }
-                _ownsTX=YES; [self cacheState];
-                [_transport send:@"TX;" error:nil];
-            }
-            ok=[_transport send:[part stringByAppendingString:@";"] error:error];
-            if(!ok) _faulted=YES;
-        } else {
-            if(_ownsTX) { ok=[self reject:@"Stop TX before changing radio settings." error:error]; break; }
-            BOOL valid=[part rangeOfString:@"^(FA[0-9]{11}|FB[0-9]{11}|MD[1-79]|KS[0-9]{3}|PC[0-9]{3}|MA[0-9]{3}|FW[0-9]{4}|FL[0-3][0-1]|SQ0[0-9]{3}|VX[0-1]|FT[0-1]|FR[0-1])$" options:NSRegularExpressionSearch].location!=NSNotFound;
-            if(!valid) { ok=[self reject:@"This setting command is not supported by station control." error:error]; break; }
-            if([part hasPrefix:@"FA"] || [part hasPrefix:@"FB"]) { uint64_t hz=[[part substringFromIndex:2] longLongValue]; if(hz<500000 || hz>56000000) { ok=[self reject:@"Frequency is outside the radio range." error:error]; break; } }
-            if([part hasPrefix:@"PC"] && ([[part substringFromIndex:2] integerValue]<10 || [[part substringFromIndex:2] integerValue]>100)) { ok=[self reject:@"RF power must be between 1 and 10 watts." error:error]; break; }
-            if([part hasPrefix:@"MA"] && [[part substringFromIndex:2] integerValue]>100) { ok=[self reject:@"DIG gain must be between 0 and 100." error:error]; break; }
-            if([part hasPrefix:@"SQ"] && [[part substringFromIndex:3] integerValue]>255) { ok=[self reject:@"Squelch must be between 0 and 255." error:error]; break; }
-            NSString *pt=[_transport query:@"PT;" error:nil];
-            if(pt && [pt hasPrefix:@"PT1"]) { ok=[self reject:@"Radio must confirm RX before a setting change." error:error]; break; }
-            ok=[_transport send:[part stringByAppendingString:@";"] error:error];
+    BOOL releaseRequested = [command containsString:@"RX;"];
+    if (releaseRequested) [self beginReleaseRequest];
+    @try {
+        [_lock lock]; if(![self allowed:owner error:error] || !command.length || ![command hasSuffix:@";"]) { [self cacheState]; [_lock unlock]; return NO; }
+        if([command isEqual:@"KY ;RX;"]) {
+            BOOL released=[self releaseOwnedTX:error]; [self cacheState]; [_lock unlock]; return released;
         }
-        if(!ok) break;
-    }
-    if(!ok) _failureCount++;
-    [self cacheState]; [_lock unlock]; return ok;
+        BOOL ok=YES;
+        for(NSString *part in [command componentsSeparatedByString:@";"]) {
+            if(!part.length) continue;
+            if([part isEqual:@"TX"] || [part isEqual:@"TX1"]) { ok=[self transmit:YES owner:owner error:error]; }
+            else if([part isEqual:@"RX"]) ok=[self transmit:NO owner:owner error:error];
+            else if([part hasPrefix:@"KY"]) {
+                if(_faulted) {
+                    NSString *pt = [_transport query:@"PT;" error:nil];
+                    if ([pt isEqual:@"PT0;"]) _faulted = NO;
+                    else { ok=[self reject:@"Confirm RX before sending more CW." error:error]; break; }
+                }
+                BOOL empty=[[part substringFromIndex:2] stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet].length==0;
+                if(empty && !_ownsTX) continue;
+                if(!empty && !_ownsTX) {
+                    NSString *pt = [_transport query:@"PT;" error:nil];
+                    BOOL isTX = (pt && ![pt isEqual:@"PT0;"]);
+                    if(isTX) { ok=[self reject:@"CW blocked: radio must be receiving." error:error]; break; }
+                    _ownsTX=YES; [self cacheState];
+                    [_transport send:@"TX;" error:nil];
+                }
+                ok=[_transport send:[part stringByAppendingString:@";"] error:error];
+                if(!ok) _faulted=YES;
+            } else {
+                if(_ownsTX) { ok=[self reject:@"Stop TX before changing radio settings." error:error]; break; }
+                BOOL valid=[part rangeOfString:@"^(FA[0-9]{11}|FB[0-9]{11}|MD[1-79]|KS[0-9]{3}|PC[0-9]{3}|MA[0-9]{3}|FW[0-9]{4}|FL[0-3][0-1]|SQ0[0-9]{3}|VX[0-1]|FT[0-1]|FR[0-1])$" options:NSRegularExpressionSearch].location!=NSNotFound;
+                if(!valid) { ok=[self reject:@"This setting command is not supported by station control." error:error]; break; }
+                if([part hasPrefix:@"FA"] || [part hasPrefix:@"FB"]) { uint64_t hz=[[part substringFromIndex:2] longLongValue]; if(hz<500000 || hz>56000000) { ok=[self reject:@"Frequency is outside the radio range." error:error]; break; } }
+                if([part hasPrefix:@"PC"] && ([[part substringFromIndex:2] integerValue]<10 || [[part substringFromIndex:2] integerValue]>100)) { ok=[self reject:@"RF power must be between 1 and 10 watts." error:error]; break; }
+                if([part hasPrefix:@"MA"] && [[part substringFromIndex:2] integerValue]>100) { ok=[self reject:@"DIG gain must be between 0 and 100." error:error]; break; }
+                if([part hasPrefix:@"SQ"] && [[part substringFromIndex:3] integerValue]>255) { ok=[self reject:@"Squelch must be between 0 and 255." error:error]; break; }
+                NSString *pt=[_transport query:@"PT;" error:nil];
+                if(pt && [pt hasPrefix:@"PT1"]) { ok=[self reject:@"Radio must confirm RX before a setting change." error:error]; break; }
+                ok=[_transport send:[part stringByAppendingString:@";"] error:error];
+            }
+            if(!ok) break;
+        }
+        if(!ok) _failureCount++;
+        [self cacheState]; [_lock unlock]; return ok;
+    } @finally { if (releaseRequested) [self endReleaseRequest]; }
 }
 // A band change may restore the radio's previous mode for that band. Wait for
 // the frequency to settle before setting mode; CAT has no atomic FA+MD command.
@@ -266,31 +283,37 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
     } @finally { [self cacheState]; [_lock unlock]; }
 }
 - (BOOL)releaseOwnedTX:(NSError **)error {
-    [self interruptPendingRead];
-    [_lock lock];
-    BOOL ok=YES;
-    if(_ownsTX) {
-        if([_owner isEqual:@"CW"]) [_transport send:@"KY ;" error:nil];
-        ok=[self transmit:NO owner:_owner error:error];
-        if(!ok) {
-            [_transport send:@"RX;" error:nil];
-            NSString *pt=[_transport query:@"PT;" error:nil];
-            if([pt isEqual:@"PT0;"]) {
-                _ownsTX=NO; _faulted=NO; ok=YES;
+    BOOL releaseRequested = YES;
+    if (releaseRequested) [self beginReleaseRequest];
+    @try {
+        [_lock lock];
+        BOOL ok=YES;
+        if(_ownsTX) {
+            if([_owner isEqual:@"CW"]) [_transport send:@"KY ;" error:nil];
+            ok=[self transmit:NO owner:_owner error:error];
+            if(!ok) {
+                [_transport send:@"RX;" error:nil];
+                NSString *pt=[_transport query:@"PT;" error:nil];
+                if([pt isEqual:@"PT0;"]) {
+                    _ownsTX=NO; _faulted=NO; ok=YES;
+                }
             }
         }
-    }
-    [self cacheState]; [_lock unlock]; return ok;
+        [self cacheState]; [_lock unlock]; return ok;
+    } @finally { if (releaseRequested) [self endReleaseRequest]; }
 }
 - (BOOL)suspend:(NSError **)error {
-    [self interruptPendingRead];
-    [_lock lock];
-    BOOL ok=[self releaseOwnedTX:error];
-    if(ok || !_ownsTX) {
-        [_transport close]; _transport=nil; _owner=@""; _snapshot=@{}; [self publish:@"Disconnected"];
-        ok=YES;
-    }
-    [self cacheState]; [_lock unlock]; return ok;
+    BOOL releaseRequested = YES;
+    if (releaseRequested) [self beginReleaseRequest];
+    @try {
+        [_lock lock];
+        BOOL ok=[self releaseOwnedTX:error];
+        if(ok || !_ownsTX) {
+            [_transport close]; _transport=nil; _owner=@""; _snapshot=@{}; [self publish:@"Disconnected"];
+            ok=YES;
+        }
+        [self cacheState]; [_lock unlock]; return ok;
+    } @finally { if (releaseRequested) [self endReleaseRequest]; }
 }
 - (void)forceCloseTransport {
     [_lock lock];
@@ -305,15 +328,18 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
     [_lock unlock];
 }
 - (BOOL)handoffToOwner:(NSString *)owner port:(NSString *)path releaseFirst:(BOOL)releaseFirst closePort:(BOOL)closePort error:(NSError **)error {
-    if(releaseFirst || closePort) [self interruptPendingRead];
-    [_lock lock];
-    BOOL ok;
-    // A radio that did not confirm RX keeps its port, its owner and the fault latch.
-    if(releaseFirst && ![self releaseOwnedTX:error]) ok=NO;
-    else if(closePort) ok=[self suspend:error];
-    else if(!releaseFirst && _ownsTX) ok=YES;
-    else ok=[self selectOwner:owner port:path error:error];
-    [self cacheState]; [_lock unlock]; return ok;
+    BOOL releaseRequested = releaseFirst || closePort;
+    if (releaseRequested) [self beginReleaseRequest];
+    @try {
+        [_lock lock];
+        BOOL ok;
+        // A radio that did not confirm RX keeps its port, its owner and the fault latch.
+        if(releaseFirst && ![self releaseOwnedTX:error]) ok=NO;
+        else if(closePort) ok=[self suspend:error];
+        else if(!releaseFirst && _ownsTX) ok=YES;
+        else ok=[self selectOwner:owner port:path error:error];
+        [self cacheState]; [_lock unlock]; return ok;
+    } @finally { if (releaseRequested) [self endReleaseRequest]; }
 }
 - (id<TX500VoiceRadio>)voiceAdapter { TX500StationVoiceAdapter *a=[TX500StationVoiceAdapter new]; a.core=self; return a; }
 @end

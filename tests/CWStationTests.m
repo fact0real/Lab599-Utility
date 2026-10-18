@@ -389,7 +389,7 @@ int main(int argc, const char * argv[]) {
         [soundCmds removeAllObjects];
         raised = NO;
         @try { [soundKeyer transmitText:@"E" targetCall:@"" rst:@"" name:@"" qth:@""]; } @catch (NSException *e) { (void)e; raised = YES; }
-        AssertTrue(raised && [soundCmds containsObject:@"TX;"], @"The Morse audio stage raised after TX; (what the app's event loop swallows)");
+        AssertTrue(!raised && !soundKeyer.isTransmitting && [soundCmds containsObject:@"TX;"] && [soundCmds.lastObject isEqual:@"RX;"], @"A failed Morse audio stage is caught and immediately requests RX");
         [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.7]];
         AssertTrue(!soundKeyer.isTransmitting && [soundCmds containsObject:@"RX;"], @"RX; goes out at the estimated end even when the audio stage raised");
         method_setImplementation(morseAudioMethod, morseAudioOriginal);
@@ -403,12 +403,12 @@ int main(int argc, const char * argv[]) {
         tuneStation.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) { [tuneCmds addObject:catCommand]; return YES; };
         [tuneStation setValue:@0.2 forKey:@"manualTuneCutoffSeconds"];
         Method carrierMethod = class_getInstanceMethod([TX500CWKeyer class], @selector(startContinuousCarrierWithPitchHz:));
-        IMP carrierOriginal = method_setImplementation(carrierMethod, imp_implementationWithBlock(^(id k, double p) { (void)k; (void)p; [NSException raise:@"CWStationTests" format:@"carrier failed"]; }));
+        IMP carrierOriginal = method_setImplementation(carrierMethod, imp_implementationWithBlock(^BOOL(id k, double p) { (void)k; (void)p; [NSException raise:@"CWStationTests" format:@"carrier failed"]; return NO; }));
         raised = NO;
         @try { [tuneStation toggleManualTransmit]; } @catch (NSException *e) { (void)e; raised = YES; }
         method_setImplementation(carrierMethod, carrierOriginal);
-        AssertTrue(raised && tuneStation.isManualTuneActive && [tuneCmds containsObject:@"TX;"], @"The carrier stage raised after TX;");
-        AssertTrue([tuneStation valueForKey:@"txMeterPollingTimer"] != nil, @"Meter polling was started before the carrier");
+        AssertTrue(!raised && !tuneStation.isManualTuneActive && [tuneCmds containsObject:@"TX;"] && [tuneCmds.lastObject isEqual:@"RX;"], @"A failed carrier stage is caught and immediately requests RX");
+        AssertTrue([tuneStation valueForKey:@"txMeterPollingTimer"] == nil, @"A failed carrier also stops meter polling");
         [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.6]];
         AssertTrue(!tuneStation.isManualTuneActive && [tuneCmds containsObject:@"RX;"], @"The Tune cutoff armed before the carrier still releases the radio");
         NSLog(@"PASS: Release timers and the Tune cutoff are armed before any sound.");
@@ -920,6 +920,12 @@ int main(int argc, const char * argv[]) {
         [simKeyerStation toggleManualTransmit];
         AssertTrue(simKeyerCmds.count == 0 && !simKeyerStation.isManualTuneActive && radioAudioCalls == 0, @"Practice TX (Tune) keys nothing");
         AssertTrue([simKeyerLog.lastObject containsString:@"Practice / Sim"], @"Practice TX (Tune) says why");
+        [simKeyerStation startStation];
+        [simKeyerStation selectAmateurBand:@"40m"];
+        NSPopUpButton *practiceMenu = [simKeyerStation valueForKey:@"modePopup"];
+        [practiceMenu selectItemWithTag:6];
+        [simKeyerStation modePopupChanged:practiceMenu];
+        AssertTrue(simKeyerCmds.count == 0, @"Practice band, mode and tab entry never change the real radio");
         // Control: with the box unticked the same calls reach the radio and ask for the radio output.
         simKeyerCheckbox.state = NSControlStateValueOff;
         [simKeyerStation toggleSimulation:simKeyerCheckbox];
@@ -1469,6 +1475,17 @@ int main(int argc, const char * argv[]) {
         [keyer transmitText:@"CQ" targetCall:@"" rst:@"" name:@"" qth:@""];
         AssertTrue(keyer.isTransmitting, @"Valid setup allows keying");
         [keyer abortTransmission];
+        TX500CWStationController *refusedBand = [TX500CWStationController new];
+        [refusedBand updateFrequencyHz:14025000 mode:@"DIG"];
+        refusedBand.serialCommandSender = ^BOOL(NSString *command) { (void)command; return NO; };
+        [refusedBand selectAmateurBand:@"80m"];
+        AssertTrue(refusedBand.currentDialFrequencyHz == 14025000 && refusedBand.assistant.currentFrequencyHz == 14025000,
+                   @"A refused band change preserves both dial and QSO frequency");
+        NSMutableArray<NSString *> *failedTuneCommands = [NSMutableArray new];
+        refusedBand.serialCommandSender = ^BOOL(NSString *command) { [failedTuneCommands addObject:command]; return ![command containsString:@"TX;"]; };
+        [refusedBand toggleManualTransmit];
+        AssertTrue(!refusedBand.isManualTuneActive && [failedTuneCommands containsObject:@"RX;"],
+                   @"A missing Tune TX acknowledgement is followed by an RX attempt");
         // 14. A hard transmit time-out that depends neither on the sidetone, nor on the release
         // timers, nor on the main thread. A message longer than the limit is refused up front; a
         // message whose release timers never fire is silenced and released at the limit; the tuning

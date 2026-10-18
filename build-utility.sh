@@ -11,6 +11,8 @@ test -s Resources/AppIcon.icns || test -s assets/AppIcon.icns || { echo "Missing
 if [ "${1:-}" = "--test" ] || [ "${1:-}" = "--test-only" ]; then
     sh tests/verify-help-guide.sh
     sh tests/run-dxcluster-tests.sh
+    sh tests/run-cw-transmit-safety-tests.sh
+    sh tests/run-media-gallery-safety-tests.sh
     sh tests/run-station-tests.sh
     sh tests/run-station-tuning-tests.sh
     sh tests/run-voice-keyer-tests.sh

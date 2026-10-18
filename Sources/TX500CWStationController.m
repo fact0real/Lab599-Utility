@@ -521,6 +521,7 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
 
 - (void)prepareRadioForCWMode {
     [self updateKeyerRadioOutputDevice];
+    if (self.decoder.isSimulationActive) { [self updateKeyerCommandsForCurrentMode]; return; }
     if (!self.userHasChosenCustomMode) {
         self.operatingMode = @"DIG";
         if (self.modePopup && self.modePopup.selectedItem.tag != 6) {
@@ -563,8 +564,8 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
     [self updateKeyerCommandsForCurrentMode];
 
     NSString *cmd = [NSString stringWithFormat:@"MD%ld;", (long)tag];
-    if (self.serialCommandSender) {
-        self.serialCommandSender(cmd);
+    if (!self.decoder.isSimulationActive && self.serialCommandSender) {
+        self.cwModeConfiguredOnRadio = self.serialCommandSender(cmd) && tag == 6;
     }
     if (self.logHandler) {
         self.logHandler([NSString stringWithFormat:@"[CW Station] Mode set to %@ (%@).", sender.selectedItem.title, cmd]);
@@ -685,7 +686,7 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
 - (BOOL)tuneToFrequencyHz:(uint64_t)freqHz {
     if (freqHz < 1000000 || freqHz > 60000000) return NO;
     NSString *cmd = [NSString stringWithFormat:@"FA%011llu;", (unsigned long long)freqHz];
-    BOOL accepted = self.serialCommandSender && self.serialCommandSender(cmd);
+    BOOL accepted = self.decoder.isSimulationActive || (self.serialCommandSender && self.serialCommandSender(cmd));
     if (!accepted) {
         if (self.logHandler)
             self.logHandler([NSString stringWithFormat:@"[CW Station] VFO not retuned to %.4f MHz: the radio refused the frequency change.", (double)freqHz / 1e6]);
@@ -727,19 +728,8 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
     else if ([band isEqualToString:@"10m"]) { f = 28025000; bandIndex = 8; }
     else if ([band isEqualToString:@"6m"]) { f = 50090000; bandIndex = 9; }
 
-    self.userTuningLockoutUntil = [NSDate timeIntervalSinceReferenceDate] + 1.5;
-    self.currentDialFrequencyHz = f;
-    self.assistant.currentBand = band;
-    self.assistant.currentFrequencyHz = f;
-    if (self.vfoLabel) {
-        self.vfoLabel.stringValue = [NSString stringWithFormat:@"%.3f.%03llu MHz", (double)f / 1e6, (unsigned long long)(f % 1000)];
-    }
-    if (self.bandSelectorControl && bandIndex >= 0 && bandIndex < self.bandSelectorControl.segmentCount) {
-        self.bandSelectorControl.selectedSegment = bandIndex;
-    }
-    [self updateVFOOffsetLabel];
-
-    [self tuneToFrequencyHz:f];
+    (void)bandIndex;
+    if (![self tuneToFrequencyHz:f]) return;
     [self prepareRadioForCWMode];
 }
 
@@ -2103,7 +2093,7 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
                 // Automatic safety cutoff for Tune, armed before the carrier so nothing below can skip it
                 double cutoff = self.manualTuneCutoffSeconds > 0 ? self.manualTuneCutoffSeconds : 10.0;
                 __weak typeof(self) weakSelf = self;
-                dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(cutoff * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+                dispatch_after(dispatch_walltime(NULL, (int64_t)(cutoff * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
                     typeof(self) strongSelf = weakSelf;
                     if (strongSelf && strongSelf.isManualTuneActive && generation == strongSelf.manualTuneGeneration) {
                         [strongSelf stopManualTransmit];
@@ -2112,7 +2102,16 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
                         }
                     }
                 });
-                [self.keyer startContinuousCarrierWithPitchHz:self.keyer.sidetonePitchHz];
+                @try {
+                    if (![self.keyer startContinuousCarrierWithPitchHz:self.keyer.sidetonePitchHz]) {
+                        [self stopManualTransmit];
+                        return;
+                    }
+                } @catch (NSException *exception) {
+                    [self stopManualTransmit];
+                    if (self.logHandler) self.logHandler([NSString stringWithFormat:@"CW Tune audio failed; RX requested: %@", exception.reason]);
+                    return;
+                }
                 if (self.logHandler) {
                     self.logHandler(@"CW Station: Transceiver keyed to TX (Manual Tune)");
                 }
@@ -2121,6 +2120,8 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
                     self.logHandler(@"CW Station: Could not key transceiver to TX (check CAT connection)");
                 }
                 [self noteTransmitRefused];
+                // TX may have reached the radio even when its acknowledgement did not.
+                [self.keyer abortTransmission];
             }
         }
     } else {

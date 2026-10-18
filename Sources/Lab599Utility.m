@@ -386,17 +386,14 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     }
     NSError *error=nil;
     BOOL confirmed=[self.stationCore transmit:active owner:@"Digital" error:&error];
-    if(!confirmed) {
-        [self.stationCore send:active ? @"TX;" : @"RX;" owner:@"Digital" error:nil];
-        confirmed = YES;
-    }
+    if (!confirmed) [self appendLog:error.localizedDescription ?: @"PTT was not confirmed; check the radio."];
     return confirmed;
 }
 - (BOOL)sendSharedCATCommand:(NSString *)command {
     return [self.stationCore send:command owner:@"Station" error:nil];
 }
 - (NSString *)querySharedCATCommand:(NSString *)command timeout:(NSTimeInterval)timeout {
-    (void)timeout; return [self.stationCore query:command error:nil];
+    return [self.stationCore query:command timeout:timeout error:nil];
 }
 - (void)stationPortChanged:(id)sender {
     (void)sender;

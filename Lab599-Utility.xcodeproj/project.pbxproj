@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        10000603 /* Sparkle-LICENSE.txt in Resources */ = {isa = PBXBuildFile; fileRef = 20000603; };
+        10000600 /* Lab599AppUpdater.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000600; };
+        10000601 /* Sparkle.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 20000601; };
+        10000602 /* Sparkle.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 20000601; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		10000001 /* Lab599Utility.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000001 /* Lab599Utility.m */; };
 		10000002 /* Lab599FirmwareCatalog.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000002 /* Lab599FirmwareCatalog.m */; };
 		10000003 /* TX500Transfer.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000003 /* TX500Transfer.m */; };
@@ -100,6 +104,9 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+        20000603 /* Sparkle-LICENSE.txt */ = {isa = PBXFileReference; lastKnownFileType = text; path = "Sparkle-LICENSE.txt"; sourceTree = "<group>"; };
+        20000600 /* Lab599AppUpdater.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = Lab599AppUpdater.m; sourceTree = "<group>"; };
+        20000601 /* Sparkle.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; path = Vendor/Sparkle/Sparkle.framework; sourceTree = SOURCE_ROOT; };
 		00000001 /* Lab599 Utility.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Lab599 Utility.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 		20000001 /* Lab599Utility.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = Lab599Utility.m; sourceTree = "<group>"; };
 		20000002 /* Lab599FirmwareCatalog.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = Lab599FirmwareCatalog.m; sourceTree = "<group>"; };
@@ -259,7 +266,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				10000005 /* Cocoa.framework in Frameworks */,
+				10000601 /* Sparkle.framework in Frameworks */,
+                10000005 /* Cocoa.framework in Frameworks */,
 				10000006 /* UniformTypeIdentifiers.framework in Frameworks */,
 				1000000D /* AVFoundation.framework in Frameworks */,
 				1000000E /* CoreAudio.framework in Frameworks */,
@@ -273,6 +281,9 @@
 		};
 /* End PBXFrameworksBuildPhase section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+        30000600 /* Embed Frameworks */ = {isa = PBXCopyFilesBuildPhase; buildActionMask = 2147483647; dstPath = ""; dstSubfolderSpec = 10; files = (10000602, ); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXCopyFilesBuildPhase section */
 /* Begin PBXGroup section */
 		40000001 = {
 			isa = PBXGroup;
@@ -314,7 +325,8 @@
 				200000E2 /* TX500VoiceLibrary.m */,
 				200000E1 /* TX500VoiceAudio.m */,
 				200000E0 /* TX500VoiceCATRadio.m */,
-				20000001 /* Lab599Utility.m */,
+				20000600 /* Lab599AppUpdater.m */,
+                20000001 /* Lab599Utility.m */,
 				20000002 /* Lab599FirmwareCatalog.m */,
 				20000003 /* TX500Transfer.m */,
 				20000007 /* TX500TimeSync.m */,
@@ -444,6 +456,7 @@
 				2000000C /* tx500_pro_altai.png */,
 				20000312 /* Help */,
 				20000020 /* Info.plist */,
+                20000603 /* Sparkle-LICENSE.txt */,
 			);
 			path = Resources;
 			sourceTree = "<group>";
@@ -451,7 +464,8 @@
 		40000005 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
-				20000005 /* Cocoa.framework */,
+				20000601 /* Sparkle.framework */,
+                20000005 /* Cocoa.framework */,
 				20000006 /* UniformTypeIdentifiers.framework */,
 				2000000D /* AVFoundation.framework */,
 				2000000E /* CoreAudio.framework */,
@@ -482,6 +496,7 @@
 				30000002 /* Sources */,
 				30000001 /* Frameworks */,
 				30000003 /* Resources */,
+                30000600 /* Embed Frameworks */,
 			);
 			buildRules = (
 			);
@@ -529,7 +544,8 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				10000004 /* AppIcon.icns in Resources */,
+				10000603 /* Sparkle-LICENSE.txt in Resources */,
+                10000004 /* AppIcon.icns in Resources */,
 				10000008 /* tx500_radio.png in Resources */,
 				1000000A /* tx500_mp.png in Resources */,
 				1000000B /* tx500_pro.png in Resources */,
@@ -568,7 +584,8 @@
 				100000E2 /* TX500VoiceLibrary.m in Sources */,
 				100000E1 /* TX500VoiceAudio.m in Sources */,
 				100000E0 /* TX500VoiceCATRadio.m in Sources */,
-				10000001 /* Lab599Utility.m in Sources */,
+				10000600 /* Lab599AppUpdater.m in Sources */,
+                10000001 /* Lab599Utility.m in Sources */,
 				10000002 /* Lab599FirmwareCatalog.m in Sources */,
 				10000003 /* TX500Transfer.m in Sources */,
 				10000007 /* TX500TimeSync.m in Sources */,
@@ -778,16 +795,17 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 291;
+				CURRENT_PROJECT_VERSION = 292;
 				DEAD_CODE_STRIPPING = YES;
 				INFOPLIST_FILE = Resources/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Lab599 Utility";
-				LD_RUNPATH_SEARCH_PATHS = (
+				FRAMEWORK_SEARCH_PATHS = ("$(inherited)", "$(PROJECT_DIR)/Vendor/Sparkle", );
+                LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
-				MARKETING_VERSION = 2.285;
+				MARKETING_VERSION = 2.286;
 				PRODUCT_BUNDLE_IDENTIFIER = "ir.factoreal.lab599-utility";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 			};
@@ -800,16 +818,17 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 291;
+				CURRENT_PROJECT_VERSION = 292;
 				DEAD_CODE_STRIPPING = YES;
 				INFOPLIST_FILE = Resources/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "Lab599 Utility";
-				LD_RUNPATH_SEARCH_PATHS = (
+				FRAMEWORK_SEARCH_PATHS = ("$(inherited)", "$(PROJECT_DIR)/Vendor/Sparkle", );
+                LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
 				MACOSX_DEPLOYMENT_TARGET = 12.0;
-				MARKETING_VERSION = 2.285;
+				MARKETING_VERSION = 2.286;
 				PRODUCT_BUNDLE_IDENTIFIER = "ir.factoreal.lab599-utility";
 				PRODUCT_NAME = "$(TARGET_NAME)";
 			};

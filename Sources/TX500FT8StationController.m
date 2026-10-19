@@ -1,3 +1,4 @@
+#import "TX500Filter.h"
 #import "TX500PSKReporter.h"
 //
 //  TX500FT8StationController.m
@@ -428,6 +429,7 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
 @property (nonatomic, strong) NSButton *armTxButton;
 @property (nonatomic, strong) NSButton *fakeItCheckbox;
 @property (nonatomic, strong) NSButton *tuneButton;
+@property (nonatomic, strong) NSTextField *operatingStateLabel;
 @property (nonatomic, strong) NSPopUpButton *rfPowerPopup;
 @property (nonatomic, strong) NSTextField *digGainField;
 @property (nonatomic, assign) NSInteger displayedDIGGain;
@@ -708,6 +710,7 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
         (void)progress;
         typeof(self) strongSelf = weakSelf;
         if (!strongSelf) return;
+        [strongSelf refreshTransmitButtonState];
         strongSelf.slotProgressView.slotSecond = slotSec;
         strongSelf.slotProgressView.parity = parity;
         strongSelf.slotProgressView.isFT4 = (strongSelf.protocol == TX500_FT8_PROTOCOL_FT4);
@@ -750,7 +753,7 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
         strongSelf.waterfallView.isReceiveRecoveryStalled = strongSelf.audioEngine.isReceiveRecoveryStalled;
         [strongSelf.waterfallView setNeedsDisplay:YES];
         // The carrier can end without STOP (its time limit, Esc, the SWR abort).
-        if (!transmitting && !strongSelf.audioEngine.isTuning && [strongSelf.tuneButton.title isEqualToString:@"STOP"]) {
+        if (!transmitting && !strongSelf.audioEngine.isTuning && [strongSelf.tuneButton.title isEqualToString:@"Stop Tone"]) {
             strongSelf.tuneButton.title = @"Tune";
         }
 
@@ -791,7 +794,7 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
                 NSString *mode = strongSelf.protocol == TX500_FT8_PROTOCOL_FT4 ? @"FT4" : @"FT8";
                 strongSelf.startStopButton.title = [NSString stringWithFormat:@"Start %@", mode];
                 strongSelf.startStopButton.enabled = YES;
-                strongSelf.startStopButton.toolTip = nil;
+                strongSelf.startStopButton.toolTip = @"Start digital monitoring. Stop ends monitoring and all digital transmission and requests RX.";
             }
             [strongSelf.autoEngine noteTransmissionEnded];
             [strongSelf applyPendingRadioSettings];
@@ -1306,17 +1309,18 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
         uint64_t observedHz = 0;
         NSString *failure = nil;
         BOOL modeVerified = TX500EnsureDigitalCAT(send, query, &observedHz, &failure);
-        BOOL squelchWritten = NO, widthWritten = NO, widthVerified = NO;
+        BOOL squelchWritten = NO;
+        NSInteger rxFilter = 0, txFilter = 0;
+        BOOL filterKnown = NO;
         NSInteger powerTenths = NSNotFound, digGain = NSNotFound;
         if (modeVerified) {
             send(@"VX0;");
             send(@"FT0;");
             send(@"FR0;");
             squelchWritten = send(@"SQ0000;");
-            widthWritten = send(@"FW3000;");
-            widthVerified = [query(@"FW;", 0.8) hasPrefix:@"FW3000"];
-            // FIL-1 is the existing fallback when FW3000 is unavailable.
-            if (!widthVerified) send(@"FL00;");
+            // Read documented preset indices. FW bandwidth units are not
+            // manufacturer-validated; do not overwrite RX/TX filters on entry.
+            filterKnown = TX500ParseFilterReply(query(@"FL;", 0.8), &rxFilter, &txFilter);
             powerTenths = TX500ThreeDigitCATValue(query(@"PC;", 0.8), @"PC");
             digGain = TX500ThreeDigitCATValue(query(@"MA;", 0.8), @"MA");
         }
@@ -1336,7 +1340,7 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
                 if (digGain >= 0 && digGain <= 100) [mainSelf displayDIGGain:digGain];
                 [mainSelf appendToQSOConsole:[NSString stringWithFormat:
                     @"[Digital Setup] DIG and %.6f MHz dial confirmed in RX · filter %@ · squelch %@.",
-                    observedHz / 1e6, widthWritten ? (widthVerified ? @"3000 Hz" : @"FIL-1 fallback") : @"unchanged",
+                    observedHz / 1e6, filterKnown ? [NSString stringWithFormat:@"RX FIL-%ld / TX FIL-%ld (bandwidth unverified)", (long)rxFilter, (long)txFilter] : @"unavailable (unchanged)",
                     squelchWritten ? @"open" : @"unchanged"]];
             } else {
                 mainSelf.dialFreqLabel.textColor = NSColor.systemRedColor;
@@ -1593,15 +1597,32 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
 }
 
 - (void)refreshTransmitButtonState {
+    self.tuneButton.title = self.audioEngine.isTuning ? @"Stop Tone" : @"Tune";
+    self.tuneButton.enabled = self.audioEngine.isTuning || (self.audioEngine.isMonitoring &&
+        !self.audioEngine.isTransmitArmed && !self.autoEngine.isAutoCQActive &&
+        !self.autoEngine.isAutoHunterActive && !self.autoEngine.isQSOActive && !self.audioEngine.isTransmitting &&
+        !self.audioEngine.isReceiveRecoveryPending && !self.audioEngine.isReceiveRecoveryStalled);
+    NSString *state = self.audioEngine.isMonitoring ? @"Listening · TX disabled" : @"Stopped · TX disabled";
+    NSColor *color = NSColor.secondaryLabelColor;
+    if (self.audioEngine.isTransmitArmed) state = @"TX enabled · waiting for the next slot";
+    if (self.audioEngine.isTransmitting) { state = @"Transmitting · Halt TX to stop and keep listening"; color = NSColor.systemRedColor; }
+    if (self.audioEngine.isTuning) { state = @"Tune carrier active · max 15 s · Stop Tone to finish"; color = NSColor.systemRedColor; }
+    if (self.audioEngine.isReceiveRecoveryPending) { state = @"WAIT RX · release requested; radio RX not yet confirmed"; color = NSColor.systemOrangeColor; }
+    if (self.audioEngine.isReceiveRecoveryStalled) { state = @"CHECK RX · verify the radio and CAT cable, then Retry RX"; color = NSColor.systemRedColor; }
+    if (self.audioEngine.isSimulationMode) state = [@"SIMULATION · No RF · " stringByAppendingString:state];
+    self.operatingStateLabel.stringValue = state;
+    self.operatingStateLabel.textColor = color;
+    self.armTxButton.toolTip = @"Enable TX arms scheduled digital messages. Halt TX stops the QSO, CQ and Hunter, disarms transmission and requests RX while monitoring continues. Esc also requests a stop. WAIT RX/CHECK RX is not a confirmed receive state.";
     NSString *title = @"ENABLE TX";
     BOOL txWorkflowActive = self.audioEngine.isTransmitArmed ||
+                            self.audioEngine.isTuning ||
                             self.audioEngine.isTransmitting ||
                             self.audioEngine.isReceiveRecoveryPending ||
                             self.autoEngine.isAutoCQActive ||
                             self.autoEngine.isQSOActive;
     if (self.audioEngine.isReceiveRecoveryStalled) title = @"CHECK RX";
     else if (self.audioEngine.isReceiveRecoveryPending) title = @"WAIT RX";
-    else if (self.audioEngine.isTransmitting) title = @"TX ACTIVE";
+    else if (self.audioEngine.isTransmitting || self.audioEngine.isTuning) title = @"HALT TX";
     else if (self.audioEngine.isTransmitArmed) title = @"HALT TX";
     else if (self.autoEngine.isQSOActive) title = @"HALT TX";
     else if (self.autoEngine.isAutoCQActive) title = @"STOP CQ";
@@ -1835,6 +1856,7 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
 
     self.startStopButton = [TX500FT8StateButton buttonWithTitle:@"Start FT8" target:self action:@selector(toggleMonitoring:)];
     self.startStopButton.bezelStyle = NSBezelStyleRounded;
+    self.startStopButton.toolTip = @"Start opens digital monitoring. Stop ends monitoring, Auto-CQ, Auto-Hunter and the active QSO, disarms TX and requests RX. WAIT RX or CHECK RX means release is not yet confirmed.";
     [self.startStopButton.widthAnchor constraintEqualToConstant:82].active = YES;
 
     self.modeSegment = [NSSegmentedControl segmentedControlWithLabels:@[@"FT8", @"FT4"]
@@ -1894,8 +1916,9 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
     [self.lockFreqsButton.widthAnchor constraintEqualToConstant:46].active = YES;
 
     self.tuneButton = [NSButton buttonWithTitle:@"Tune" target:self action:@selector(toggleTune:)];
-    self.tuneButton.bezelStyle = NSBezelStyleInline;
-    [self.tuneButton.widthAnchor constraintEqualToConstant:46].active = YES;
+    self.tuneButton.bezelStyle = NSBezelStyleRounded;
+    self.tuneButton.toolTip = @"Send a continuous test tone at the selected TX audio frequency for at most 15 seconds. This keys the radio in live mode. Stop Tone stops only this carrier; Stop FT8/FT4 stops the whole digital station.";
+    [self.tuneButton.widthAnchor constraintEqualToConstant:86].active = YES;
 
     self.armTxButton = [TX500FT8StateButton buttonWithTitle:@"ENABLE TX" target:self action:@selector(toggleArmTx:)];
     ((TX500FT8StateButton *)self.armTxButton).transmitControl = YES;
@@ -2008,7 +2031,14 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
     metersRow.alignment = NSLayoutAttributeCenterY;
     metersRow.spacing = 12;
 
-    NSStackView *ribbonVStack = [NSStackView stackViewWithViews:@[row1Stack, dialRow, row2Stack, radioSettingsRow, metersRow]];
+    self.operatingStateLabel = [NSTextField wrappingLabelWithString:@"Stopped · TX disabled"];
+    self.operatingStateLabel.font = [NSFont systemFontOfSize:11 weight:NSFontWeightSemibold];
+    NSTextField *controlHelp = [NSTextField wrappingLabelWithString:@"Stop FT8/FT4: stop all · Halt TX: keep listening · Tune: test carrier, max 15 s"];
+    controlHelp.font = [NSFont systemFontOfSize:10];
+    controlHelp.textColor = NSColor.secondaryLabelColor;
+    [controlHelp.widthAnchor constraintLessThanOrEqualToConstant:540].active = YES;
+    [self.operatingStateLabel.widthAnchor constraintLessThanOrEqualToConstant:540].active = YES;
+    NSStackView *ribbonVStack = [NSStackView stackViewWithViews:@[row1Stack, dialRow, row2Stack, radioSettingsRow, metersRow, self.operatingStateLabel, controlHelp]];
     ribbonVStack.orientation = NSUserInterfaceLayoutOrientationVertical;
     ribbonVStack.alignment = NSLayoutAttributeLeading;
     ribbonVStack.spacing = 5;
@@ -3015,32 +3045,36 @@ static NSString * const kFT8CustomBandTitle = @"Custom…";
 
 - (void)toggleTune:(id)sender {
     (void)sender;
-    if ([self.tuneButton.title isEqualToString:@"Tune"]) {
-        if (!self.audioEngine.isSimulationMode && !self.audioEngine.catDialAndModeVerified) {
-            if (self.audioEngine.dialFrequencyHz > 0) {
-                self.audioEngine.catDialAndModeVerified = YES;
-                if (self.serialCommandSender) self.serialCommandSender(@"MD6;");
-            } else {
-                [self appendToQSOConsole:@"[Tune blocked] Confirm the radio frequency and DIG mode before transmitting."];
-                return;
-            }
-        }
-        if (self.audioEngine.isSimulationMode) {
-            [self appendToQSOConsole:@"⚠️ Note: 'Simulation Mode' is active. Tune tone is simulated (no RF sent to radio). Uncheck 'Simulation Mode' to key transmitter."];
-        }
-        [self.audioEngine startTuneCarrier];
-        self.tuneButton.title = @"STOP";
-    } else {
+    if (self.audioEngine.isTuning) {
         [self.audioEngine stopTuneCarrier];
-        self.tuneButton.title = @"Tune";
+        [self refreshTransmitButtonState];
+        return;
     }
+    if (!self.audioEngine.isMonitoring || self.audioEngine.isTransmitArmed ||
+        self.autoEngine.isAutoCQActive || self.autoEngine.isAutoHunterActive || self.autoEngine.isQSOActive ||
+        self.audioEngine.isTransmitting || self.audioEngine.isReceiveRecoveryPending || self.audioEngine.isReceiveRecoveryStalled) return;
+    if (!self.audioEngine.isSimulationMode && !self.audioEngine.catDialAndModeVerified) {
+        [self appendToQSOConsole:@"[Tune blocked] Start monitoring and confirm the radio dial and DIG mode before Tune."];
+        return;
+    }
+    if (!self.audioEngine.isSimulationMode && ![NSUserDefaults.standardUserDefaults boolForKey:@"TX500_DigitalTuneExplained"]) {
+        NSAlert *alert = [NSAlert new];
+        alert.messageText = @"Tune transmits a continuous carrier";
+        alert.informativeText = @"This is an RF transmission using the current dial, TX audio frequency and power setting. Check your antenna/load and a clear frequency. The tone stops after at most 15 seconds. Stop Tone ends the carrier; Halt TX or Esc also requests a stop. Stop FT8/FT4 ends monitoring as well.";
+        [alert addButtonWithTitle:@"Cancel"];
+        [alert addButtonWithTitle:@"Start Tune"];
+        if ([alert runModal] != NSAlertSecondButtonReturn) return;
+        [NSUserDefaults.standardUserDefaults setBool:YES forKey:@"TX500_DigitalTuneExplained"];
+    }
+    [self.audioEngine startTuneCarrier];
+    [self refreshTransmitButtonState];
 }
 
 - (void)toggleArmTx:(id)sender {
     (void)sender;
     if (self.audioEngine.isTransmitArmed || self.autoEngine.isAutoCQActive ||
         self.autoEngine.isAutoHunterActive || self.autoEngine.isQSOActive ||
-        self.audioEngine.isTransmitting) {
+        self.audioEngine.isTransmitting || self.audioEngine.isTuning) {
         [self.autoEngine stopAutoCQ];
         [self.autoEngine stopAutoHunter];
         if (self.autoEngine.isQSOActive) [self.autoEngine abortQSO];

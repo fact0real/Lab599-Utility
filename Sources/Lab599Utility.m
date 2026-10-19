@@ -1,3 +1,4 @@
+#import "Lab599AppUpdater.h"
 #import "TX500CWAudioDecoder.h"
 #import <Cocoa/Cocoa.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
@@ -248,6 +249,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 @property(nonatomic, strong) NSButton *verifyRadioButton;
 @property(nonatomic, strong) id activity;
 @property(nonatomic) BOOL busy;
+@property(nonatomic, strong) Lab599AppUpdater *appUpdater;
 @property(nonatomic) BOOL hasPorts;
 @property(nonatomic, strong) NSSegmentedControl *operationPicker;
 @property(nonatomic, strong) NSStackView *portRow;
@@ -408,6 +410,17 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     if (self.operationPicker.selectedSegment == 12) [self.ft8StationController refreshRadioFrequency];
 }
 - (NSString *)currentStationPort { return self.hasPorts ? self.portMenu.selectedItem.title : @""; }
+- (BOOL)applicationUpdateIsSafe {
+    return [self stationCanEdit] && !self.tools.operationInProgress &&
+        !self.ft8StationController.audioEngine.isMonitoring &&
+        !self.ft8StationController.audioEngine.isTuning &&
+        !self.ft8StationController.audioEngine.isReceiveRecoveryPending &&
+        !self.ft8StationController.audioEngine.isReceiveRecoveryStalled &&
+        !self.cwStationController.decoder.isListening &&
+        !self.screenController.liveSyncActive &&
+        !self.telemetryController.engine.isRunning &&
+        !self.sstvController.enabled && !self.sstvController.engine.running;
+}
 - (BOOL)stationCanEdit {
     return !self.busy && !self.stationController.busy && !self.clusterController.busy && !self.stationCore.ownsTX && !self.voiceKeyerController.keyer.active &&
         !self.ft8StationController.audioEngine.isTransmitting && !self.ft8StationController.audioEngine.isTransmitArmed &&
@@ -576,6 +589,13 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         self.logCollapsed = YES;
     }
 
+    self.appUpdater = [Lab599AppUpdater new];
+    __weak typeof(self) updateHost = self;
+    self.appUpdater.canInstallUpdate = ^BOOL {
+        typeof(self) host = updateHost;
+        return host && [host applicationUpdateIsSafe];
+    };
+
     // Menus
     NSMenu *menu = [NSMenu new];
     NSMenuItem *appItem = [NSMenuItem new];
@@ -583,6 +603,11 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     NSMenu *appMenu = [NSMenu new];
     NSMenuItem *aboutItem = [appMenu addItemWithTitle:@"About Lab599 Utility" action:@selector(showAboutWindow:) keyEquivalent:@""];
     aboutItem.target = self;
+    NSMenuItem *updates = [appMenu addItemWithTitle:@"Check for App Updates…" action:@selector(checkForUpdates:) keyEquivalent:@""];
+    updates.target = self.appUpdater;
+    NSMenuItem *autoUpdates = [appMenu addItemWithTitle:@"Automatically Check for App Updates" action:@selector(toggleAutomaticChecks:) keyEquivalent:@""];
+    autoUpdates.target = self.appUpdater;
+
     [appMenu addItem:[NSMenuItem separatorItem]];
     NSMenuItem *prefsItem = [appMenu addItemWithTitle:@"Preferences…" action:@selector(showPreferencesWindow:) keyEquivalent:@","];
     prefsItem.target = self;
@@ -1824,6 +1849,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         }
     }
     [self.window makeKeyAndOrderFront:nil];
+    [self.appUpdater start];
     [NSApp activateIgnoringOtherApps:YES];
     if ([[NSProcessInfo processInfo].arguments containsObject:@"--about"]) {
         [self showAboutWindow:nil];
@@ -4344,6 +4370,10 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 
 - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender {
     (void)sender;
+    if (self.appUpdater.installRequested && ![self applicationUpdateIsSafe]) {
+        [self appendLog:@"Application update postponed: stop radio operations before installing."];
+        return NSTerminateCancel;
+    }
     if (self.terminateAfterToolsStop) return NSTerminateLater;
     // A launch failure can leave optional controllers uninitialized. A message
     // to nil returns NO, which previously made a windowless app refuse Quit.

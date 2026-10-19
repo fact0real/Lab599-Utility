@@ -1,3 +1,4 @@
+#import "TX500Filter.h"
 #import <Foundation/Foundation.h>
 #import <dispatch/dispatch.h>
 #import <util.h>
@@ -206,6 +207,16 @@ int main(void) { @autoreleasepool {
     Check(TXValidateSettings([NSMutableData dataWithLength:1023])!=nil && TXValidateSettings([NSMutableData dataWithLength:1025])!=nil,@"Wrong settings size rejected");
     NSMutableData *corrupt=[encoded mutableCopy];((uint8_t *)corrupt.mutableBytes)[4]='9';Check(!TXDecodeMemory(corrupt,NULL),@"Unknown active mode rejected");
     channel.frequency=99999;Check(TXValidateChannel(channel)!=nil,@"Frequency low bound");channel.frequency=56000001;Check(TXValidateChannel(channel)!=nil,@"Frequency high bound");
+    for (NSInteger rx = 1; rx <= 4; rx++) for (NSInteger tx = 1; tx <= 2; tx++) {
+        NSInteger observedRX = 0, observedTX = 0;
+        NSString *reply = TX500FilterCommand(rx, tx);
+        Check(TX500ParseFilterReply(reply, &observedRX, &observedTX) && observedRX == rx && observedTX == tx, @"All documented RX/TX filter combinations round-trip with UI numbering");
+    }
+    for (NSString *reply in @[@"FL;", @"FL1;", @"FL4;", @"FL21", @"FL22;", @"FL40;", @"FLx1;", @"FL01junk;", @"FL001;", @"?;", @"E;", @"O;"]) {
+        NSInteger rx = 77, tx = 88;
+        Check(!TX500ParseFilterReply(reply, &rx, &tx) && rx == 77 && tx == 88, @"Malformed or ambiguous filter replies never invent a filter");
+    }
+    Check(!TX500FilterCommand(0, 1) && !TX500FilterCommand(5, 1) && !TX500FilterCommand(1, 3), @"Invalid filter commands are refused");
     printf("PASS: Binary formats, command fixtures, input validation\n");
     for(NSString *s in @[@"ID019;",@"ID500;",@"ID501;",@"ID502;",@"ID505;"]) Check(TXClassifyCATReply(ASCII(s))==TXCATOK,@"ID reply accepted");
     Check([TX500UndocumentedModeLabel(8) isEqualToString:@"MD8 (undocumented)"] && [TX500UndocumentedModeLabel(9) isEqualToString:@"MD9 (undocumented)"], @"Unspecified CAT modes retain their numeric labels");

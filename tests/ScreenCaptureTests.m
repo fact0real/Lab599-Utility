@@ -264,6 +264,7 @@ int main(void) {
         Check(controller.screenState.frequencyHz == 14074000ULL, @"BAND- from 17m must step down to 20m (14.074 MHz)");
 
         // 17. Controller interactive MODE and FILTER cycling tests
+        controller.demoModeActive = YES; // local control exercises never send CAT
         controller.screenState.operatingMode = @"USB";
         [controller handleChassisControlPress:TX500ControlMode atChassisPoint:NSMakePoint(640, 275)];
         Check([controller.screenState.operatingMode isEqualToString:@"CW"], @"MODE cycle from USB must switch to CW");
@@ -351,6 +352,30 @@ int main(void) {
         Check(LitPODots(honest.screenState) == 12, @"The PO bar lights the radio's 12 dots");
         Check(honest.screenState.spectrumAmplitudes.count == 0, @"Live CAT draws no invented spectrum");
         Check([hud.stringValue hasSuffix:@"[LIVE CAT 9600]"], @"After a real answer the panel says Live CAT");
+        fakeReplies[@"FA;"] = @"FA00014074000;";
+        for (NSInteger rx = 0; rx < 4; rx++) {
+            fakeReplies[@"FL;"] = [NSString stringWithFormat:@"FL%ld1;", (long)rx];
+            RefreshFromFakeRadio(honest);
+            Check(honest.screenState.filterNumber == rx + 1, @"Live CAT converts the zero-based RX filter independently of the TX digit");
+            Check(honest.screenState.filterBandwidthHz == 0 && [honest.screenState.filterBandwidthString isEqualToString:@"—"], @"Live CAT does not invent a preset bandwidth");
+        }
+        fakeReplies[@"FL;"] = @"FL1;";
+        RefreshFromFakeRadio(honest);
+        Check(honest.screenState.filterNumber == 0 && [honest.screenState.filterName isEqualToString:@"FIL-?"], @"A truncated FL reply clears the prior known filter");
+        fakeReplies[@"FL;"] = @"FL00;";
+        honest.screenState.isTransmitting = NO;
+        dispatch_queue_t serialQueue = [honest valueForKey:@"serialQueue"];
+        dispatch_semaphore_t filterGate = dispatch_semaphore_create(0);
+        dispatch_async(serialQueue, ^{ dispatch_semaphore_wait(filterGate, DISPATCH_TIME_FOREVER); });
+        @synchronized (fakeRadioCommands) { [fakeRadioCommands removeAllObjects]; }
+        [honest handleChassisControlPress:TX500ControlFilter atChassisPoint:NSMakePoint(640, 245)];
+        [honest stopLiveSync];
+        dispatch_semaphore_signal(filterGate);
+        dispatch_sync(serialQueue, ^{});
+        @synchronized (fakeRadioCommands) {
+            Check(fakeRadioCommands.count == 0, @"Leaving the live screen cancels a queued filter change before CAT access");
+        }
+        [fakeReplies removeObjectForKey:@"FL;"];
         honestPort = @"/dev/null-other-port";
         [honest renderAndUpdateDisplay];
         Check([hud.stringValue hasSuffix:@"[LIVE CAT · waiting for radio]"], @"Another port is not Live CAT until it answers");

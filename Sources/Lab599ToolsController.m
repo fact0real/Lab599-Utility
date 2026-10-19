@@ -513,7 +513,7 @@ static inline BOOL ToolsIsCATSetCommand(NSString *cmd) {
     self.catModeBadge.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightSemibold];
     self.catPowerBadge = [NSTextField labelWithString:@"PWR: —"];
     self.catPowerBadge.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightSemibold];
-    self.catFilterBadge = [NSTextField labelWithString:@"FIL: —"];
+    self.catFilterBadge = [NSTextField labelWithString:@"RX FIL: —"];
     self.catFilterBadge.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightSemibold];
     self.catPreampBadge = [NSTextField labelWithString:@"PRE: —"];
     self.catPreampBadge.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightSemibold];
@@ -1024,7 +1024,7 @@ static NSString *StudioTimestamp(NSDate *date) {
     if (index >= 0 && index < (NSInteger)self.studioSnapshots.count) {
         NSDictionary *snapshot = self.studioSnapshots[index];
         NSData *settings = snapshot[@"settings"];
-        self.snapshotDetails.stringValue = [NSString stringWithFormat:@"%@\nCaptured: %@   •   Model: %@\nSettings: %lu bytes   •   SHA-256: %@\nDial: %@ Hz   •   Mode: %@   •   RF: %@ W   •   Filter: FL%@",
+        self.snapshotDetails.stringValue = [NSString stringWithFormat:@"%@\nCaptured: %@   •   Model: %@\nSettings: %lu bytes   •   SHA-256: %@\nDial: %@ Hz   •   Mode: %@   •   RF: %@ W   •   RX filter: FIL-%@",
             snapshot[@"name"], StudioTimestamp(snapshot[@"date"]), snapshot[@"model"],
             (unsigned long)settings.length, TXFirmwareSHA256(settings), snapshot[@"frequency"] ?: @"—",
             snapshot[@"mode"] ?: @"—", snapshot[@"power"] ?: @"—", snapshot[@"filter"] ?: @"—"];
@@ -1730,7 +1730,7 @@ static NSString *StudioTimestamp(NSDate *date) {
     } else {
         self.catPowerBadge.stringValue = [NSString stringWithFormat:@"PWR: %.1f W", state.rfPowerWatts];
     }
-    self.catFilterBadge.stringValue = state.filterKnown ? [NSString stringWithFormat:@"FIL: FL%ld", (long)state.filterNumber] : @"FIL: —";
+    self.catFilterBadge.stringValue = state.filterKnown ? [NSString stringWithFormat:@"RX FIL-%ld", (long)state.filterNumber] : @"RX FIL: —";
     self.catPreampBadge.stringValue = state.preampKnown ? [NSString stringWithFormat:@"PRE: %@", state.preampOn ? @"ON" : @"OFF"] : @"PRE: —";
     self.catVoltageBadge.stringValue = state.voltageKnown ? [NSString stringWithFormat:@"VOLT: %.1f V", state.voltage] : @"VOLT: —";
     self.catIsTransmitting = state.isTransmitting;
@@ -2189,7 +2189,7 @@ static NSString *StudioTimestamp(NSDate *date) {
             [self end];
             if (verified) {
                 [self appendTerminalRX:reply ?: @"Verified" latency:0 error:NO];
-                self.catFilterBadge.stringValue = [NSString stringWithFormat:@"FIL: FL%ld", (long)filterNum];
+                self.catFilterBadge.stringValue = [NSString stringWithFormat:@"RX FIL-%ld", (long)filterNum];
                 if (self.statusChanged) self.statusChanged([NSString stringWithFormat:@"Filter set to FL%ld", (long)filterNum], 1);
             } else {
                 [self appendTerminalRX:err.localizedDescription ?: @"Error" latency:0 error:YES];

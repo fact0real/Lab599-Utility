@@ -9,6 +9,8 @@ mkdir -p build "$APP_NAME/Contents/MacOS" "$APP_NAME/Contents/Resources"
 test -s Resources/AppIcon.icns || test -s assets/AppIcon.icns || { echo "Missing app icon. Run sh build-icon.sh first." >&2; exit 1; }
 
 if [ "${1:-}" = "--test" ] || [ "${1:-}" = "--test-only" ]; then
+    sh tests/run-digital-controls-tests.sh
+    sh tests/run-app-updater-tests.sh
     sh tests/run-startup-privacy-tests.sh
     sh tests/verify-help-guide.sh
     sh tests/run-dxcluster-tests.sh
@@ -66,7 +68,7 @@ if [ "${1:-}" = "--test" ] || [ "${1:-}" = "--test-only" ]; then
     clang -O2 -Wall -Wextra -Wno-unused-parameter -Werror -fobjc-arc \
         -mmacosx-version-min=12.0 -framework Cocoa -framework UniformTypeIdentifiers \
         -IHeaders -ISources \
-        tests/ScreenCaptureTests.m Sources/TX500ScreenModel.m Sources/TX500ScreenRenderer.m Sources/TX500ScreenCaptureController.m Sources/Lab599SerialPort.m -o build/ScreenCaptureTests
+        tests/ScreenCaptureTests.m Sources/TX500ScreenModel.m Sources/TX500ScreenRenderer.m Sources/TX500ScreenCaptureController.m Sources/TX500CATTest.m Sources/Lab599SerialPort.m -o build/ScreenCaptureTests
     ./build/ScreenCaptureTests
     clang -O2 -Wall -Wextra -Wno-unused-parameter -Werror -fobjc-arc \
         -mmacosx-version-min=12.0 -framework Cocoa -framework UniformTypeIdentifiers -framework AVFoundation -framework CoreAudio -framework AudioToolbox -framework WebKit -framework Security -lsqlite3 \
@@ -134,12 +136,15 @@ else
     sed -i '' "s/CURRENT_PROJECT_VERSION = [^;]*;/CURRENT_PROJECT_VERSION = $NEW_BUILD;/g" Lab599-Utility.xcodeproj/project.pbxproj 2>/dev/null || true
 fi
 
+sh scripts/prepare-sparkle.sh
+
 echo "Compiling universal binary for $BIN_NAME $NEW_VER ($NEW_BUILD) (arm64 & x86_64)..."
 clang -O2 -Wall -Wextra -Wno-unused-parameter -Werror -fobjc-arc \
     -arch arm64 -arch x86_64 -mmacosx-version-min=12.0 \
     -framework Cocoa -framework Network -framework UniformTypeIdentifiers -framework AVFoundation -framework CoreAudio -framework AudioToolbox -framework WebKit -framework Security -lsqlite3 \
     -IHeaders -ISources -IHeaders/cft8 -ISources/cft8 \
-    Sources/Lab599Utility.m Sources/Lab599FirmwareCatalog.m Sources/TX500Transfer.m Sources/TX500TimeSync.m Sources/TX500TimeDiscipline.m Sources/Lab599SerialPort.m Sources/TX500CATTest.m Sources/TX500Configuration.m Sources/TX500ProfilesAndBackup.m Sources/TX500SettingsModel.m Sources/TX500ScreenModel.m Sources/TX500ScreenRenderer.m Sources/TX500ScreenCaptureController.m Sources/Lab599ToolsController.m Sources/Lab599DriverController.m Sources/Lab599DocsController.m Sources/Lab599HelpController.m Sources/TXGaugeView.m Sources/TX500TelemetryEngine.m Sources/Lab599TelemetryController.m Sources/Lab599FeedbackController.m Sources/TX500CWAudioDecoder.m Sources/TX500CWKeyer.m Sources/TX500CWQSOAssistant.m Sources/TX500CWSpectrumView.m Sources/TX500CWStationController.m Sources/TX500AudioEngine.m Sources/TX500AudioVisualizerView.m Sources/TX500AudioMonitorController.m \
+    -FVendor/Sparkle -framework Sparkle -Wl,-rpath,@executable_path/../Frameworks \
+    Sources/Lab599AppUpdater.m Sources/Lab599Utility.m Sources/Lab599FirmwareCatalog.m Sources/TX500Transfer.m Sources/TX500TimeSync.m Sources/TX500TimeDiscipline.m Sources/Lab599SerialPort.m Sources/TX500CATTest.m Sources/TX500Configuration.m Sources/TX500ProfilesAndBackup.m Sources/TX500SettingsModel.m Sources/TX500ScreenModel.m Sources/TX500ScreenRenderer.m Sources/TX500ScreenCaptureController.m Sources/Lab599ToolsController.m Sources/Lab599DriverController.m Sources/Lab599DocsController.m Sources/Lab599HelpController.m Sources/TXGaugeView.m Sources/TX500TelemetryEngine.m Sources/Lab599TelemetryController.m Sources/Lab599FeedbackController.m Sources/TX500CWAudioDecoder.m Sources/TX500CWKeyer.m Sources/TX500CWQSOAssistant.m Sources/TX500CWSpectrumView.m Sources/TX500CWStationController.m Sources/TX500AudioEngine.m Sources/TX500AudioVisualizerView.m Sources/TX500AudioMonitorController.m \
     Sources/TX500FT8Message.m Sources/TX500FT8AudioEngine.m Sources/TX500FT8AutoEngine.m Sources/TX500FT8WaterfallView.m Sources/TX500FT8StationController.m \
     Sources/TX500LogbookManager.m Sources/TX500CallsignLookupService.m Sources/TX500CloudSyncEngine.m Sources/TX500WebAuthenticatorController.m Sources/TX500CloudSettingsController.m Sources/TX500LogbookController.m \
     Sources/TX500DXCluster.m Sources/TX500DXClusterController.m \
@@ -150,7 +155,10 @@ clang -O2 -Wall -Wextra -Wno-unused-parameter -Werror -fobjc-arc \
     Sources/cft8/ft8/constants.c Sources/cft8/ft8/crc.c Sources/cft8/ft8/encode.c Sources/cft8/ft8/decode.c Sources/cft8/ft8/ldpc.c Sources/cft8/ft8/message.c Sources/cft8/ft8/text.c Sources/cft8/fft/kiss_fft.c Sources/cft8/fft/kiss_fftr.c Sources/cft8/common/wave.c Sources/cft8/common/monitor.c Sources/cft8/shim/tx500_ft8_shim.c \
     -o "build/$BIN_NAME"
 
+mkdir -p "$APP_NAME/Contents/Frameworks"
+/usr/bin/ditto Vendor/Sparkle/Sparkle.framework "$APP_NAME/Contents/Frameworks/Sparkle.framework"
 /bin/cp "build/$BIN_NAME" "$APP_NAME/Contents/MacOS/$BIN_NAME"
+/bin/cp Resources/Sparkle-LICENSE.txt "$APP_NAME/Contents/Resources/Sparkle-LICENSE.txt"
 /bin/cp Resources/Info.plist "$APP_NAME/Contents/Info.plist"
 /bin/cp Resources/AppIcon.icns "$APP_NAME/Contents/Resources/AppIcon.icns"
 /bin/cp Resources/tx500_radio.png "$APP_NAME/Contents/Resources/tx500_radio.png"

@@ -51,3 +51,6 @@ build/
 # 
 validation/
 .build/
+
+# Pinned upstream update runtime (scripts/prepare-sparkle.sh restores it).
+Vendor/Sparkle/

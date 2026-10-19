@@ -34,3 +34,12 @@ Unknown fields, `APP_*`, `*_INTL`, `MY_CALL`, and cross-service upload/confirmat
 - Radio control and local services use the configured ports/endpoints. Selecting a remote host does not make that connection local. Firmware transfers and radio transmission have their own actions and safety interlocks.
 
 Credentials use the existing macOS Keychain store. This change adds no telemetry. Verification uses offline stand-ins and invented records; authenticated provider behavior, packet-level startup traffic, physical radio/audio operation, and provider retention have not been certified by these tests.
+
+## Application update checks
+
+Sparkle checks are off by default. Explicit checks, or optional automatic checks
+selected in the application menu, contact raw.githubusercontent.com for the
+project appcast and GitHub release hosts for approved downloads. The User-Agent
+identifies the application/version. No operator callsign, locator, logbook or
+cloud credentials are sent. Sparkle system profiling is disabled. Download and
+installation are user-controlled; feeds and archives must be signed.

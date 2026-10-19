@@ -171,6 +171,16 @@ PSK Reporter submissions are opt-in. DX Cluster connects only when you select **
 
 The app does not read cloud credentials just to open its main window or the Station preferences. It reads cloud Keychain items when you open Logbook, open Cloud & Logbook Accounts, or use a cloud service. The locally signed release may still prompt for access to individual saved items, especially after replacing the app with a new build; macOS controls those prompts. No Keychain access checks are disabled to suppress them.
 
+## Application updates
+
+Use the application menu → **Check for App Updates…**. Automatic checks are
+optional and off initially; installation always needs an explicit decision and
+an idle radio. Signed feeds and archives are required. This updates the Mac
+application, not radio firmware. The first upgrade from 2.285 is manual.
+The empty signed feed establishes the update channel; the new binary remains
+a review build pending public release.
+See [application update setup and release procedure](docs/APP-UPDATES.md).
+
 ## Use
 
 Open **Lab599 Utility.app**, connect the CAT-USB cable and choose the serial port from the port menu. Tap **Refresh** if the port does not appear. Close other applications using the same port.

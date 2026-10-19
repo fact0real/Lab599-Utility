@@ -1,3 +1,4 @@
+#import "TX500Filter.h"
 #import "TX500ScreenCaptureController.h"
 #import "Lab599SerialPort.h"
 #import "TX500CATTest.h"
@@ -562,6 +563,7 @@ static NSString *TX500ScreenQuery(Lab599SerialPort *port, NSString *cmd) {
     NSUInteger _demoCycleCount;
 }
 
+@property(nonatomic, strong) Lab599Cancellation *filterChangeCancellation;
 @property (nonatomic, strong) NSView *containerView;
 @property (nonatomic, strong) TX500ScreenDisplayView *displayView;
 @property (nonatomic, strong) NSPopUpButton *themePopup;
@@ -792,6 +794,12 @@ static NSString *TX500ScreenQuery(Lab599SerialPort *port, NSString *cmd) {
 
 - (void)renderAndUpdateDisplay {
     self.screenState.liveCAT = !self.demoModeActive;
+    if (!self.demoModeActive && !_liveSnapshotReceived) {
+        self.screenState.filterNumber = 0;
+        self.screenState.filterName = @"FIL-?";
+        self.screenState.filterBandwidthHz = 0;
+        self.screenState.filterBandwidthString = @"—";
+    }
     NSImage *image = nil;
     if (self.showChassisBezel) {
         image = [TX500ScreenRenderer renderChassisImageWithState:self.screenState
@@ -1065,6 +1073,12 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
         self.screenState.filterBandwidthString = (fil == 1) ? @"3.10k" : ((fil == 2) ? @"2.40k" : @"1.80k");
     }
 
+    if (!self.demoModeActive) {
+        self.screenState.filterNumber = 0;
+        self.screenState.filterName = @"FIL-?";
+        self.screenState.filterBandwidthHz = 0;
+        self.screenState.filterBandwidthString = @"—";
+    }
     [self renderAndUpdateDisplay];
 
     NSInteger code = [modeCodes[newMode] integerValue];
@@ -1074,6 +1088,36 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
 }
 
 - (void)handleFilterCycle {
+    if (!self.demoModeActive) {
+        NSString *path = self.selectedPortProvider ? self.selectedPortProvider() : nil;
+        if (!path.length || self.screenState.isTransmitting) {
+            [self showTemporaryFeedback:@"Filter unchanged: select a CAT port and confirm RX first."];
+            return;
+        }
+        self.filterChangeCancellation.cancelled = YES;
+        Lab599Cancellation *cancellation = [Lab599Cancellation new];
+        self.filterChangeCancellation = cancellation;
+        __weak typeof(self) weakSelf = self;
+        dispatch_async(_serialQueue, ^{
+            if (cancellation.cancelled) return;
+            NSError *error = nil;
+            NSInteger rx = 0, tx = 0;
+            NSString *reply = TXExecuteCATCommand(path, @"FL;", 0.5, NULL, &error);
+            BOOL known = TX500ParseFilterReply(reply, &rx, &tx);
+            NSInteger next = known ? rx % 4 + 1 : 0;
+            BOOL receiving = known && [TXExecuteCATCommand(path, @"PT;", 0.5, NULL, &error) isEqualToString:@"PT0;"];
+            BOOL wrote = receiving && !cancellation.cancelled && TXRunCATMacro(path,
+                @[[NSString stringWithFormat:@"FL%ld;", (long)next - 1]], cancellation, nil, &error);
+            dispatch_async(dispatch_get_main_queue(), ^{
+                typeof(self) self = weakSelf;
+                if (!self || self.demoModeActive || cancellation.cancelled) return;
+                [self showTemporaryFeedback:wrote ? [NSString stringWithFormat:@"RX filter FIL-%ld verified; TX filter preserved.", (long)next] :
+                    [NSString stringWithFormat:@"Filter not confirmed: %@", error.localizedDescription ?: @"complete FL reply unavailable"]];
+                if (wrote) [self pollRadioParameters];
+            });
+        });
+        return;
+    }
     NSInteger curr = self.screenState.filterNumber > 0 ? self.screenState.filterNumber : 1;
     NSInteger next = (curr % 4) + 1;  // Cycle 1→2→3→4→1
     self.screenState.filterNumber = next;
@@ -1690,6 +1734,7 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
 }
 
 - (void)stopLiveSync {
+    self.filterChangeCancellation.cancelled = YES;
     [_livePollTimer invalidate];
     _livePollTimer = nil;
 }
@@ -1834,25 +1879,10 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
             }
         }
 
-        // Query Filter Preset (FL;)
-        // TX-500 returns FL21; — char at index 2 is the filter number (1-4), rest is bandwidth indicator
-        NSString *fl = queryRadio(@"FL;");
-        NSInteger filterNum = 1;
-        NSInteger filterBw = 0;
-        if (fl && [fl hasPrefix:@"FL"] && fl.length >= 3) {
-            unichar fc = [fl characterAtIndex:2];
-            int n = (int)(fc - '0');
-            if (n >= 1 && n <= 4) {
-                filterNum = n;
-            }
-        }
-
-        // Query Filter Bandwidth (FW;) if supported
-        NSString *fw = queryRadio(@"FW;");
-        if (fw && [fw hasPrefix:@"FW"] && fw.length >= 6) {
-            NSString *bwStr = [fw substringWithRange:NSMakeRange(2, 4)];
-            filterBw = [bwStr integerValue] * 10;
-        }
+        // FL describes RX/TX preset indices, not bandwidth. No documented
+        // bandwidth query or manufacturer-validated preset-width table exists.
+        NSInteger filterNum = 0;
+        BOOL filterKnown = TX500ParseFilterReply(queryRadio(@"FL;"), &filterNum, NULL);
 
         // Query Preamp (PA;)
         NSString *pa = queryRadio(@"PA;");
@@ -1927,29 +1957,10 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
                 }
             }
 
-            self.screenState.filterNumber = filterNum;
-            self.screenState.filterName = [NSString stringWithFormat:@"FIL-%ld", (long)filterNum];
-            if (filterBw > 0) {
-                self.screenState.filterBandwidthHz = filterBw;
-                self.screenState.filterBandwidthString = [NSString stringWithFormat:@"%.2fk", (double)filterBw / 1000.0];
-            } else {
-                NSString *activeM = self.screenState.operatingMode ?: @"DIG";
-                if ([activeM isEqualToString:@"CW"] || [activeM isEqualToString:@"CWR"]) {
-                    if (filterNum == 1) self.screenState.filterBandwidthString = @"0.50k";
-                    else if (filterNum == 2) self.screenState.filterBandwidthString = @"0.30k";
-                    else if (filterNum == 3) self.screenState.filterBandwidthString = @"0.10k";
-                    else self.screenState.filterBandwidthString = @"0.05k";
-                } else if ([activeM isEqualToString:@"AM"]) {
-                    if (filterNum == 1) self.screenState.filterBandwidthString = @"6.00k";
-                    else if (filterNum == 2) self.screenState.filterBandwidthString = @"4.00k";
-                    else self.screenState.filterBandwidthString = @"3.00k";
-                } else {
-                    if (filterNum == 1) self.screenState.filterBandwidthString = @"3.10k";
-                    else if (filterNum == 2) self.screenState.filterBandwidthString = @"2.40k";
-                    else if (filterNum == 3) self.screenState.filterBandwidthString = @"1.80k";
-                    else self.screenState.filterBandwidthString = @"1.00k";
-                }
-            }
+            self.screenState.filterNumber = filterKnown ? filterNum : 0;
+            self.screenState.filterName = filterKnown ? [NSString stringWithFormat:@"FIL-%ld", (long)filterNum] : @"FIL-?";
+            self.screenState.filterBandwidthHz = 0;
+            self.screenState.filterBandwidthString = @"—";
 
             self.screenState.preamp = preampOn;
             self.screenState.attenuator = attOn;

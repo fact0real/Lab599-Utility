@@ -1,3 +1,4 @@
+#import "TX500Filter.h"
 #import "TX500CATTest.h"
 #import "TX500ModeLabels.h"
 #import <math.h>
@@ -340,21 +341,9 @@ TXRadioState *TXReadRadioState(NSString *path, NSTimeInterval timeout, NSError *
 
     // 8. Filter (FL;)
     NSString *flReply = SendOverPort(port, @"FL;", cmdTimeout, NULL, nil);
-    if (flReply && [flReply hasPrefix:@"FL"] && flReply.length >= 4) {
-        // Lab599 replies FL<P1><P2>;: zero-based RX filter and TX filter.
-        // Preserve older single-digit firmware replies as a compatibility path.
-        unichar c = [flReply characterAtIndex:2];
-        if (flReply.length == 5 && c >= '0' && c <= '3') {
-            state.filterNumber = (NSInteger)(c - '0') + 1;
-            state.filterKnown = YES;
-        } else if (flReply.length == 4 && c >= '1' && c <= '4') {
-            state.filterNumber = (NSInteger)(c - '0');
-            state.filterKnown = YES;
-        } else {
-            int fl = [[flReply substringFromIndex:2] intValue];
-            if (fl >= 1 && fl <= 4) { state.filterNumber = fl; state.filterKnown = YES; }
-        }
-    }
+    NSInteger rxFilter = 0;
+    state.filterKnown = TX500ParseFilterReply(flReply, &rxFilter, NULL);
+    state.filterNumber = state.filterKnown ? rxFilter : 0;
 
     // 9. Supply Voltage (VL;)
     NSString *vlReply = SendOverPort(port, @"VL;", cmdTimeout, NULL, nil);
@@ -524,18 +513,18 @@ BOOL TXRunCATMacro(NSString *path, NSArray<NSString *> *commands, Lab599Cancella
         if ([command hasPrefix:@"FL"] && command.length == 4) {
             NSError *filterError = nil;
             NSString *oldFilter = SendOverPort(port, @"FL;", 0.5, NULL, &filterError);
-            BOOL fullReply = oldFilter.length == 5 && [oldFilter hasPrefix:@"FL"] &&
-                [oldFilter characterAtIndex:2] >= '0' && [oldFilter characterAtIndex:2] <= '3' &&
-                [oldFilter characterAtIndex:3] >= '0' && [oldFilter characterAtIndex:3] <= '1';
+            NSInteger oldTXFilter = 0;
+            BOOL fullReply = TX500ParseFilterReply(oldFilter, NULL, &oldTXFilter);
             if (!fullReply) {
                 if (error) *error = filterError ?: MacroError(@"Cannot confirm the current TX filter from a complete FL reply.");
                 success = NO; break;
             }
-            wireCommand = [NSString stringWithFormat:@"FL%c%c;", [command characterAtIndex:2], [oldFilter characterAtIndex:3]];
+            wireCommand = TX500FilterCommand([command characterAtIndex:2] - '0' + 1, oldTXFilter);
         }
         // SendOverPort bounds a no-reply setter; the explicit query then checks
         // that the requested value actually took effect.
         NSError *stepError = nil;
+        if (token.cancelled) break;
         NSString *reply = SendOverPort(port, wireCommand, query ? 0.18 : 0.5, NULL, &stepError);
         if (token.cancelled) break;
         if (stepError && (!query || stepError.code != Lab599SerialTimeout)) {

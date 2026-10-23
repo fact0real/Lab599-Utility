@@ -10,6 +10,17 @@ int main(void) {
         Check(getenv("CFFIXED_USER_HOME") != NULL, @"Test preferences must be isolated");
         [NSApplication sharedApplication];
         Lab599ToolsController *tools = [Lab599ToolsController new];
+        // Untrusted/pasted raw CAT cannot key a radio outside station ownership.
+        [tools setValue:@YES forKey:@"hasPorts"];
+        tools.selectedPort=^NSString * { return @"fixture.invalid"; };
+        NSTextField *rawInput=[tools valueForKey:@"catCommandInput"];
+        for(NSString *unsafe in @[@"TX;",@"TX1;",@"KY CQ;",@"VX1;",@"ID;TX;",@"id;tx;"]) {
+            rawInput.stringValue=unsafe;
+            [tools performSelector:@selector(sendCommandAction:) withObject:nil];
+            Check(![[tools valueForKey:@"busy"] boolValue],@"Unsafe raw CAT is refused before any transport work");
+            Check([((NSTextField *)[tools valueForKey:@"catNotice"]).stringValue containsString:@"outside the safe command list"],@"Raw CAT refusal remains visible and explains the protected alternative");
+        }
+        [tools setValue:@NO forKey:@"hasPorts"];
         NSPopUpButton *categories = [tools valueForKey:@"settingsCategoryFilter"];
         Check(categories != nil && [categories itemWithTitle:@"DSP Filters"] != nil, @"Settings has a category pop-up with DSP Filters");
 

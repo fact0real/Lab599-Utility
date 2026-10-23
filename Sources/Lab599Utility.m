@@ -1,3 +1,4 @@
+#import "TX500TransmitSafetyBanner.h"
 #import "Lab599AppUpdater.h"
 #import "TX500CWAudioDecoder.h"
 #import <Cocoa/Cocoa.h>
@@ -298,6 +299,8 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 @property(nonatomic, strong) NSBox *connectionBar;
 @property(nonatomic, strong) NSView *statusLEDView;
 @property(nonatomic, strong) NSTextField *connectionStatusLabel;
+@property(nonatomic, strong) NSStackView *transmitSafetyBanner;
+@property(nonatomic, strong) NSTextField *transmitSafetyLabel;
 @property(nonatomic, strong) NSTextField *hardwareBadgeLabel;
 @property(nonatomic, strong) NSBox *statusPillBox;
 @property(nonatomic, strong) NSBox *portCapsuleBox;
@@ -450,17 +453,28 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     }
     TX500PSKReporter.sharedReporter.enabled=[NSUserDefaults.standardUserDefaults boolForKey:@"TX500_FT8_PSKReporterEnabled"];
 }
-// FT8 and the core's owned TX have no sleep observer of their own (CW Station and the voice keyer do).
+// Module observers cancel audio; the application also synchronously releases the shared CAT owner.
+- (void)refreshTransmitSafetyNotice:(NSNotification *)note {
+    (void)note;
+    self.transmitSafetyLabel.stringValue=self.stationCore.transmitSafetyNotice ?: @"";
+    self.transmitSafetyBanner.hidden=!self.transmitSafetyLabel.stringValue.length;
+}
+- (void)acknowledgeTransmitSafetyNotice:(id)sender {
+    (void)sender;
+    TX500StationCore *core=self.stationCore;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0), ^{ [core acknowledgeTransmitSafetyNotice]; });
+}
 - (void)workspaceWillSleep:(NSNotification *)note {
     (void)note;
-    BOOL onAir=self.stationCore.ownsTX || self.cwStationController.keyer.isTransmitting ||
+    BOOL onAir=self.voiceKeyerController.keyer.active || self.stationCore.ownsTX || self.cwStationController.keyer.isTransmitting ||
         self.cwStationController.keyer.isAutoCQActive || self.cwStationController.isManualTuneActive ||
         self.ft8StationController.audioEngine.isTransmitting || self.ft8StationController.audioEngine.isTuning ||
         self.ft8StationController.audioEngine.isTransmitArmed;
     if(!onAir) return;
     [self stationCommand:@"stop"];
+    if(self.stationCore.ownsTX) [self.stationCore recordTransmitSafetyNotice:@"system sleep stopped audio; RX is NOT confirmed"];
     [self appendLog:self.stationCore.ownsTX ? @"Stopped for system sleep: RX NOT confirmed • check the radio." :
-        @"Stopped for system sleep: every transmission released."];
+        @"Stopped for system sleep: owned transmission released; pending voice TX cancelled."];
 }
 - (void)stationCommand:(NSString *)command {
     if ([command isEqual:@"stop"]) {
@@ -1286,6 +1300,9 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 
     // CW Station Controller (AD-508 CoreAudio DSP & CAT Studio)
     self.cwStationController = [TX500CWStationController new];
+    self.cwStationController.keyer.onRadioAudioLost = ^(BOOL confirmed) {
+        [weakSelf.stationCore recordTransmitSafetyNotice:confirmed ? @"CW radio audio was lost; RX requested and PT0 confirmed" : @"CW radio audio was lost; RX requested, receive NOT confirmed"];
+    };
     self.cwStationController.selectedPortProvider = ^NSString * { return weakSelf.hasPorts ? weakSelf.portMenu.selectedItem.title : nil; };
     self.cwStationController.logHandler = ^(NSString *message) { [weakSelf appendLog:message]; };
     self.cwStationController.serialCommandSender = ^BOOL(NSString *catCommand) {
@@ -1428,7 +1445,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         // Esc stops a transmission even while an alert sheet is attached or another window is key;
         // the event goes on, so the sheet still gets its own Esc.
         if(event.keyCode==53 && !event.isARepeat && (!weakSelf.window.isKeyWindow || weakSelf.window.attachedSheet)) {
-            BOOL onAir=weakSelf.stationCore.ownsTX || weakSelf.cwStationController.keyer.isTransmitting ||
+            BOOL onAir=weakSelf.voiceKeyerController.keyer.active || weakSelf.stationCore.ownsTX || weakSelf.cwStationController.keyer.isTransmitting ||
                 weakSelf.cwStationController.keyer.isAutoCQActive || weakSelf.cwStationController.isManualTuneActive ||
                 weakSelf.ft8StationController.audioEngine.isTransmitting || weakSelf.ft8StationController.audioEngine.isTuning;
             if(onAir) [weakSelf stationCommand:@"stop"];
@@ -1627,6 +1644,13 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     mainDocView.translatesAutoresizingMaskIntoConstraints = NO;
     self.mainScrollView.documentView = mainDocView;
 
+    NSTextField *safetyLabel=nil;
+    self.transmitSafetyBanner=TX500MakeTransmitSafetyBanner(self,@selector(acknowledgeTransmitSafetyNotice:),&safetyLabel);
+    self.transmitSafetyLabel=safetyLabel;
+    self.transmitSafetyBanner.hidden=YES;
+    [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(refreshTransmitSafetyNotice:) name:TXStationRadioChanged object:self.stationCore];
+    [self refreshTransmitSafetyNotice:nil];
+
     NSStackView *scrollStack = [NSStackView stackViewWithViews:@[
         headerStack,
         featureCardBox,
@@ -1639,6 +1663,17 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     scrollStack.detachesHiddenViews = YES;
     [mainDocView addSubview:scrollStack];
 
+    // Safety stays above the scrolling workspace, so it remains visible on every station/tool.
+    NSStackView *workspaceStack=[NSStackView stackViewWithViews:@[self.transmitSafetyBanner,self.mainScrollView]];
+    workspaceStack.translatesAutoresizingMaskIntoConstraints=NO;
+    workspaceStack.orientation=NSUserInterfaceLayoutOrientationVertical;
+    workspaceStack.alignment=NSLayoutAttributeLeading;
+    workspaceStack.spacing=8; workspaceStack.detachesHiddenViews=YES;
+    [self.mainContentView addSubview:workspaceStack];
+    [self.transmitSafetyBanner.widthAnchor constraintEqualToAnchor:workspaceStack.widthAnchor].active=YES;
+    [self.transmitSafetyLabel.widthAnchor constraintEqualToAnchor:workspaceStack.widthAnchor constant:-24].active=YES;
+    [self.mainScrollView.widthAnchor constraintEqualToAnchor:workspaceStack.widthAnchor].active=YES;
+
     NSLayoutConstraint *docWidthConstraint = [mainDocView.widthAnchor constraintEqualToAnchor:self.mainScrollView.contentView.widthAnchor];
     docWidthConstraint.priority = 999;
 
@@ -1650,10 +1685,10 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         [self.connectionBar.trailingAnchor constraintEqualToAnchor:self.mainContentView.trailingAnchor constant:-14],
         [self.connectionBar.heightAnchor constraintEqualToConstant:42],
 
-        [self.mainScrollView.topAnchor constraintEqualToAnchor:self.connectionBar.bottomAnchor constant:8],
-        [self.mainScrollView.leadingAnchor constraintEqualToAnchor:self.mainContentView.leadingAnchor constant:14],
-        [self.mainScrollView.trailingAnchor constraintEqualToAnchor:self.mainContentView.trailingAnchor constant:-14],
-        [self.mainScrollView.bottomAnchor constraintEqualToAnchor:self.mainContentView.bottomAnchor constant:-10],
+        [workspaceStack.topAnchor constraintEqualToAnchor:self.connectionBar.bottomAnchor constant:8],
+        [workspaceStack.leadingAnchor constraintEqualToAnchor:self.mainContentView.leadingAnchor constant:14],
+        [workspaceStack.trailingAnchor constraintEqualToAnchor:self.mainContentView.trailingAnchor constant:-14],
+        [workspaceStack.bottomAnchor constraintEqualToAnchor:self.mainContentView.bottomAnchor constant:-10],
 
         [mainDocView.leadingAnchor constraintEqualToAnchor:self.mainScrollView.contentView.leadingAnchor],
         [mainDocView.topAnchor constraintEqualToAnchor:self.mainScrollView.contentView.topAnchor],

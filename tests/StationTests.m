@@ -18,6 +18,73 @@ static void Check(BOOL ok,NSString *why) { checks++; if(!ok) { fprintf(stderr,"F
 - (BOOL)send:(NSString *)c error:(NSError **)error { (void)error; [self.commands addObject:c]; if(self.failKY && [c hasPrefix:@"KY"]) return NO; if([c hasPrefix:@"FA"] && !self.failTune) { NSArray *parts=[c componentsSeparatedByString:@";"]; self.state[@"frequency"]=@([[parts[0] substringFromIndex:2] longLongValue]); if(parts.count>1 && [parts[1] hasPrefix:@"MD"]) self.state[@"mode"]=@([[parts[1] substringFromIndex:2] integerValue]); } if([c hasPrefix:@"MD"] && !self.failTune) self.state[@"mode"]=@([[c substringFromIndex:2] integerValue]); return YES; }
 - (void)close { [self.commands addObject:@"CLOSE"]; }
 @end
+@interface SafetyClockCore : TX500StationCore
+@property(atomic) double fixtureContinuous, fixtureWall;
+@end
+@implementation SafetyClockCore
+- (double)continuousSafetyTime { return self.fixtureContinuous; }
+- (double)wallSafetyTime { return self.fixtureWall; }
+@end
+static void TestCoreTransmitDeadline(void) {
+    for(NSNumber *wall in @[@YES,@NO]) {
+        SafetyClockCore *c=[SafetyClockCore new]; FakeStationRadio *r=[FakeStationRadio new];
+        c.transportFactory=^id(NSString *path){(void)path;return r;};
+        [c selectOwner:@"CW" port:@"fixture-deadline" error:nil];
+        Check([c transmit:YES owner:@"CW" error:nil],@"Core deadline fixture keys a simulated radio");
+        if(wall.boolValue) { c.fixtureWall=131; c.fixtureContinuous=1; }
+        else { c.fixtureContinuous=131; c.fixtureWall=-10000; }
+        [NSThread sleepForTimeInterval:0.25]; // main thread stalled; background release still runs
+        Check(!c.ownsTX && [r.commands containsObject:@"RX;"],@"Core deadline releases on wall expiry or continuous expiry despite a backward clock step");
+        NSString *notice=c.transmitSafetyNotice;
+        Check([notice containsString:@"UTC"] && [notice containsString:@"PT0 confirmed"],@"The persistent notice records UTC and actual RX readback");
+        [c readState:nil];
+        Check([c.transmitSafetyNotice isEqual:notice],@"Status polling cannot erase the safety notice");
+        [c acknowledgeTransmitSafetyNotice]; Check(!c.transmitSafetyNotice.length,@"Only operator acknowledgement clears the notice");
+    }
+    SafetyClockCore *c=[SafetyClockCore new]; FakeStationRadio *r=[FakeStationRadio new];
+    c.transportFactory=^id(NSString *path){(void)path;return r;};
+    [c selectOwner:@"Digital" port:@"fixture-no-renewal" error:nil]; [c transmit:YES owner:@"Digital" error:nil];
+    c.fixtureContinuous=19; [c transmit:YES owner:@"Digital" error:nil]; c.fixtureContinuous=21;
+    r.failRX=YES; [NSThread sleepForTimeInterval:0.15];
+    Check(c.ownsTX && [c.transmitSafetyNotice containsString:@"NOT confirmed"],@"An unconfirmed core release retains ownership and a visible fault");
+    Check([[r.commands filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"SELF == %@",@"TX;"]] count]==1,@"Repeated key-down neither sends again nor renews the deadline");
+    r.failRX=NO; [c releaseOwnedTX:nil];
+}
+
+@interface TX500StationCore (StopRaceFixture)
+- (void)beginReleaseRequest;
+@end
+@interface StopRaceCore : TX500StationCore
+@property dispatch_semaphore_t stopEntered;
+@end
+@implementation StopRaceCore
+- (void)beginReleaseRequest { [super beginReleaseRequest]; dispatch_semaphore_signal(self.stopEntered); }
+@end
+@interface PausedPreflightRadio : FakeStationRadio
+@property dispatch_semaphore_t readEntered, continueRead;
+@end
+@implementation PausedPreflightRadio
+- (NSDictionary *)readState:(NSError **)error {
+    dispatch_semaphore_signal(self.readEntered);
+    dispatch_semaphore_wait(self.continueRead,dispatch_time(DISPATCH_TIME_NOW,NSEC_PER_SEC));
+    return [super readState:error];
+}
+@end
+static void TestStopVetoesPreflight(void) {
+    StopRaceCore *core=[StopRaceCore new]; core.stopEntered=dispatch_semaphore_create(0);
+    PausedPreflightRadio *radio=[PausedPreflightRadio new]; radio.readEntered=dispatch_semaphore_create(0); radio.continueRead=dispatch_semaphore_create(0);
+    core.transportFactory=^id(NSString *path){(void)path;return radio;};
+    [core selectOwner:@"Voice" port:@"fixture-sleep-preflight" error:nil];
+    dispatch_group_t group=dispatch_group_create(); __block BOOL keyed=YES;
+    dispatch_group_async(group,dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{ keyed=[core transmit:YES owner:@"Voice" error:nil]; });
+    Check(dispatch_semaphore_wait(radio.readEntered,dispatch_time(DISPATCH_TIME_NOW,NSEC_PER_SEC))==0,@"Core preflight is in flight before the sleep/stop request");
+    dispatch_group_async(group,dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{ [core releaseOwnedTX:nil]; });
+    Check(dispatch_semaphore_wait(core.stopEntered,dispatch_time(DISPATCH_TIME_NOW,NSEC_PER_SEC))==0,@"Receive request is registered before it waits for the core lock");
+    dispatch_semaphore_signal(radio.continueRead);
+    Check(dispatch_group_wait(group,dispatch_time(DISPATCH_TIME_NOW,2*NSEC_PER_SEC))==0,@"Stop and preflight complete without a lock inversion");
+    Check(!keyed && !core.ownsTX && ![radio.commands containsObject:@"TX;"],@"The pending stop vetoes late TX after the preflight read returns");
+}
+
 // A radio whose full state read fails while PT; still answers: VOX cannot be known.
 @interface FakeNoStateRadio : FakeStationRadio
 @end
@@ -330,7 +397,7 @@ static void TestReporter(void) {
     reporter.enabled=NO;
 
 }
-int main(int argc,const char *argv[]) { @autoreleasepool { (void)argc;(void)argv; char path[]="/tmp/StationTests.XXXXXX"; Check(mkdtemp(path)!=NULL,@"Isolated test directory"); NSURL *root=[NSURL fileURLWithPath:[NSString stringWithUTF8String:path]]; TestCore(); TestReceiveRecoveryReconnect(); TestLostReplyKeepsTX(); TestStore(root); TestReporter();
+int main(int argc,const char *argv[]) { @autoreleasepool { (void)argc;(void)argv; char path[]="/tmp/StationTests.XXXXXX"; Check(mkdtemp(path)!=NULL,@"Isolated test directory"); NSURL *root=[NSURL fileURLWithPath:[NSString stringWithUTF8String:path]]; TestStopVetoesPreflight(); TestCoreTransmitDeadline(); TestCore(); TestReceiveRecoveryReconnect(); TestLostReplyKeepsTX(); TestStore(root); TestReporter();
     for (NSString *region in @[@"1", @"2", @"3"]) {
         NSURL *url=TX500BandPlanURLForRegion(region);
         Check([url.scheme isEqualToString:@"https"] && [url.host hasPrefix:@"www.iaru"], @"Official region document uses a fixed IARU HTTPS URL");

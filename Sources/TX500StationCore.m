@@ -1,5 +1,6 @@
 #import "TX500StationCore.h"
 #import "Lab599SerialPort.h"
+#import <mach/mach_time.h>
 NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
 @interface TX500StationVoiceAdapter : NSObject <TX500VoiceRadio>
 @property(nonatomic,strong) TX500StationCore *core;
@@ -10,22 +11,82 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
     NSString *_port, *_owner, *_status;
     NSDictionary *_snapshot, *_published;
     BOOL _ownsTX, _faulted;
+    NSString *_transmitSafetyNotice;
+    dispatch_source_t _transmitDeadline;
+    dispatch_queue_t _safetyQueue;
+    double _txStartedContinuous, _txStartedWall, _txLimit;
+    NSUInteger _transmitGeneration;
     NSUInteger _queryCount, _failureCount, _receiveFailureStreak;
     double _lastLatency;
     NSUInteger _releaseRequests; // guarded by @synchronized(self), including requests waiting for _lock
     Lab599Cancellation *_pendingRead; // the meter read in flight; guarded by @synchronized(self)
 }
-- (instancetype)init { if((self=[super init])) { _lock=[NSRecursiveLock new]; _owner=@""; _port=@""; _status=@"Disconnected"; _snapshot=@{}; [self cacheState]; } return self; }
+- (instancetype)init { if((self=[super init])) { _lock=[NSRecursiveLock new]; _owner=@""; _port=@""; _status=@"Disconnected"; _snapshot=@{}; _transmitSafetyNotice=@""; _safetyQueue=dispatch_queue_create("com.lab599.core.tx-safety", DISPATCH_QUEUE_SERIAL); [self cacheState]; } return self; }
 // UI readers never wait behind serial I/O. Publish immutable diagnostic snapshots
 // under a separate short lock; command decisions still use the transport lock.
 - (void)cacheState {
-    @synchronized(self) { _published=@{@"owner":_owner ?: @"",@"status":_status ?: @"",@"snapshot":[_snapshot copy] ?: @{},@"ownsTX":@(_ownsTX),@"queries":@(_queryCount),@"failures":@(_failureCount),@"latency":@(_lastLatency)}; }
+    @synchronized(self) { _published=@{@"owner":_owner ?: @"",@"status":_status ?: @"",@"snapshot":[_snapshot copy] ?: @{},@"ownsTX":@(_ownsTX),@"safetyNotice":_transmitSafetyNotice ?: @"",@"queries":@(_queryCount),@"failures":@(_failureCount),@"latency":@(_lastLatency)}; }
 }
 - (id)cached:(NSString *)key { @synchronized(self) { return _published[key]; } }
 - (NSString *)owner { return [self cached:@"owner"]; }
 - (NSString *)status { return [self cached:@"status"]; }
 - (NSDictionary *)snapshot { return [self cached:@"snapshot"]; }
 - (BOOL)ownsTX { return [[self cached:@"ownsTX"] boolValue]; }
+- (NSString *)transmitSafetyNotice { return [self cached:@"safetyNotice"]; }
+- (void)acknowledgeTransmitSafetyNotice {
+    [_lock lock]; _transmitSafetyNotice=@""; [self cacheState]; [_lock unlock];
+    dispatch_async(dispatch_get_main_queue(), ^{ [NSNotificationCenter.defaultCenter postNotificationName:TXStationRadioChanged object:self]; });
+}
+- (void)recordTransmitSafetyNotice:(NSString *)reason {
+    [_lock lock];
+    NSDateFormatter *utc=[NSDateFormatter new]; utc.locale=[[NSLocale alloc] initWithLocaleIdentifier:@"en_US_POSIX"];
+    utc.timeZone=[NSTimeZone timeZoneForSecondsFromGMT:0]; utc.dateFormat=@"yyyy-MM-dd HH:mm:ss 'UTC'";
+    _transmitSafetyNotice=[NSString stringWithFormat:@"Lab599 TX-500 (%@): %@ at %@. Other tools remain available. Check the radio is on receive locally before sending again.",_port ?: @"CAT",reason,[utc stringFromDate:[NSDate date]]];
+    [self cacheState]; [_lock unlock];
+    dispatch_async(dispatch_get_main_queue(), ^{ [NSNotificationCenter.defaultCenter postNotificationName:TXStationRadioChanged object:self]; });
+}
+- (double)continuousSafetyTime {
+    static mach_timebase_info_data_t info; static dispatch_once_t once;
+    dispatch_once(&once, ^{ mach_timebase_info(&info); });
+    return (double)mach_continuous_time()*info.numer/info.denom/1e9;
+}
+- (double)wallSafetyTime { return NSDate.date.timeIntervalSince1970; }
+- (double)transmitLimitForOwner:(NSString *)owner {
+    if([owner isEqual:@"CW"]) return 130; // independent backstop above the keyer's 120 s message ceiling
+    if([owner isEqual:@"Voice"]) return 75; // 60 s audio plus lead/tail and verification
+    if([owner isEqual:@"Digital"]) return 20; // FT8/FT4 and tune
+    return 15;
+}
+- (void)cancelTransmitDeadline {
+    _transmitGeneration++;
+    if(_transmitDeadline) { dispatch_source_cancel(_transmitDeadline); _transmitDeadline=nil; }
+}
+- (void)armTransmitDeadline {
+    if(_transmitDeadline) return; // repeated key-down never renews ownership
+    _txStartedContinuous=[self continuousSafetyTime]; _txStartedWall=[self wallSafetyTime];
+    _txLimit=[self transmitLimitForOwner:_owner];
+    if(!isfinite(_txLimit) || _txLimit<=0 || _txLimit>130) _txLimit=130;
+    NSUInteger generation=++_transmitGeneration;
+    dispatch_source_t timer=dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER,0,0,_safetyQueue);
+    __weak typeof(self) weakSelf=self;
+    dispatch_source_set_event_handler(timer, ^{
+        typeof(self) self=weakSelf; if(!self) return;
+        [self->_lock lock];
+        if(self->_transmitGeneration==generation && self->_ownsTX) {
+            double elapsed=MAX([self continuousSafetyTime]-self->_txStartedContinuous,[self wallSafetyTime]-self->_txStartedWall);
+            if(elapsed>=self->_txLimit) {
+                double limit=self->_txLimit;
+                BOOL received=[self releaseOwnedTX:nil];
+                [self recordTransmitSafetyNotice:[NSString stringWithFormat:@"the core TX limit expired after %.1f s (limit %.0f s); RX was requested, %@",elapsed,limit,received ? @"PT0 confirmed" : @"receive NOT confirmed"]];
+            }
+        }
+        [self->_lock unlock];
+    });
+    // Wall-clock timer wakes promptly on resume; continuous time prevents a backward clock step extending TX.
+    dispatch_source_set_timer(timer,dispatch_walltime(NULL,0),100*NSEC_PER_MSEC,5*NSEC_PER_MSEC);
+    _transmitDeadline=timer; dispatch_resume(timer);
+}
+- (void)dealloc { if(_transmitDeadline) dispatch_source_cancel(_transmitDeadline); }
 - (NSUInteger)queryCount { return [[self cached:@"queries"] unsignedIntegerValue]; }
 - (NSUInteger)failureCount { return [[self cached:@"failures"] unsignedIntegerValue]; }
 - (double)lastLatency { return [[self cached:@"latency"] doubleValue]; }
@@ -40,7 +101,7 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
         NSString *pt=[_transport query:@"PT;" error:nil];
         // Only an explicit PT0 means receiving; no reply keeps ownership and the fault latch.
         if([pt isEqual:@"PT0;"]) {
-            _ownsTX=NO; _faulted=NO;
+            _ownsTX=NO; [self cancelTransmitDeadline]; _faulted=NO;
         } else {
             BOOL r=[self reject:@"Stop the current transmission before changing radio control." error:error]; [self cacheState]; [_lock unlock]; return r;
         }
@@ -123,6 +184,7 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
             if([pt isEqual:@"PT0;"]) { _faulted=NO; [self cacheState]; [_lock unlock]; return YES; }
             _ownsTX=YES; // PT1, or no reply: force RX; below and let the read-back decide.
         }
+        if(active && _ownsTX) { [self cacheState]; [_lock unlock]; return YES; }
         if(active && !_ownsTX) {
             NSDictionary *s=[self readState:nil];
             BOOL isAlreadyTX = NO;
@@ -154,23 +216,26 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
                 [self reject:@"TX blocked: radio must be receiving." error:error];
                 [self cacheState]; [_lock unlock]; return NO;
             }
-            _ownsTX=YES; [self cacheState]; // A lost acknowledgement must still be followed by RX cleanup.
+            BOOL stopping; @synchronized(self) { stopping=_releaseRequests>0; }
+            if(stopping) { [self reject:@"TX cancelled: a receive/stop request is pending." error:error]; [self cacheState]; [_lock unlock]; return NO; }
+            _ownsTX=YES; [self armTransmitDeadline]; [self cacheState]; // A lost acknowledgement must still be followed by RX cleanup.
         }
         BOOL ok=[_transport setTransmit:active error:error];
         if(ok) { NSMutableDictionary *s=[_snapshot mutableCopy]; s[@"tx"]=@(active); _snapshot=[s copy]; }
         if(!active) {
             if(ok) {
-                _ownsTX=NO; _faulted=NO; _receiveFailureStreak=0;
+                _ownsTX=NO; [self cancelTransmitDeadline]; _faulted=NO; _receiveFailureStreak=0;
             } else {
                 NSString *ptCheck=[_transport query:@"PT;" error:nil];
                 if(ptCheck && [ptCheck isEqual:@"PT0;"]) {
-                    _ownsTX=NO; _faulted=NO; _receiveFailureStreak=0; ok=YES;
+                    _ownsTX=NO; [self cancelTransmitDeadline]; _faulted=NO; _receiveFailureStreak=0; ok=YES;
                 }
             }
         }
         if(!ok) _faulted=YES;
         if(!ok) _failureCount++;
         if(!ok && !active) {
+            [self recordTransmitSafetyNotice:@"RX acknowledgement failed; receive is NOT confirmed"];
             _receiveFailureStreak++;
             // A USB serial adapter can retain a stale descriptor after an RF or
             // cable transient. Reopen it periodically while preserving TX ownership
@@ -209,7 +274,7 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
                     NSString *pt = [_transport query:@"PT;" error:nil];
                     BOOL isTX = (pt && ![pt isEqual:@"PT0;"]);
                     if(isTX) { ok=[self reject:@"CW blocked: radio must be receiving." error:error]; break; }
-                    _ownsTX=YES; [self cacheState];
+                    _ownsTX=YES; [self armTransmitDeadline]; [self cacheState];
                     [_transport send:@"TX;" error:nil];
                 }
                 ok=[_transport send:[part stringByAppendingString:@";"] error:error];
@@ -295,7 +360,7 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
                 [_transport send:@"RX;" error:nil];
                 NSString *pt=[_transport query:@"PT;" error:nil];
                 if([pt isEqual:@"PT0;"]) {
-                    _ownsTX=NO; _faulted=NO; ok=YES;
+                    _ownsTX=NO; [self cancelTransmitDeadline]; _faulted=NO; ok=YES;
                 }
             }
         }
@@ -321,7 +386,7 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
     _transport=nil;
     _owner=@"";
     _snapshot=@{};
-    _ownsTX=NO;
+    _ownsTX=NO; [self cancelTransmitDeadline];
     _faulted=NO;
     [self publish:@"Disconnected"];
     [self cacheState];

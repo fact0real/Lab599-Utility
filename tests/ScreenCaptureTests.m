@@ -290,7 +290,7 @@ int main(void) {
         [controller handleChassisControlPress:TX500ControlBottomKey2 atChassisPoint:NSMakePoint(250, 25)];
         Check(controller.screenState.split == YES, @"Bottom Key 2 must toggle SPLIT to ON");
 
-        // 10. Live CAT PTT keys follow the radio's PT; answer, also in Data mode.
+        // 10. The exclusive Live Radio Screen can release PTT but cannot key outside the core.
         int ptyMaster = -1, ptySlave = -1;
         char ptyName[128] = {0};
         Check(openpty(&ptyMaster, &ptySlave, ptyName, NULL, NULL) == 0, @"Pseudo-terminal for the fake radio");
@@ -308,7 +308,7 @@ int main(void) {
         NSString *stopCmd = PressPTT(live, TX500ControlRX);
         Check([stopCmd isEqualToString:@"RX;"], [NSString stringWithFormat:@"R/X while the radio transmits in DIG sends RX; (sent %@)", stopCmd]);
         fakePTReply = @"PT0;";
-        Check([PressPTT(live, TX500ControlRX) isEqualToString:@"TX;"], @"R/X while the radio receives sends TX;");
+        Check([PressPTT(live, TX500ControlRX) isEqualToString:@"RX;"], @"R/X while receiving never keys outside the core; it requests RX only");
         fakePTReply = nil; // no answer
         Check([PressPTT(live, TX500ControlRX) isEqualToString:@"RX;"], @"R/X sends RX; when the radio does not answer PT;");
         fakePTReply = @"PT1;";
@@ -323,7 +323,7 @@ int main(void) {
         fakePTReply = nil;
         RefreshFromFakeRadio(live);
         Check(live.screenState.isTransmitting, @"A refresh without a PT; answer keeps the last state (TX)");
-        printf("PASS: Live CAT PTT keys follow the radio's PT; answer.\n");
+        printf("PASS: Live Radio Screen never keys outside the core, and explicit RX remains available.\n");
 
         // 11. Live CAT shows only what the radio reported.
         fakeReplies = [NSMutableDictionary dictionary];

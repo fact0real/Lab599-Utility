@@ -15,23 +15,6 @@ static NSInteger TX500ScreenPTTStateFromReply(NSString *reply) {
     return -1;
 }
 
-static NSString *TX500ScreenQuery(Lab599SerialPort *port, NSString *cmd) {
-    [port discardInput:nil];
-    Lab599Cancellation *tok = [Lab599Cancellation new];
-    if (![port writeData:[cmd dataUsingEncoding:NSASCIIStringEncoding] timeout:0.25 cancellation:tok error:nil]) return nil;
-    NSMutableData *resp = [NSMutableData data];
-    NSData *semi = [@";" dataUsingEncoding:NSASCIIStringEncoding];
-    double deadline = Lab599MonotonicTime() + 0.25;
-    while (Lab599MonotonicTime() < deadline) {
-        NSData *chunk = [port readMaximum:64 timeout:0.04 cancellation:tok error:nil];
-        if (chunk.length > 0) {
-            [resp appendData:chunk];
-            if ([resp rangeOfData:semi options:0 range:NSMakeRange(0, resp.length)].location != NSNotFound) break;
-        }
-    }
-    return resp.length > 0 ? [[NSString alloc] initWithData:resp encoding:NSASCIIStringEncoding] : nil;
-}
-
 #pragma mark - Custom Display View
 
 @interface TX500ScreenDisplayView : NSView
@@ -856,6 +839,14 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
 }
 
 - (void)sendCATCommandAsync:(NSString *)catCmd description:(NSString *)desc {
+    NSString *upper=catCmd.uppercaseString;
+    for(NSString *part in [upper componentsSeparatedByString:@";"]) {
+        if([part hasPrefix:@"TX"] || [part hasPrefix:@"KY"] || [part isEqual:@"VX1"]) {
+            [self showTemporaryFeedback:@"Use CW, Digital or Voice for protected transmission."];
+            return;
+        }
+    }
+
     NSString *portPath = self.selectedPortProvider ? self.selectedPortProvider() : nil;
     if (self.logHandler) {
         self.logHandler([NSString stringWithFormat:@"[CAT TX] %@ (%@)", catCmd, desc]);
@@ -1337,38 +1328,15 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
     [self sendCATCommandAsync:self.screenState.isTransmitting ? @"TX;" : @"RX;" description:@"PTT Toggle"];
 }
 
-// In Live CAT the PTT keys ask the radio first instead of trusting this
-// panel's last refresh: PT0 sends TX;, anything else (PT1 or no answer)
-// sends RX;. Returns NO in Demo Mode or without a port, where the local
-// simulation is kept.
+// Live Radio Screen is receive-only for PTT: it cannot acquire the central TX owner.
+// Explicit RX remains available even with stale or missing status. Demo preserves its local simulation.
 - (BOOL)togglePTTFromRadio {
     NSString *portPath = self.selectedPortProvider ? self.selectedPortProvider() : nil;
     if (!portPath.length || self.demoModeActive) return NO;
-    dispatch_async(_serialQueue, ^{
-        Lab599SerialPort *port = [Lab599SerialPort openPath:portPath speed:B9600 error:nil];
-        if (!port) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                [self showTemporaryFeedback:@"⚡ [PTT] CAT port unavailable"];
-            });
-            return;
-        }
-        BOOL keyRadio = TX500ScreenPTTStateFromReply(TX500ScreenQuery(port, @"PT;")) == 0;
-        NSString *pttCmd = keyRadio ? @"TX;" : @"RX;";
-        Lab599Cancellation *tok = [Lab599Cancellation new];
-        BOOL sent = [port writeData:[pttCmd dataUsingEncoding:NSASCIIStringEncoding] timeout:0.25 cancellation:tok error:nil];
-        [port close];
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (!sent) {
-                if (self.logHandler) self.logHandler([NSString stringWithFormat:@"[CAT TX] %@ not sent", pttCmd]);
-                [self showTemporaryFeedback:@"⚡ [PTT] command not sent"];
-                return;
-            }
-            if (self.logHandler) self.logHandler([NSString stringWithFormat:@"[CAT TX] %@ (%@)", pttCmd, keyRadio ? @"PTT On" : @"PTT Off"]);
-            self.screenState.isTransmitting = keyRadio;
-            [self renderAndUpdateDisplay];
-            [self showTemporaryFeedback:keyRadio ? @"⚡ [PTT] → TRANSMIT" : @"⚡ [PTT] → RECEIVE"];
-        });
-    });
+    // This exclusive panel has no core TX owner. Keep an explicit RX action, but never key outside the core.
+    [self sendCATCommandAsync:@"RX;" description:@"Receive only; protected TX is available in CW, Digital or Voice"];
+    [self showTemporaryFeedback:@"RX requested; check the radio. Use CW, Digital or Voice to transmit."];
+    if(self.logHandler) self.logHandler(@"Radio Screen: RX requested; physical receive is unconfirmed. Live key-down is blocked here; use CW, Digital or Voice for protected transmission. Monitoring and settings remain available.");
     return YES;
 }
 

@@ -48,6 +48,7 @@
 @property (nonatomic, assign) BOOL radioQueueReady;
 @property (nonatomic, copy, nullable) NSString *activeRadioUID;
 
+- (void)markRadioAudioFailed;
 @end
 
 @implementation TX500CWKeyer {
@@ -63,6 +64,10 @@
     float _carrierAmplitude;
     dispatch_queue_t _timeoutQueue;
     dispatch_source_t _transmitTimeout;
+    dispatch_source_t _audioHealthTimer;
+    BOOL _radioAudioFailed; // guarded by _radioAudioLock; the real-time callback only sets this bit
+    BOOL _audioLossHandled;
+
     id<NSObject> _transmitActivity;
     BOOL _activeTransmissionWasPractice;
 }
@@ -325,7 +330,9 @@ static void CWKeyerRadioOutputCallback(void *inUserData,
     [keyer renderRadioAudioSamples:samples count:frameCount];
     inBuffer->mAudioDataByteSize = frameCount * 2 * sizeof(float);
     if (inAQ) {
-        AudioQueueEnqueueBuffer(inAQ, inBuffer, 0, NULL);
+        if(AudioQueueEnqueueBuffer(inAQ, inBuffer, 0, NULL)!=noErr) {
+            [keyer markRadioAudioFailed];
+        }
     }
 }
 
@@ -370,7 +377,73 @@ static void CWKeyerRadioOutputCallback(void *inUserData,
     _radioTxBufferReadIndex = 0;
 }
 
+- (void)markRadioAudioFailed {
+    pthread_mutex_lock(&_radioAudioLock); _radioAudioFailed=YES; pthread_mutex_unlock(&_radioAudioLock);
+}
+- (BOOL)radioAudioRouteIsAvailable:(NSString *)uid {
+    if(!uid.length) return NO;
+    CFStringRef value=(__bridge CFStringRef)uid;
+    AudioDeviceID device=kAudioObjectUnknown; UInt32 size=sizeof(device);
+    AudioObjectPropertyAddress address={kAudioHardwarePropertyTranslateUIDToDevice,kAudioObjectPropertyScopeGlobal,kAudioObjectPropertyElementMain};
+    if(AudioObjectGetPropertyData(kAudioObjectSystemObject,&address,sizeof(value),&value,&size,&device)!=noErr || !device) return NO;
+    UInt32 alive=0; size=sizeof(alive); address.mSelector=kAudioDevicePropertyDeviceIsAlive;
+    if(AudioObjectGetPropertyData(device,&address,0,NULL,&size,&alive)!=noErr || !alive) return NO;
+    address.mSelector=kAudioDevicePropertyStreams; address.mScope=kAudioDevicePropertyScopeOutput;
+    size=0;
+    return AudioObjectGetPropertyDataSize(device,&address,0,NULL,&size)==noErr && size>=sizeof(AudioStreamID);
+}
+- (BOOL)radioAudioIsHealthy {
+    pthread_mutex_lock(&_radioAudioLock); BOOL failed=_radioAudioFailed; pthread_mutex_unlock(&_radioAudioLock);
+    if(failed || ![self radioAudioRouteIsAvailable:self.activeRadioUID ?: [self radioAudioTargetUID]]) return NO;
+    if(NSProcessInfo.processInfo.environment[@"TX500_TEST_MODE"].boolValue) return YES;
+    if(!_radioOutputQueue) return NO;
+    UInt32 running=0,size=sizeof(running);
+    return AudioQueueGetProperty(_radioOutputQueue,kAudioQueueProperty_IsRunning,&running,&size)==noErr && running;
+}
+- (void)startRadioAudioHealthMonitor {
+    if(_audioHealthTimer) return;
+    _audioLossHandled=NO;
+    dispatch_source_t timer=dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER,0,0,_timeoutQueue);
+    __weak typeof(self) weakSelf=self;
+    dispatch_source_set_event_handler(timer, ^{
+        typeof(self) self=weakSelf; if(!self) return;
+        @synchronized(self) {
+            if(self->_audioLossHandled || !self.radioQueueReady) return;
+            pthread_mutex_lock(&self->_radioAudioLock);
+            BOOL onAir=self.isTransmitting || self->_isContinuousCarrier;
+            pthread_mutex_unlock(&self->_radioAudioLock);
+            if(!onAir || [self radioAudioIsHealthy]) return;
+            self->_audioLossHandled=YES;
+            self.radioQueueReady=NO; // veto the next Send before main-thread teardown
+            [self markRadioAudioFailed];
+            pthread_mutex_lock(&self->_radioAudioLock);
+            self->_isContinuousCarrier=NO;
+            self->_radioTxBufferReadIndex=self->_radioTxBufferTotalSamples;
+            pthread_mutex_unlock(&self->_radioAudioLock);
+            NSUInteger token=self.transmissionGeneration;
+            BOOL received=NO;
+            if(self.serialCommandSender) received=self.serialCommandSender(self.rxSuffixCommand.length ? self.rxSuffixCommand : @"RX;");
+            dispatch_async(dispatch_get_main_queue(), ^{
+                typeof(self) self=weakSelf; if(!self) return;
+                @synchronized(self) {
+                    if(self.onRadioAudioLost) self.onRadioAudioLost(received);
+                    // A replacement could only start after passing a new live-route check.
+                    if(token!=self.transmissionGeneration) return;
+                    [self stopAutoCQ];
+                    [self abortTransmissionReleasingRadio:!received];
+                    [self teardownRadioAudio];
+                    if(self.logHandler) self.logHandler(@"CW Station: radio audio was lost; RX requested. Verify physical receive before retrying.");
+                }
+            });
+        }
+    });
+    dispatch_source_set_timer(timer,dispatch_time(DISPATCH_TIME_NOW,50*NSEC_PER_MSEC),50*NSEC_PER_MSEC,5*NSEC_PER_MSEC);
+    _audioHealthTimer=timer; dispatch_resume(timer);
+}
+
 - (void)teardownRadioAudio {
+    @synchronized(self) {
+    if(_audioHealthTimer) { dispatch_source_cancel(_audioHealthTimer); _audioHealthTimer=nil; }
     if (_radioOutputQueue) {
         AudioQueueStop(_radioOutputQueue, true);
         AudioQueueDispose(_radioOutputQueue, true);
@@ -378,24 +451,30 @@ static void CWKeyerRadioOutputCallback(void *inUserData,
     }
     self.radioQueueReady = NO;
     self.activeRadioUID = nil;
+    }
 }
 
 // YES only when the radio's output queue is open and running. The station and transmitText ask
 // before anything is keyed: a missing or wrong route must not key the radio with no modulation.
 - (BOOL)ensureRadioAudioReady {
+    @synchronized(self) {
     NSString *targetUID = [self radioAudioTargetUID];
     // The queue already open on the chosen output (decided from properties only, before the
     // test mode below, so the tests see this path too).
     if (targetUID.length && self.radioQueueReady && [self.activeRadioUID isEqualToString:targetUID]) {
-        return YES;
+        if([self radioAudioIsHealthy]) { [self startRadioAudioHealthMonitor]; return YES; }
+        [self teardownRadioAudio];
+        return NO;
     }
+    if(_audioLossHandled && ![self radioAudioRouteIsAvailable:targetUID]) return NO;
     if (NSProcessInfo.processInfo.environment[@"TX500_TEST_MODE"].boolValue) return YES;
 
-    if (!targetUID.length) {
+    if (!targetUID.length || ![self radioAudioRouteIsAvailable:targetUID]) {
         if (self.logHandler) self.logHandler(@"[CW TX blocked] No radio transmit output: choose it in Station.");
         return NO;
     }
     [self teardownRadioAudio];
+    pthread_mutex_lock(&_radioAudioLock); _radioAudioFailed=NO; pthread_mutex_unlock(&_radioAudioLock);
 
     AudioStreamBasicDescription format = {0};
     format.mSampleRate = 48000.0;
@@ -439,8 +518,9 @@ static void CWKeyerRadioOutputCallback(void *inUserData,
         if (status == noErr) {
             memset(_radioBuffers[i]->mAudioData, 0, _radioBuffers[i]->mAudioDataBytesCapacity);
             _radioBuffers[i]->mAudioDataByteSize = _radioBuffers[i]->mAudioDataBytesCapacity;
-            AudioQueueEnqueueBuffer(_radioOutputQueue, _radioBuffers[i], 0, NULL);
+            status=AudioQueueEnqueueBuffer(_radioOutputQueue, _radioBuffers[i], 0, NULL);
         }
+        if(status!=noErr) { [self teardownRadioAudio]; return NO; }
     }
 
     status = AudioQueueStart(_radioOutputQueue, NULL);
@@ -465,8 +545,10 @@ static void CWKeyerRadioOutputCallback(void *inUserData,
     }
     self.radioQueueReady = YES;
     self.activeRadioUID = targetUID;
+    [self startRadioAudioHealthMonitor];
     NSLog(@"TX500CWKeyer: Radio AudioQueue ready on %@", targetUID);
     return YES;
+    }
 }
 
 static NSDictionary<NSString *, NSString *> *TX500MorseCodeMap(void) {

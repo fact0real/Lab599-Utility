@@ -73,6 +73,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (BOOL)ensureRadioAudioReady;
 @property (nonatomic, copy, nullable) NSString *txPrefixCommand;
 @property (nonatomic, copy, nullable) NSString *rxSuffixCommand;
+// Called on the main thread after audio-route loss has requested RX on the safety queue.
+@property (nonatomic, copy, nullable) void (^onRadioAudioLost)(BOOL receiveConfirmed);
 // Called on the main thread after the time-out silenced and released the radio.
 @property (nonatomic, copy, nullable) void (^onTransmitTimedOut)(NSTimeInterval limitSeconds);
 

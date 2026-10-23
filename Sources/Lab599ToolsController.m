@@ -1925,6 +1925,12 @@ static NSString *StudioTimestamp(NSDate *date) {
     if (!cmd.length) return;
     if (![cmd hasSuffix:@";"]) cmd = [cmd stringByAppendingString:@";"];
 
+    NSError *safeError=nil;
+    if(!TXValidatedCATMacro(cmd, &safeError)) {
+        [self showCATNotice:@"CAT Studio: this command is outside the safe command list. Monitoring and safe settings remain available. Use CW, Digital or Voice for protected transmission." error:YES];
+        return;
+    }
+
     [self begin];
     [self appendTerminalTX:cmd];
     if (self.statusChanged) self.statusChanged([NSString stringWithFormat:@"Sending CAT: %@", cmd], 0);

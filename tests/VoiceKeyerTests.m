@@ -69,6 +69,21 @@ static TX500VoiceKeyer *Keyer(VoiceRadioFake *r,VoicePlayerFake *p) {
     Check(Until(^BOOL { return !k.active; },1),@"Read radio completes"); Check(k.connected,@"Radio validated"); return k;
 }
 static void Finish(VoicePlayerFake *p) { Check(p.completion!=nil,@"Completion registered"); p.completion(YES); }
+static void TestSleepDuringPreflight(void) {
+    for(NSNumber *inFlight in @[@NO,@YES]) {
+        VoiceRadioFake *r=[VoiceRadioFake new]; VoicePlayerFake *p=[VoicePlayerFake new]; TX500VoiceKeyer *k=Keyer(r,p);
+        if(inFlight.boolValue) r.keyDelay=0.15; else r.readDelay=0.15;
+        [k startClip:Clip(@"CQ") repeat:YES];
+        Check(Until(^BOOL { return inFlight.boolValue ? r.keys==1 : r.reads>=2; },0.3),@"Sleep fixture reaches checking or in-flight PTT");
+        [NSWorkspace.sharedWorkspace.notificationCenter postNotificationName:NSWorkspaceWillSleepNotification object:nil];
+        NSInteger keysAtSleep=r.keys;
+        Check(p.plays==0 && !k.active && !k.connected,@"Sleep synchronously drains voice preflight without audio or automatic restart");
+        if(inFlight.boolValue) Check(r.releases==1,@"An in-flight TX is released before the sleep observer returns");
+        else Check(r.keys==0,@"Sleep during channel checking prevents a late key-down");
+        Pump(0.2); Check(r.keys==keysAtSleep,@"No queued voice work can key after the sleep observer returns");
+        [k disconnectAndWait];
+    }
+}
 static void TestSequencing(void) {
     @autoreleasepool {
         VoiceRadioFake *r=[VoiceRadioFake new]; VoicePlayerFake *p=[VoicePlayerFake new]; TX500VoiceKeyer *k=Keyer(r,p);
@@ -240,7 +255,7 @@ int main(int argc,const char *argv[]) {
         (void)argc; (void)argv;
         [NSApplication sharedApplication];
         char path[]="/tmp/VoiceKeyerTests.XXXXXX"; Check(mkdtemp(path)!=NULL,@"Temporary test directory"); NSURL *root=[NSURL fileURLWithPath:[NSString stringWithUTF8String:path] isDirectory:YES];
-        TestLibrary(root); TestCAT(); TestSequencing(); TestFaults();
+        TestLibrary(root); TestCAT(); TestSequencing(); TestFaults(); TestSleepDuringPreflight();
         if([NSProcessInfo.processInfo.arguments containsObject:@"--audio-smoke"]) TestSilentNativePlayback(root);
         Check(!TXVoiceDeviceAvailable(@"missing-device-for-test",NO),@"Disconnected output never silently defaults");
         if([NSProcessInfo.processInfo.arguments containsObject:@"--render"]) {

@@ -9,6 +9,10 @@ FOUNDATION_EXPORT NSString *const TXStationRadioChanged;
 @property(nonatomic, readonly, copy) NSDictionary *snapshot;
 @property(nonatomic, readonly, copy) NSString *status;
 @property(nonatomic, readonly) BOOL ownsTX;
+// Kept independently of polling status until the operator confirms physical receive.
+@property(nonatomic, readonly, copy) NSString *transmitSafetyNotice;
+- (void)acknowledgeTransmitSafetyNotice;
+- (void)recordTransmitSafetyNotice:(NSString *)reason;
 @property(nonatomic, readonly) NSUInteger queryCount;
 @property(nonatomic, readonly) NSUInteger failureCount;
 @property(nonatomic, readonly) double lastLatency;

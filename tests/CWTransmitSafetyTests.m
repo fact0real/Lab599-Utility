@@ -3,6 +3,7 @@
 
 @interface TX500CWKeyer (SafetyTests)
 - (BOOL)localSidetoneRouteIsSafe;
+- (void)markRadioAudioFailed;
 @end
 
 // No CoreAudio device is opened. This route behaves like a radio or an unknown output.
@@ -28,6 +29,13 @@
 - (void)stop { [NSException raise:@"LocalAudioFailure" format:@"Output disappeared during stop"]; }
 @end
 
+@interface AudioLossKeyer : TX500CWKeyer
+@property(atomic) BOOL fixtureAlive;
+@end
+@implementation AudioLossKeyer
+- (BOOL)radioAudioRouteIsAvailable:(NSString *)uid { return self.fixtureAlive && uid.length; }
+@end
+
 static NSUInteger checks;
 static void Check(BOOL ok, NSString *message) {
     checks++;
@@ -46,6 +54,36 @@ int main(void) {
             @synchronized (commands) { [commands addObject:command]; }
             return YES;
         };
+
+        AudioLossKeyer *audioLoss=[AudioLossKeyer new];
+        audioLoss.fixtureAlive=YES;
+        audioLoss.radioOutputDeviceUID=@"fixture-radio";
+        [audioLoss setValue:@YES forKey:@"radioQueueReady"];
+        [audioLoss setValue:@"fixture-radio" forKey:@"activeRadioUID"];
+        NSMutableArray *audioCommands=[NSMutableArray new];
+        audioLoss.serialCommandSender=^BOOL(NSString *command) { @synchronized(audioCommands) { [audioCommands addObject:command]; } return YES; };
+        __block BOOL lossNotified=NO;
+        audioLoss.onRadioAudioLost=^(BOOL received) { lossNotified=received; };
+        Check([audioLoss startContinuousCarrierWithPitchHz:650],@"Fixture carrier opens only a simulated audio route");
+        audioLoss.fixtureAlive=NO;
+        [NSThread sleepForTimeInterval:0.2]; // main run loop blocked: RX still has to be sent
+        @synchronized(audioCommands) { Check([audioCommands containsObject:@"RX;"],@"USB audio loss releases RX independently of the main run loop"); }
+        Drain(0.05);
+        Check(lossNotified && ![[audioLoss valueForKey:@"radioQueueReady"] boolValue] && !audioLoss.isAutoCQActive,@"Audio loss invalidates queue, stops Auto-CQ and reports the release");
+        [audioCommands removeAllObjects];
+        [audioLoss transmitText:@"CQ TEST" targetCall:@"" rst:@"" name:@"" qth:@""];
+        Check(!audioLoss.isTransmitting && ![audioCommands containsObject:@"TX;"],@"A disconnected audio route cannot be re-keyed using the cached queue");
+        [audioLoss abortTransmission];
+
+        AudioLossKeyer *enqueueLoss=[AudioLossKeyer new]; enqueueLoss.fixtureAlive=YES;
+        enqueueLoss.radioOutputDeviceUID=@"fixture-enqueue";
+        [enqueueLoss setValue:@YES forKey:@"radioQueueReady"]; [enqueueLoss setValue:@"fixture-enqueue" forKey:@"activeRadioUID"];
+        __block BOOL enqueueRX=NO;
+        enqueueLoss.serialCommandSender=^BOOL(NSString *command) { if([command isEqual:@"RX;"]) enqueueRX=YES; return YES; };
+        [enqueueLoss startContinuousCarrierWithPitchHz:650]; [enqueueLoss markRadioAudioFailed];
+        [NSThread sleepForTimeInterval:0.15];
+        Check(enqueueRX,@"AudioQueue enqueue failure requests RX even while the route still reports alive");
+        Drain(0.05); [enqueueLoss abortTransmission];
 
         // Practice must be safe even when a host supplies a sender without a CAT gate.
         keyer.practiceModeActive = ^BOOL { return YES; };

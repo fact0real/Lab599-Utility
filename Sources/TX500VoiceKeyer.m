@@ -70,7 +70,15 @@ static BOOL VoiceStateValid(NSDictionary *s, BOOL transmitting, NSDictionary *ex
     if(!self.active && _activity) { [NSProcessInfo.processInfo endActivity:_activity]; _activity=nil; }
     if(self.log) self.log(message); [self notify];
 }
-- (void)sleep:(NSNotification *)note { (void)note; if(self.active) [self fail:@"Stopped for system sleep. Resume manually when ready."]; }
+- (void)sleep:(NSNotification *)note {
+    (void)note;
+    if(self.active) {
+        // Invalidate preflight before waiting for its worker. If TX was already in flight,
+        // disconnectAndWait sends RX and drains it before the sleep notification returns.
+        BOOL received=[self disconnectAndWait];
+        [self setPhase:TXVoiceFault message:received ? @"Voice Keyer: stopped for system sleep; pending TX cancelled and owned PTT released. Reconnect manually when awake." : @"Voice Keyer: sleep release NOT confirmed. Check the radio and release PTT locally."];
+    }
+}
 - (void)connectFrequency:(uint64_t)frequency mode:(NSInteger)mode apply:(BOOL)apply {
     if(self.active || self.radioBusy) return;
     NSUInteger token=++self.generation; self.connected=NO; self.radioBusy=YES;

@@ -539,6 +539,8 @@ static NSInteger TX500ScreenPTTStateFromReply(NSString *reply) {
     NSTimer *_demoTimer;
     NSTimer *_livePollTimer;
     BOOL _isPolling;
+    BOOL _lockStatusKnown;
+    BOOL _attenuatorStatusKnown;
     BOOL _liveSnapshotReceived; // a real FA; answer since entering Live CAT
     NSString *_liveSnapshotPortPath; // the port that gave that answer
     NSUInteger _liveMissedPolls; // polls in a row without an FA; answer
@@ -879,6 +881,9 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
             }
         }
         [port close];
+        if ([catCmd hasPrefix:@"RA"] || [catCmd hasPrefix:@"LK"]) {
+            dispatch_async(dispatch_get_main_queue(), ^{ [self refreshSnapshotFromRadio]; });
+        }
 
         if (resp.length > 0) {
             NSString *replyStr = [[NSString alloc] initWithData:resp encoding:NSASCIIStringEncoding];
@@ -982,10 +987,19 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
             [self showTemporaryFeedback:@"[V/M] CAT command unverified; use the radio key"];
             break;
 
-        case TX500ControlLock:
-            [self showTemporaryFeedback:@"⚡ [LOCK] VFO Lock (hold for lock)"];
-            [self sendCATCommandAsync:@"LK0;" description:@"VFO Lock"];
+        case TX500ControlLock: {
+            if (!self.demoModeActive && !_lockStatusKnown) {
+                [self showTemporaryFeedback:@"Lock state not read; refresh Live CAT before changing it."];
+                [self refreshSnapshotFromRadio];
+                break;
+            }
+            BOOL locked = !self.screenState.isLocked;
+            if (self.demoModeActive) self.screenState.isLocked = locked;
+            [self showTemporaryFeedback:locked ? @"Lock requested" : @"Unlock requested"];
+            // Manufacturer CAT rev.3: LK P1 P2; where P2 is always zero.
+            [self sendCATCommandAsync:locked ? @"LK10;" : @"LK00;" description:@"VFO Lock"];
             break;
+        }
         case TX500ControlPlus: {
             // Step up by 1 kHz
             int64_t newF = (int64_t)self.screenState.frequencyHz + 1000LL;
@@ -1272,10 +1286,17 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
 }
 
 - (void)handleTopKey2 {
-    self.screenState.attenuator = !self.screenState.attenuator;
+    if (!self.demoModeActive && !_attenuatorStatusKnown) {
+        [self showTemporaryFeedback:@"Attenuator state not read; refresh Live CAT before changing it."];
+        [self refreshSnapshotFromRadio];
+        return;
+    }
+    BOOL attenuated = !self.screenState.attenuator;
+    if (self.demoModeActive) self.screenState.attenuator = attenuated;
     [self renderAndUpdateDisplay];
-    NSString *cmd = self.screenState.attenuator ? @"RA1;" : @"RA0;";
-    [self showTemporaryFeedback:[NSString stringWithFormat:@"⚡ [ATT] %@", self.screenState.attenuator ? @"ON (-20dB)" : @"OFF"]];
+    // Manufacturer CAT rev.3: RA P1 P1; 00 off, 01 on.
+    NSString *cmd = attenuated ? @"RA01;" : @"RA00;";
+    [self showTemporaryFeedback:attenuated ? @"Attenuator ON requested" : @"Attenuator OFF requested"];
     [self sendCATCommandAsync:cmd description:@"Attenuator Toggle"];
 }
 
@@ -1332,7 +1353,11 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
 // Explicit RX remains available even with stale or missing status. Demo preserves its local simulation.
 - (BOOL)togglePTTFromRadio {
     NSString *portPath = self.selectedPortProvider ? self.selectedPortProvider() : nil;
-    if (!portPath.length || self.demoModeActive) return NO;
+    if (self.demoModeActive) return NO;
+    if (!portPath.length) {
+        [self showTemporaryFeedback:@"No CAT port selected; radio state is unknown. Choose a port or enable Demo explicitly."];
+        return YES;
+    }
     // This exclusive panel has no core TX owner. Keep an explicit RX action, but never key outside the core.
     [self sendCATCommandAsync:@"RX;" description:@"Receive only; protected TX is available in CW, Digital or Voice"];
     [self showTemporaryFeedback:@"RX requested; check the radio. Use CW, Digital or Voice to transmit."];
@@ -1861,10 +1886,11 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
 
         // Query Attenuator (RA;)
         NSString *ra = queryRadio(@"RA;");
-        BOOL attOn = NO;
-        if (ra && [ra hasPrefix:@"RA"] && ra.length >= 3) {
-            attOn = ([ra characterAtIndex:2] == '1');
-        }
+        BOOL attKnown = [ra isEqualToString:@"RA0000;"] || [ra isEqualToString:@"RA0100;"];
+        BOOL attOn = [ra isEqualToString:@"RA0100;"];
+        NSString *lk = queryRadio(@"LK;");
+        BOOL lockKnown = [lk isEqualToString:@"LK00;"] || [lk isEqualToString:@"LK10;"];
+        BOOL locked = [lk isEqualToString:@"LK10;"];
 
         // Query Noise Reduction (NR;)
         NSString *nr = queryRadio(@"NR;");
@@ -1931,7 +1957,10 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
             self.screenState.filterBandwidthString = @"—";
 
             self.screenState.preamp = preampOn;
-            self.screenState.attenuator = attOn;
+            self->_attenuatorStatusKnown = attKnown;
+            if (attKnown) self.screenState.attenuator = attOn;
+            self->_lockStatusKnown = lockKnown;
+            if (lockKnown) self.screenState.isLocked = locked;
             self.screenState.noiseReduction = nrOn;
             self.screenState.noiseBlanker = nbOn;
             self.screenState.notchFilter = ntOn;

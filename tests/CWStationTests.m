@@ -816,8 +816,8 @@ int main(int argc, const char * argv[]) {
         AssertTrue([cwVFO.stringValue isEqualToString:@"7.030.000 MHz"] && cwBands.selectedSegment == 2, @"A frequency read from the radio shows on the VFO and the 40m chip");
         syncLine = @"";
         [cwStation updateFrequencyHz:0 mode:@"DIG"]; // one missed FA; reply later
-        AssertTrue(cwStation.currentDialFrequencyHz == 7030000 && cwStation.assistant.currentFrequencyHz == 7030000 &&
-                   [cwStation.assistant.currentBand isEqualToString:@"40m"], @"A missed radio answer keeps the frequency and band known before");
+        AssertTrue(cwStation.currentDialFrequencyHz == 7030000 && cwStation.assistant.currentFrequencyHz == 0 &&
+                   cwStation.assistant.currentBand.length == 0, @"A missed radio answer preserves display history but clears unverified logging frequency");
         AssertTrue([syncLine containsString:@"keeping the last known 7.030 MHz"], @"The console says the frequency known before is kept");
         [cwStation stepFrequencyHz:100];
         AssertTrue([cwCommands containsObject:@"FA00007030100;"] && cwStation.assistant.currentFrequencyHz == 7030100, @"With a known frequency the VFO step is sent");
@@ -1059,6 +1059,9 @@ int main(int argc, const char * argv[]) {
         for (NSString *line in meterLog) if ([line containsString:@"polling stopped"]) meterStoppedLogged = YES;
         AssertTrue([meterStation valueForKey:@"txMeterPollingTimer"] == nil && meterStoppedLogged && meterStation.isManualTuneActive,
                    @"three silent polls stop the meter reads, not the Tune");
+        AssertTrue([[[meterStation valueForKey:@"txPowerLabel"] stringValue] containsString:@"—"] &&
+                   [[[meterStation valueForKey:@"txSwrLabel"] stringValue] containsString:@"—"] && isnan(meterStation.liveTXSWR),
+                   @"Silent meters clear stale figures rather than presenting old SWR as live");
         [meterCmds removeAllObjects];
         [meterStation stopManualTune];
         AssertTrue(!meterStation.isManualTuneActive && [meterCmds containsObject:@"RX;"], @"Stopping the Tune sends RX;");
@@ -1072,6 +1075,15 @@ int main(int argc, const char * argv[]) {
         [meterStation stopManualTune];
         [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.7]]; // let the last read return
         NSLog(@"PASS: One PWR/SWR meter read in flight; three silent polls stop the reads, not the Tune.");
+
+        TX500CWQSOAssistant *refusedAssistant=[TX500CWQSOAssistant new];
+        refusedAssistant.myCallsign=@"EA3JIC"; refusedAssistant.activeTargetCallsign=@"EP2AES";
+        TX500QSOState refusedBefore=refusedAssistant.qsoState;
+        [refusedAssistant advanceQSOStepWithAcceptedAction:^BOOL(NSString *macro) { (void)macro; return NO; }];
+        AssertTrue(refusedAssistant.qsoState==refusedBefore && refusedAssistant.loggedContacts.count==0, @"Rejected keyer text never advances a QSO");
+        refusedAssistant.qsoState=TX500QSOStateSigningOff;
+        [refusedAssistant advanceQSOStepWithAcceptedAction:^BOOL(NSString *macro) { (void)macro; return NO; }];
+        AssertTrue(refusedAssistant.qsoState==TX500QSOStateSigningOff && refusedAssistant.loggedContacts.count==0, @"Rejected signoff never logs or uploads a QSO");
 
         // 9. Test ADIF 3.1 Record Generation & File Export
         NSString *adifFull = [assistant generateFullADIFString];

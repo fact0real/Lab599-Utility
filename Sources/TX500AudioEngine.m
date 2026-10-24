@@ -1,3 +1,4 @@
+#import "TX500AudioInputPrivacy.h"
 //
 //  TX500AudioEngine.m
 //  Lab599 Utility
@@ -241,6 +242,7 @@ static void TX500ComputeFFT(const float *realIn, float *magnitudesOut, int n) {
     // WAV Recording
     NSFileHandle *_recordingFileHandle;
     uint32_t _recordedAudioDataBytes;
+    uint32_t _recordingHeaderCheckpointBytes;
     NSDate *_recordingStartTime;
 
     AudioQueueBufferRef _inputBuffers[3];
@@ -593,42 +595,18 @@ static OSStatus AudioMonitorHardwareDevicesListener(AudioObjectID inObjectID,
     // Track availability of the preferred USB audio input, not cable identity.
     BOOL foundPreferredUSBAudio = NO;
     NSString *preferredUSBAudioName = nil;
-    NSString *bestPreferredUSBAudioInUID = nil;
-    NSString *bestUSBInUID = nil;
 
     for (TX500AudioDeviceItem *item in inputs) {
         if (item.isPreferredUSBAudio) {
             foundPreferredUSBAudio = YES;
             if (!preferredUSBAudioName) preferredUSBAudioName = item.name;
-            if (!bestPreferredUSBAudioInUID) bestPreferredUSBAudioInUID = item.uid;
-        }
-        if (item.isUSB && !bestUSBInUID) {
-            bestUSBInUID = item.uid;
         }
     }
     self.isPreferredUSBAudioConnected = foundPreferredUSBAudio;
     self.preferredUSBAudioDeviceName = preferredUSBAudioName;
 
-    // Check if current selection is valid or needs upgrade
-    BOOL selectedInValid = NO;
-    BOOL currentInIsVirtual = NO;
-    for (TX500AudioDeviceItem *item in inputs) {
-        if ([item.uid isEqualToString:self.selectedInputDeviceUID]) {
-            selectedInValid = YES;
-            if (item.isVirtual) currentInIsVirtual = YES;
-            break;
-        }
-    }
-
-    if (!self.preserveDeviceSelection && (!selectedInValid || (currentInIsVirtual && (bestPreferredUSBAudioInUID || bestUSBInUID)) || !self.selectedInputDeviceUID || [self.selectedInputDeviceUID isEqualToString:@"default"])) {
-        if (bestPreferredUSBAudioInUID) {
-            _selectedInputDeviceUID = bestPreferredUSBAudioInUID;
-        } else if (bestUSBInUID) {
-            _selectedInputDeviceUID = bestUSBInUID;
-        } else {
-            self.selectedInputDeviceUID = inputs.firstObject.uid;
-        }
-    }
+    // Input selection belongs to the operator; neither USB heuristics nor the system default
+    // may open an unchosen input. A disconnected selection remains visible until changed.
 
     if (!self.preserveDeviceSelection && !self.selectedOutputDeviceUID) {
         TX500AudioDeviceItem *bestOutput = nil;
@@ -867,15 +845,17 @@ static OSStatus AudioMonitorHardwareDevicesListener(AudioObjectID inObjectID,
     if (self.isMonitoring) return YES;
 
     [self refreshDevices];
-    if(self.preserveDeviceSelection) {
+    {
         BOOL inputOK=NO, outputOK=NO;
-        for(TX500AudioDeviceItem *d in self.inputDevices) if([d.uid isEqual:self.selectedInputDeviceUID]) inputOK=YES;
+        for(TX500AudioDeviceItem *d in self.inputDevices) if([d.uid isEqual:self.selectedInputDeviceUID] && ![d.uid isEqual:@"default"]) inputOK=YES;
         for(TX500AudioDeviceItem *d in self.outputDevices) if([d.uid isEqual:self.selectedOutputDeviceUID]) outputOK=YES;
-        if(!inputOK || !outputOK) {
+        if(!inputOK || (self.preserveDeviceSelection && !outputOK)) {
             if(error) *error=[NSError errorWithDomain:@"TX500AudioErrorDomain" code:1 userInfo:@{NSLocalizedDescriptionKey:@"The station's receive input or headphones are unavailable. Select connected audio devices in Station Profiles."}];
             return NO;
         }
     }
+
+    if (!TX500ConfirmSelectedInput(self.selectedInputDeviceUID, error)) return NO;
 
     // Reset ring buffer
     pthread_mutex_lock(&_ringMutex);
@@ -1338,6 +1318,8 @@ static OSStatus AudioMonitorHardwareDevicesListener(AudioObjectID inObjectID,
     uint8_t header[44];
     memset(header, 0, sizeof(header));
     memcpy(header, "RIFF", 4);
+    uint32_t initialRIFFSize = 36;
+    memcpy(header + 4, &initialRIFFSize, 4);
     memcpy(header + 8, "WAVEfmt ", 8);
     uint32_t fmtChunkSize = 16;
     uint16_t audioFormat = 1; // PCM
@@ -1359,6 +1341,7 @@ static OSStatus AudioMonitorHardwareDevicesListener(AudioObjectID inObjectID,
     [_recordingFileHandle writeData:[NSData dataWithBytes:header length:44]];
 
     _recordedAudioDataBytes = 0;
+    _recordingHeaderCheckpointBytes = 0;
     _recordingStartTime = [NSDate date];
     self.currentRecordingPath = fullPath;
     self.isRecording = YES;
@@ -1382,8 +1365,17 @@ static OSStatus AudioMonitorHardwareDevicesListener(AudioObjectID inObjectID,
         pcm[i] = (int16_t)(s * 32767.0f);
     }
 
+    // RIFF uses 32-bit lengths. Stop cleanly rather than wrap the header on a long recording.
+    if (pcmData.length > UINT32_MAX - 36U - _recordedAudioDataBytes) { [self stopRecording]; return; }
     [_recordingFileHandle writeData:pcmData];
     _recordedAudioDataBytes += (uint32_t)pcmData.length;
+    // Checkpoint a readable PCM prefix once per second, without a flush on the audio callback.
+    // A crash can lose the uncheckpointed tail; this is not a power-loss durability guarantee.
+    if (_recordedAudioDataBytes - _recordingHeaderCheckpointBytes >= (uint32_t)self.sampleRate * 2U) {
+        [self updateRecordingHeader];
+        [_recordingFileHandle seekToFileOffset:(unsigned long long)_recordedAudioDataBytes + 44];
+        _recordingHeaderCheckpointBytes = _recordedAudioDataBytes;
+    }
     self.recordingBytes = _recordedAudioDataBytes + 44;
     self.recordingDuration = [[NSDate date] timeIntervalSinceDate:_recordingStartTime];
 
@@ -1392,10 +1384,8 @@ static OSStatus AudioMonitorHardwareDevicesListener(AudioObjectID inObjectID,
     }
 }
 
-- (void)stopRecording {
-    if (!self.isRecording || !_recordingFileHandle) return;
-    self.isRecording = NO;
-
+- (void)updateRecordingHeader {
+    if (!_recordingFileHandle) return;
     // Finalize WAV Header: RIFF total size and data chunk size
     uint32_t riffSize = _recordedAudioDataBytes + 36;
     [_recordingFileHandle seekToFileOffset:4];
@@ -1403,6 +1393,14 @@ static OSStatus AudioMonitorHardwareDevicesListener(AudioObjectID inObjectID,
 
     [_recordingFileHandle seekToFileOffset:40];
     [_recordingFileHandle writeData:[NSData dataWithBytes:&_recordedAudioDataBytes length:4]];
+
+}
+
+- (void)stopRecording {
+    if (!self.isRecording || !_recordingFileHandle) return;
+    self.isRecording = NO;
+
+    [self updateRecordingHeader];
 
     [_recordingFileHandle closeFile];
     _recordingFileHandle = nil;

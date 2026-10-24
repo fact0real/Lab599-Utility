@@ -11,6 +11,7 @@ static NSString *ModeName(uint8_t code) {
         case '3': return @"CW";
         case '4': return @"FM";
         case '5': return @"AM";
+        case '6': return @"DIG";
         case '7': return @"CWR";
         default:  return @"USB";
     }
@@ -19,12 +20,13 @@ static NSString *ModeName(uint8_t code) {
 static uint8_t ParseModeString(NSString *str) {
     NSString *clean = [[str stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] uppercaseString];
     if ([clean isEqualToString:@"LSB"] || [clean isEqualToString:@"1"]) return '1';
-    if ([clean isEqualToString:@"USB"] || [clean isEqualToString:@"DIG"] || [clean isEqualToString:@"DIGITAL"] || [clean isEqualToString:@"2"]) return '2';
+    if ([clean isEqualToString:@"USB"] || [clean isEqualToString:@"2"]) return '2';
+    if ([clean isEqualToString:@"DIG"] || [clean isEqualToString:@"DIGITAL"] || [clean isEqualToString:@"6"]) return '6';
     if ([clean isEqualToString:@"CW"]  || [clean isEqualToString:@"3"]) return '3';
     if ([clean isEqualToString:@"FM"]  || [clean isEqualToString:@"4"]) return '4';
     if ([clean isEqualToString:@"AM"]  || [clean isEqualToString:@"5"]) return '5';
     if ([clean isEqualToString:@"CWR"] || [clean isEqualToString:@"7"]) return '7';
-    return '2';
+    return 0;
 }
 
 static NSString *PreAttName(uint8_t code) {
@@ -71,104 +73,69 @@ NSString *TXExportMemoryToCSV(NSArray<TXMemoryChannel *> *channels) {
 }
 
 NSArray<TXMemoryChannel *> *TXImportMemoryFromCSV(NSString *csvString, NSError **error) {
-    if (!csvString || !csvString.length) {
-        if (error) *error = [NSError errorWithDomain:@"TX500CSV" code:1 userInfo:@{NSLocalizedDescriptionKey: @"CSV data is empty."}];
+    return TXImportMemoryFromCSVWithReport(csvString, NULL, error);
+}
+
+NSArray<TXMemoryChannel *> *TXImportMemoryFromCSVWithReport(NSString *csvString, NSDictionary **report, NSError **error) {
+    if (error) *error=nil;
+    NSMutableArray<TXMemoryChannel *> *bank=[TXEmptyMemory() mutableCopy];
+    NSArray *lines=[[csvString ?: @"" stringByReplacingOccurrencesOfString:@"\r\n" withString:@"\n"] componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet];
+    NSMutableArray *reasons=[NSMutableArray array];
+    NSMutableSet *used=[NSMutableSet set];
+    __block NSUInteger skipped=0;
+    NSUInteger imported=0, next=0, lineNumber=0;
+    for(NSString *raw in lines) {
+        lineNumber++;
+        NSString *line=[raw stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        if(!line.length || [line hasPrefix:@"#"]) continue;
+        void (^skip)(NSString *)=^(NSString *why) {
+            skipped++;
+            if(reasons.count<8) [reasons addObject:[NSString stringWithFormat:@"Line %lu: %@",(unsigned long)lineNumber,why]];
+        };
+        NSString *separator=[line containsString:@","] ? @"," : [line containsString:@";"] ? @";" : [line containsString:@"\t"] ? @"\t" : nil;
+        if(!separator || [line containsString:@"\""]) { skip(@"Missing separator or unsupported quoted field"); continue; }
+        NSMutableArray *parts=[NSMutableArray array];
+        for(NSString *part in [line componentsSeparatedByString:separator]) [parts addObject:[part stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet]];
+        NSString *first=[parts[0] uppercaseString];
+        if([@[@"CHANNEL",@"CH",@"FREQ",@"FREQUENCY"] containsObject:first]) continue;
+        if(parts.count<2) { skip(@"At least two columns are required"); continue; }
+        NSInteger possible=0;
+        NSScanner *scanner=[NSScanner scannerWithString:parts[0]];
+        BOOL integer=[scanner scanInteger:&possible] && scanner.isAtEnd;
+        BOOL hasChannel=integer && possible<100000;
+        NSInteger channel=hasChannel ? possible : (NSInteger)next;
+        if(channel<0 || channel>=100) { skip(@"Channel must be between 0 and 99"); continue; }
+        if([used containsObject:@(channel)]) { skip(@"Duplicate channel; earlier row kept"); continue; }
+        NSString *freq=parts[hasChannel ? 1 : 0];
+        NSString *mode=@"USB", *pre=@"Off";
+        if(hasChannel) {
+            NSUInteger modeColumn=(parts.count>=4 && [parts[2] containsString:@"."]) ? 3 : 2;
+            if(parts.count>modeColumn) mode=parts[modeColumn];
+            if(parts.count>modeColumn+1) pre=parts[modeColumn+1];
+        } else { mode=parts[1]; if(parts.count>2) pre=parts[2]; }
+        double number=0;
+        scanner=[NSScanner scannerWithString:freq]; scanner.locale=[NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+        if(![scanner scanDouble:&number] || !scanner.isAtEnd || !isfinite(number)) { skip(@"Frequency is not a finite number"); continue; }
+        double hz=[freq containsString:@"."] ? number*1000000.0 : number;
+        if(hz<0 || (hz>0 && (hz<100000 || hz>56000000))) { skip(@"Frequency outside 100 kHz–56 MHz"); continue; }
+        uint8_t modeCode=ParseModeString(mode);
+        if(!modeCode) { skip(@"Unsupported mode; no USB substitution made"); continue; }
+        NSString *preUpper=pre.uppercaseString;
+        if(![@[@"OFF",@"0",@"PRE",@"PREAMP",@"1",@"ATT",@"ATTENUATOR",@"2"] containsObject:preUpper]) { skip(@"Unsupported preamp/attenuator value"); continue; }
+        [used addObject:@(channel)];
+        if(hz>0) {
+            TXMemoryChannel *entry=[TXMemoryChannel new];
+            entry.frequency=(uint32_t)llround(hz); entry.mode=modeCode; entry.preAtt=ParsePreAttString(pre);
+            bank[(NSUInteger)channel]=entry; imported++;
+        }
+        next=(NSUInteger)channel+1;
+    }
+    if(report) *report=@{@"imported":@(imported),@"skipped":@(skipped),@"reasons":reasons};
+    if(!imported) {
+        if(error) *error=[NSError errorWithDomain:@"TX500CSV" code:2 userInfo:@{NSLocalizedDescriptionKey:@"No valid active frequency records found in CSV file."}];
         return nil;
     }
-
-    NSMutableArray<TXMemoryChannel *> *bank = [TXEmptyMemory() mutableCopy];
-    NSArray<NSString *> *rawLines = [csvString componentsSeparatedByCharactersInSet:[NSCharacterSet newlineCharacterSet]];
-    NSUInteger importedCount = 0;
-    NSUInteger currentAutoChannel = 0;
-
-    for (NSString *rawLine in rawLines) {
-        NSString *line = [rawLine stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-        if (!line.length || [line hasPrefix:@"#"]) continue;
-
-        // Split by comma, semicolon, or tab
-        NSArray<NSString *> *parts = nil;
-        if ([line containsString:@","]) {
-            parts = [line componentsSeparatedByString:@","];
-        } else if ([line containsString:@";"]) {
-            parts = [line componentsSeparatedByString:@";"];
-        } else if ([line containsString:@"\t"]) {
-            parts = [line componentsSeparatedByString:@"\t"];
-        } else {
-            continue;
-        }
-
-        if (parts.count < 2) continue;
-
-        NSString *firstCol = [[parts[0] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]] uppercaseString];
-        if ([firstCol isEqualToString:@"CHANNEL"] || [firstCol isEqualToString:@"CH"] || [firstCol isEqualToString:@"FREQ"] || [firstCol isEqualToString:@"FREQUENCY"]) {
-            // Header line
-            continue;
-        }
-
-        // Determine if first column is channel number or frequency
-        NSInteger channelNum = -1;
-        NSString *freqStr = nil;
-        NSString *modeStr = @"USB";
-        NSString *preAttStr = @"Off";
-
-        NSScanner *scanner = [NSScanner scannerWithString:parts[0]];
-        NSInteger possibleChannel;
-        if ([scanner scanInteger:&possibleChannel] && scanner.isAtEnd && possibleChannel >= 0 && possibleChannel < 100 && parts.count >= 3) {
-            // parts[0] is Channel, parts[1] is Frequency, parts[2] might be MHz or Mode
-            channelNum = possibleChannel;
-            freqStr = [parts[1] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-            
-            // Check if parts[2] is Frequency_MHz (e.g. from our export) or Mode
-            if (parts.count >= 4 && [parts[2] containsString:@"."] && ![parts[2] containsString:@"LSB"] && ![parts[2] containsString:@"USB"]) {
-                // Column 2 is Frequency_MHz, Column 3 is Mode, Column 4 is PreAtt
-                modeStr = parts[3];
-                if (parts.count >= 5) preAttStr = parts[4];
-            } else {
-                // Column 2 is Mode
-                modeStr = parts[2];
-                if (parts.count >= 4) preAttStr = parts[3];
-            }
-        } else {
-            // parts[0] is Frequency directly
-            channelNum = (NSInteger)currentAutoChannel;
-            freqStr = [parts[0] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-            if (parts.count >= 2) modeStr = parts[1];
-            if (parts.count >= 3) preAttStr = parts[2];
-        }
-
-        if (channelNum < 0 || channelNum >= 100) continue;
-
-        // Parse Frequency
-        uint32_t freqHz = 0;
-        if ([freqStr containsString:@"."]) {
-            double mhz = [freqStr doubleValue];
-            freqHz = (uint32_t)llround(mhz * 1000000.0);
-        } else {
-            freqHz = (uint32_t)[freqStr longLongValue];
-        }
-
-        if (freqHz > 0) {
-            if (freqHz < 100000 || freqHz > 56000000) {
-                // Out of TX-500 operating frequency range
-                continue;
-            }
-            TXMemoryChannel *ch = [TXMemoryChannel new];
-            ch.frequency = freqHz;
-            ch.mode = ParseModeString(modeStr);
-            ch.preAtt = ParsePreAttString(preAttStr);
-            bank[(NSUInteger)channelNum] = ch;
-            importedCount++;
-        }
-
-        currentAutoChannel = (NSUInteger)channelNum + 1;
-    }
-
-    if (importedCount == 0) {
-        if (error) *error = [NSError errorWithDomain:@"TX500CSV" code:2 userInfo:@{NSLocalizedDescriptionKey: @"No valid frequency records found in CSV file."}];
-        return nil;
-    }
-
-    return [bank copy];
+    return bank;
 }
 
 // =============================================================================

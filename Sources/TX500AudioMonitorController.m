@@ -1535,20 +1535,19 @@
 }
 
 - (void)setRadioMode:(NSString *)mode {
+    NSDictionary *commands = @{@"LSB":@"MD1;", @"USB":@"MD2;", @"CW":@"MD3;",
+                               @"FM":@"MD4;", @"AM":@"MD5;", @"DIG":@"MD6;"};
+    NSString *cmd = mode ? commands[mode] : nil;
+    if (!cmd) {
+        if (self.logHandler) self.logHandler(@"Mode was not changed: this bookmark's mode has no supported CAT command.");
+        return;
+    }
     _currentMode = [mode copy];
     NSArray *modes = @[@"LSB", @"USB", @"CW", @"AM", @"FM", @"DIG"];
     NSInteger idx = [modes indexOfObject:mode];
     if (idx != NSNotFound) {
         self.modeSegmentControl.selectedSegment = idx;
     }
-
-    NSString *cmd = @"MD2;";
-    if ([mode isEqualToString:@"LSB"]) cmd = @"MD1;";
-    else if ([mode isEqualToString:@"USB"]) cmd = @"MD2;";
-    else if ([mode isEqualToString:@"CW"])  cmd = @"MD3;";
-    else if ([mode isEqualToString:@"FM"])  cmd = @"MD4;";
-    else if ([mode isEqualToString:@"AM"])  cmd = @"MD5;";
-    else if ([mode isEqualToString:@"DIG"]) cmd = @"MD6;";
 
     if (self.serialCommandSender) {
         self.serialCommandSender(cmd);
@@ -1673,7 +1672,7 @@
     NSDictionary *entry = @{
         @"label": finalLabel,
         @"freq": @(self.currentFrequencyHz),
-        @"mode": self.currentMode ?: @"USB"
+        @"mode": self.currentMode ?: @""
     };
     [self.mutableBookmarks addObject:entry];
     [self saveBookmarksStorage];

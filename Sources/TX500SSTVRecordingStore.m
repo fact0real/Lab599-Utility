@@ -394,7 +394,7 @@ static NSURL *SSTVExisting(NSURL *u) {
 - (unsigned long long)pinnedBytes {
     unsigned long long n = 0;
     for (TX500SSTVStoredReception *r in _list)
-        if (r.keep || r.listedAgain) n += (r.onDisk ? r.byteSize + 44 : 0) + r.pictureBytes;
+        if (r.keep || r.logged || r.listedAgain) n += (r.onDisk ? r.byteSize + 44 : 0) + r.pictureBytes;
     return n;
 }
 
@@ -408,7 +408,7 @@ static NSURL *SSTVExisting(NSURL *u) {
     unsigned long long cap = self.effectiveCapBytes;
     if (cap == 0) return NO;
     unsigned long long fixed = self.pinnedBytes;
-    if (audio) for (TX500SSTVStoredReception *r in _list) if (!r.keep && !r.listedAgain) fixed += r.pictureBytes;
+    if (audio) for (TX500SSTVStoredReception *r in _list) if (!r.keep && !r.logged && !r.listedAgain) fixed += r.pictureBytes;
     BOOL fits = fixed + bytes <= cap;
     if (fits) _saidNoRoom = NO;
     else if (!_saidNoRoom) {
@@ -502,7 +502,7 @@ static NSURL *SSTVExisting(NSURL *u) {
     NSUInteger failed = 0;
     for (TX500SSTVStoredReception *r in _list.reverseObjectEnumerator) {
         if (used <= cap) break;
-        if (!r.onDisk || r.keep || r.listedAgain) continue;
+        if (!r.onDisk || r.keep || r.logged || r.listedAgain) continue;
         // only our own <identifier>.wav in this folder (DEC-9, SEG-16); a file that cannot be removed
         // stays counted and listed, and it is said (N-memoria-disc-8)
         NSURL *own = [self wavURLFor:r.identifier];
@@ -515,7 +515,7 @@ static NSURL *SSTVExisting(NSURL *u) {
     }
     for (TX500SSTVStoredReception *r in _list.reverseObjectEnumerator) {
         if (used <= cap) break;
-        if (r.keep || r.listedAgain || !r.pictureBytes) continue;
+        if (r.keep || r.logged || r.listedAgain || !r.pictureBytes) continue;
         BOOL all = YES;
         for (NSString *name in r.pictureNames) {
             NSURL *u = [self pictureURL:name];

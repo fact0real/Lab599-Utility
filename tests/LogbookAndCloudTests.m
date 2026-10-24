@@ -23,6 +23,67 @@
 #import "TX500SecretStore.h"
 #import <objc/message.h>
 
+// Intercept the credential-bearing request locally: no live LoTW request is made.
+@interface TX500LoTWReportTransport : NSObject <NSURLSessionTaskDelegate>
++ (NSURLSessionConfiguration *)privateConfiguration;
++ (void)fetchURL:(NSURL *)url configuration:(NSURLSessionConfiguration *)configuration completion:(void (^)(NSData *, NSError *))completion;
+@end
+static NSInteger LoTWFixtureStatus = 200;
+static BOOL LoTWFixtureFails = NO;
+static NSUInteger LoTWFixtureRequests = 0;
+@interface PrivateLoTWFixture : NSURLProtocol @end
+@implementation PrivateLoTWFixture
++ (BOOL)canInitWithRequest:(NSURLRequest *)request { (void)request; return YES; }
++ (NSURLRequest *)canonicalRequestForRequest:(NSURLRequest *)request { return request; }
+- (void)startLoading {
+    LoTWFixtureRequests++;
+    if (LoTWFixtureFails) {
+        NSError *failure = [NSError errorWithDomain:NSURLErrorDomain code:NSURLErrorCannotConnectToHost
+            userInfo:@{NSLocalizedDescriptionKey:self.request.URL.absoluteString,
+                       NSURLErrorFailingURLErrorKey:self.request.URL}];
+        [self.client URLProtocol:self didFailWithError:failure];
+        return;
+    }
+    NSHTTPURLResponse *response = [[NSHTTPURLResponse alloc] initWithURL:self.request.URL statusCode:LoTWFixtureStatus HTTPVersion:@"HTTP/1.1" headerFields:nil];
+    [self.client URLProtocol:self didReceiveResponse:response cacheStoragePolicy:NSURLCacheStorageNotAllowed];
+    [self.client URLProtocol:self didLoadData:[@"<EOH><EOR>" dataUsingEncoding:NSUTF8StringEncoding]];
+    [self.client URLProtocolDidFinishLoading:self];
+}
+- (void)stopLoading {}
+@end
+
+static void TestPrivateLoTWTransport(void) {
+    NSURLSessionConfiguration *configuration = [TX500LoTWReportTransport privateConfiguration];
+    NSCAssert(!configuration.URLCache && !configuration.HTTPCookieStorage && !configuration.URLCredentialStorage && !configuration.HTTPShouldSetCookies,
+        @"LoTW transport does not share persistent caches, cookies or credentials");
+    configuration.protocolClasses = @[PrivateLoTWFixture.class];
+    NSURL *url = [NSURL URLWithString:@"https://lotw.arrl.org/lotwuser/lotwreport.adi?login=fixture&password=TEST-SECRET"];
+    for (NSInteger scenario=0; scenario<3; scenario++) {
+        LoTWFixtureStatus = scenario==1 ? 503 : 200;
+        LoTWFixtureFails = scenario==2;
+        __block BOOL done=NO;
+        __block NSData *result=nil;
+        __block NSError *failure=nil;
+        [TX500LoTWReportTransport fetchURL:url configuration:configuration completion:^(NSData *data, NSError *error) {
+            result=data; failure=error; done=YES;
+        }];
+        NSDate *deadline=[NSDate dateWithTimeIntervalSinceNow:3];
+        while(!done && deadline.timeIntervalSinceNow>0) [NSRunLoop.mainRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
+        NSCAssert(done && (scenario==0 ? result.length>0 && !failure : !result && failure), @"LoTW success and failure are distinct");
+        NSCAssert(![failure.description containsString:@"TEST-SECRET"] && ![failure.description containsString:@"password="], @"LoTW errors redact the full URL");
+    }
+    NSCAssert(LoTWFixtureRequests==3, @"Every transport test was intercepted");
+    __block NSURLRequest *redirect=[NSURLRequest requestWithURL:[NSURL URLWithString:@"https://example.invalid/"]];
+    NSURLSession *redirectSession=[NSURLSession sessionWithConfiguration:configuration];
+    NSURLSessionDataTask *unstartedTask=[redirectSession dataTaskWithRequest:redirect];
+    NSHTTPURLResponse *redirectResponse=[[NSHTTPURLResponse alloc] initWithURL:url statusCode:302 HTTPVersion:@"HTTP/1.1" headerFields:nil];
+    [[TX500LoTWReportTransport new] URLSession:redirectSession task:unstartedTask willPerformHTTPRedirection:redirectResponse newRequest:redirect
+        completionHandler:^(NSURLRequest *request) { redirect=request; }];
+    [redirectSession invalidateAndCancel];
+    NSCAssert(!redirect, @"LoTW credentials never follow redirects");
+    NSLog(@"PASS: Private LoTW transport, HTTP errors, redaction and redirects verified without network access.");
+}
+
 // Counts calls to the cloud upload while a test runs, and uploads nothing. Installed only
 // around the checks that need it, and restored afterwards.
 static NSUInteger CloudUploadCalls = 0;
@@ -356,6 +417,7 @@ int main(int argc, const char * argv[]) {
         NSUserDefaults *testDefaults = [[NSUserDefaults alloc] initWithSuiteName:preferencesSuite];
         Method defaultsMethod = class_getClassMethod(NSUserDefaults.class, @selector(standardUserDefaults));
         IMP realDefaults = method_setImplementation(defaultsMethod, imp_implementationWithBlock(^NSUserDefaults *{ return testDefaults; }));
+        TestPrivateLoTWTransport();
         TestUploadPrivacy();
         TestPrivacyControls();
 

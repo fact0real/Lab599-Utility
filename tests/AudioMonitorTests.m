@@ -54,6 +54,13 @@ int main(int argc, const char * argv[]) {
             NSLog(@"INFO: Running in standalone / test-bench audio mode.");
         }
 
+        engine.selectedInputDeviceUID = @"disconnected-fixture-input";
+        [engine refreshDevices];
+        NSError *missingInputError=nil;
+        AssertTrue([engine.selectedInputDeviceUID isEqual:@"disconnected-fixture-input"] &&
+            ![engine startMonitoring:&missingInputError] && missingInputError != nil,
+            @"A missing selected input is preserved and fails before opening any microphone");
+
         // 3. Test Filter Presets
         [engine applyPreset:TX500AudioFilterPresetCWNarrow];
         AssertTrue(engine.lowCutHz == 550.0f, @"CW low cut 550 Hz");
@@ -111,6 +118,14 @@ int main(int argc, const char * argv[]) {
         [engine processRawAudioSamples:testSamples count:480];
         AssertTrue(engine.recordingBytes > 44, @"Audio data written to WAV file");
 
+        float checkpointSamples[48000] = {0};
+        [engine processRawAudioSamples:checkpointSamples count:48000];
+        NSData *openWAV=[NSData dataWithContentsOfFile:engine.currentRecordingPath];
+        uint32_t openDataSize=0, openRIFFSize=0;
+        memcpy(&openDataSize, (const uint8_t *)openWAV.bytes+40, 4);
+        memcpy(&openRIFFSize, (const uint8_t *)openWAV.bytes+4, 4);
+        AssertTrue(engine.isRecording && openDataSize>0 && openRIFFSize==openDataSize+36 && openDataSize+44<=openWAV.length,
+            @"A running WAV contains a readable checkpoint before Stop or a crash");
         [engine stopRecording];
         AssertTrue(!engine.isRecording, @"Recording stopped");
 
@@ -212,6 +227,13 @@ int main(int argc, const char * argv[]) {
 
         [ctrl setRadioMode:@"USB"];
         AssertTrue([ctrl.currentMode isEqualToString:@"USB"], @"Mode switched to USB");
+
+        __block NSUInteger rejectedModeCommands=0;
+        ctrl.serialCommandSender=^BOOL(NSString *command) { (void)command; rejectedModeCommands++; return YES; };
+        [ctrl setRadioMode:@"CWR"];
+        [ctrl setRadioMode:@"Unknown"];
+        AssertTrue(rejectedModeCommands==0 && [ctrl.currentMode isEqual:@"USB"], @"Unsupported bookmark modes leave CAT and the current mode untouched");
+        ctrl.serialCommandSender=nil;
 
         // Bookmark frequency
         [ctrl bookmarkCurrentFrequencyWithLabel:@"Test Calling Channel"];

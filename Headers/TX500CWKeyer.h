@@ -81,7 +81,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 // Methods
 + (nullable NSString *)findBestUSBAudioOutputUID;
-- (void)transmitText:(NSString *)text targetCall:(NSString *)call rst:(NSString *)rst name:(NSString *)name qth:(NSString *)qth;
+- (BOOL)transmitText:(NSString *)text targetCall:(NSString *)call rst:(NSString *)rst name:(NSString *)name qth:(NSString *)qth;
 - (void)abortTransmission;
 - (void)triggerMacroAtIndex:(NSInteger)index targetCall:(NSString *)call rst:(NSString *)rst name:(NSString *)name qth:(NSString *)qth;
 - (BOOL)startContinuousCarrierWithPitchHz:(double)pitch;

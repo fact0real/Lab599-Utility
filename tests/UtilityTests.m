@@ -386,6 +386,13 @@ int main(void) { @autoreleasepool {
     NSArray<TXMemoryChannel *> *importedMHz = TXImportMemoryFromCSV(mhzCSV, &csvErr);
     Check(importedMHz != nil && importedMHz[5].frequency == 21074000 && importedMHz[6].frequency == 28060000, @"CSV MHz parsing");
 
+    NSDictionary *report=nil;
+    NSArray *twoColumns=TXImportMemoryFromCSVWithReport(@"0,7074000,USB\n1,14074000\n2,21074000\n3,21074000,UNKNOWN\n4,nan,USB\n101,14074000\nbroken\n",&report,&csvErr);
+    Check(twoColumns && ((TXMemoryChannel *)twoColumns[1]).frequency==14074000 && ((TXMemoryChannel *)twoColumns[2]).frequency==21074000,
+          @"CSV channel/frequency pairs import without a mode column");
+    Check([report[@"imported"] integerValue]==3 && [report[@"skipped"] integerValue]==4 && [report[@"reasons"] count]==4,
+          @"CSV reports invalid mode, nonfinite frequency, invalid channel and malformed row");
+
     // Test Corrupt CSV rejection
     Check(TXImportMemoryFromCSV(@"", &csvErr) == nil, @"Empty CSV rejected");
     Check(TXImportMemoryFromCSV(@"garbage,not,a,frequency\n", &csvErr) == nil, @"Invalid CSV rejected");

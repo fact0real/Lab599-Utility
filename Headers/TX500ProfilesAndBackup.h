@@ -10,6 +10,8 @@ NS_ASSUME_NONNULL_BEGIN
 NSString *TXExportMemoryToCSV(NSArray<TXMemoryChannel *> *channels);
 NSArray<TXMemoryChannel *> * _Nullable TXImportMemoryFromCSV(NSString *csvString, NSError **error);
 
+NSArray<TXMemoryChannel *> * _Nullable TXImportMemoryFromCSVWithReport(NSString *csvString, NSDictionary * _Nullable * _Nullable report, NSError **error);
+
 // =============================================================================
 // Operating Profiles
 // =============================================================================

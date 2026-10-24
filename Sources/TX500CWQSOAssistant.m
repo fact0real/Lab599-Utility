@@ -424,6 +424,14 @@
 }
 
 - (void)advanceQSOStepWithAction:(void (^)(NSString *macroToTransmit))transmitBlock {
+    [self advanceQSOStepWithAcceptedAction:^BOOL(NSString *macro) {
+        if (!transmitBlock) return NO;
+        transmitBlock(macro);
+        return YES;
+    }];
+}
+
+- (void)advanceQSOStepWithAcceptedAction:(BOOL (^)(NSString *macroToTransmit))transmitBlock {
     // Without the operator's callsign no step is sent and the QSO does not move
     // on. The {MYCALL} token lets the keyer refuse it and say why.
     if ([self.myCallsign stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].length == 0 &&
@@ -433,15 +441,15 @@
     }
     NSString *macro = [self suggestedActionMacro];
 
+    BOOL needsText = self.qsoState != TX500QSOStateCallingCQ && self.qsoState != TX500QSOStateCompleted;
+    if (needsText && (!transmitBlock || !transmitBlock(macro))) return;
     switch (self.qsoState) {
         case TX500QSOStateIdle:
             self.activeQSOStartedInPractice = self.practiceModeActive && self.practiceModeActive();
             if (self.activeTargetCallsign.length > 0) {
                 self.qsoState = TX500QSOStateAnsweringCQ;
-                if (transmitBlock) transmitBlock(macro);
             } else {
                 self.qsoState = TX500QSOStateCallingCQ;
-                if (transmitBlock) transmitBlock(macro);
             }
             break;
         case TX500QSOStateCallingCQ:
@@ -450,18 +458,14 @@
             break;
         case TX500QSOStateAnsweringCQ:
             self.qsoState = TX500QSOStateExchangeReport;
-            if (transmitBlock) transmitBlock(macro);
             break;
         case TX500QSOStateExchangeReport:
             self.qsoState = TX500QSOStateSigningOff;
-            if (transmitBlock) transmitBlock(macro);
             break;
         case TX500QSOStateExchangeInfo:
             self.qsoState = TX500QSOStateSigningOff;
-            if (transmitBlock) transmitBlock(macro);
             break;
         case TX500QSOStateSigningOff:
-            if (transmitBlock) transmitBlock(macro);
             [self logCurrentQSO];
             self.qsoState = TX500QSOStateCompleted;
             break;

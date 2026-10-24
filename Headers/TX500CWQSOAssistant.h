@@ -89,6 +89,8 @@ typedef NS_ENUM(NSInteger, TX500QSOState) {
 - (void)selectAndAnswerStation:(TX500CWHeardStation *)station;
 - (void)startCallingCQ;
 - (void)advanceQSOStepWithAction:(void (^)(NSString *macroToTransmit))transmitBlock;
+/// Advance only after the keyer accepts the text. Acceptance does not assert over-air delivery.
+- (void)advanceQSOStepWithAcceptedAction:(BOOL (^)(NSString *macroToTransmit))transmitBlock;
 - (void)resetQSOState;
 - (void)logCurrentQSO;
 

@@ -1,3 +1,4 @@
+#import "TX500AudioInputPrivacy.h"
 //
 //  TX500FT8AudioEngine.m
 //  Lab599 Utility
@@ -591,15 +592,11 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
 
     // Update connection flags
     BOOL hasPreferredUSBAudioIn = NO, hasPreferredUSBAudioOut = NO;
-    NSString *bestPreferredUSBAudioInUID = nil, *bestPreferredUSBAudioOutUID = nil;
-    NSString *bestUSBInUID = nil, *bestUSBOutUID = nil;
+    NSString *bestPreferredUSBAudioOutUID = nil;
+    NSString *bestUSBOutUID = nil;
     for (NSDictionary *d in inputs) {
         if ([d[@"isPreferredUSBAudio"] isEqualToString:@"YES"]) {
             hasPreferredUSBAudioIn = YES;
-            if (!bestPreferredUSBAudioInUID) bestPreferredUSBAudioInUID = d[@"uid"];
-        }
-        if ([d[@"isUSB"] isEqualToString:@"YES"] && !bestUSBInUID) {
-            bestUSBInUID = d[@"uid"];
         }
     }
     for (NSDictionary *d in outputs) {
@@ -614,32 +611,10 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
     _isPreferredUSBAudioInputConnected = hasPreferredUSBAudioIn;
     _isPreferredUSBAudioOutputConnected = hasPreferredUSBAudioOut;
 
-    // Check if current selection is valid or needs upgrade:
+    // An input must be explicitly selected; never substitute the Mac microphone or another USB input.
     BOOL selectedInValid = NO;
-    BOOL currentInIsVirtual = NO;
-    for (NSDictionary *d in inputs) {
-        if ([d[@"uid"] isEqualToString:_selectedInputDeviceUID]) {
-            selectedInValid = YES;
-            if ([d[@"isVirtual"] isEqualToString:@"YES"]) {
-                currentInIsVirtual = YES;
-            }
-            break;
-        }
-    }
-
-    // If no device selected, invalid, or currently selected is a virtual driver and a real radio USB is available:
-    // A USB audio interface receives a new CoreAudio UID after a hot unplug.
-    // A preserved UID is therefore only a preference, never a reason to keep
-    // an unavailable device selected. Rebind to the best physical interface
-    // immediately so reconnecting the cable does not leave FT8 unusable.
-    if (!self.preserveDeviceSelection && (!selectedInValid || currentInIsVirtual || !_selectedInputDeviceUID)) {
-        if (bestPreferredUSBAudioInUID) {
-            _selectedInputDeviceUID = bestPreferredUSBAudioInUID;
-        } else if (bestUSBInUID) {
-            _selectedInputDeviceUID = bestUSBInUID;
-        } else if (inputs.count > 0) {
-            _selectedInputDeviceUID = inputs.firstObject[@"uid"];
-        }
+    for (NSDictionary *device in inputs) {
+        if ([device[@"uid"] isEqualToString:_selectedInputDeviceUID] && ![device[@"uid"] isEqual:@"default"]) selectedInValid = YES;
     }
 
     // Same for output
@@ -669,7 +644,7 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
         }
     }
 
-    if(self.preserveDeviceSelection && self.isMonitoring && !self.isSimulationMode && (!selectedInValid || !selectedOutValid)) {
+    if(self.isMonitoring && !self.isSimulationMode && (!selectedInValid || (self.preserveDeviceSelection && !selectedOutValid))) {
         [self disarmTransmit]; [self stopTuneCarrier]; [self stopMonitoring];
         if(self.logHandler) self.logHandler(@"Station audio device disconnected. Monitoring and transmission stopped.");
     }
@@ -691,15 +666,16 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
 
     [self resetSWRReading];
 
-    if(!self.isSimulationMode && self.preserveDeviceSelection) {
+    if(!self.isSimulationMode) {
         BOOL inputOK=NO, outputOK=NO;
-        for(NSDictionary *d in self.inputDevices) if([d[@"uid"] isEqual:self.selectedInputDeviceUID]) inputOK=YES;
+        for(NSDictionary *d in self.inputDevices) if([d[@"uid"] isEqual:self.selectedInputDeviceUID] && ![d[@"uid"] isEqual:@"default"]) inputOK=YES;
         for(NSDictionary *d in self.outputDevices) if([d[@"uid"] isEqual:self.selectedOutputDeviceUID]) outputOK=YES;
-        if(!inputOK || !outputOK) {
+        if(!inputOK || (self.preserveDeviceSelection && !outputOK)) {
             if(error) *error=[NSError errorWithDomain:@"TX500AudioErrorDomain" code:1 userInfo:@{NSLocalizedDescriptionKey:@"The station's radio input or transmit output is unavailable. Select connected audio devices in Station Profiles."}];
             return NO;
         }
     }
+    if(!self.isSimulationMode && !TX500ConfirmSelectedInput(self.selectedInputDeviceUID, error)) return NO;
     if(!self.isSimulationMode && ![self setupAudioHardware:error]) return NO;
     // The station controller requests DIG mode asynchronously before monitoring.
     // Do not run a second synchronous CAT command on the UI thread here: a

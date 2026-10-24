@@ -642,8 +642,10 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
     // 0 Hz means the radio did not answer FA;. A frequency known before is kept; with none,
     // the frequency and band stay unknown (never a guessed one).
     if (freqHz == 0 && self.currentDialFrequencyHz > 0) {
+        self.assistant.currentFrequencyHz = 0;
+        self.assistant.currentBand = @"";
         if (self.logHandler)
-            self.logHandler([NSString stringWithFormat:@"Radio frequency unavailable: keeping the last known %.3f MHz.",
+            self.logHandler([NSString stringWithFormat:@"Radio frequency unavailable: keeping the last known %.3f MHz for display only; QSO logging waits for a verified frequency.",
                              (double)self.currentDialFrequencyHz / 1e6]);
     } else {
         [self applyDialFrequencyHz:freqHz];
@@ -1984,7 +1986,7 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
         return;
     }
     __weak typeof(self) weakSelf = self;
-    [self.assistant advanceQSOStepWithAction:^(NSString * _Nonnull macroToTransmit) {
+    [self.assistant advanceQSOStepWithAcceptedAction:^BOOL(NSString * _Nonnull macroToTransmit) {
         typeof(self) strongSelf = weakSelf;
         if (strongSelf && macroToTransmit.length > 0) {
             [strongSelf stopManualTune];
@@ -1992,12 +1994,13 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
             // A step the keyer refuses (no callsign) leaves the field alone; the console says why.
             if (![strongSelf.keyer templateNeedsMissingCallsign:macroToTransmit])
                 strongSelf.txInputField.stringValue = macroToTransmit;
-            [strongSelf.keyer transmitText:macroToTransmit
+            return [strongSelf.keyer transmitText:macroToTransmit
                                 targetCall:strongSelf.assistant.activeTargetCallsign
                                        rst:strongSelf.assistant.activeRstSent
                                       name:strongSelf.assistant.activeName
                                        qth:strongSelf.assistant.activeQTH];
         }
+        return NO;
     }];
 }
 
@@ -2299,13 +2302,21 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
                 uiSelf.txMeterSilentPolls = 0;
             } else if (pwrReply == nil && swrReply == nil) {
                 // Three silent polls in a row: stop asking until the next transmission.
-                // The meters keep what they show; the transmission itself is not touched.
+                // Stale meter readings must never remain presented as current telemetry.
                 uiSelf.txMeterSilentPolls++;
                 if (uiSelf.txMeterSilentPolls >= 3 && uiSelf.txMeterPollingTimer) {
                     [uiSelf.txMeterPollingTimer invalidate];
                     uiSelf.txMeterPollingTimer = nil;
+                    uiSelf.txPowerLabel.stringValue = @"⚡ PWR: —";
+                    uiSelf.txSwrLabel.stringValue = @"📶 SWR: —";
+                    uiSelf.txPowerLabel.textColor = NSColor.secondaryLabelColor;
+                    uiSelf.txSwrLabel.textColor = NSColor.secondaryLabelColor;
+                    uiSelf.txPowerMeterBar.doubleValue = 0;
+                    uiSelf.txSwrMeterBar.doubleValue = 0;
+                    uiSelf.liveTXPowerWatts = NAN;
+                    uiSelf.liveTXSWR = NAN;
                     if (uiSelf.logHandler) {
-                        uiSelf.logHandler(@"[CW Station] PWR/SWR meters: no reply from the radio; polling stopped until the next transmission.");
+                        uiSelf.logHandler(@"[CW Station] PWR/SWR readings are no longer current; no reply from the radio; polling stopped until the next transmission. This CW tab does not stop TX on high SWR; watch the radio meter.");
                     }
                 }
             }

@@ -718,12 +718,19 @@ static NSString *SSTVSize(double bytes) {
     e.onNotice = ^(TX500SSTVNotice *notice) {
         TX500SSTVStationController *s = weakSelf;
         if (!s || !notice.text.length) return;
-        if (weakEngine == s.engine) [s readCATNow];                      // the radio's, not a practice file's
-        s.progressLabel.stringValue = notice.text;
+        if (weakEngine == s.engine) {
+            [s readCATNow];
+            s.progressLabel.stringValue = notice.text;
+        } else {
+            s.reviewLabel.stringValue = [@"Practice: " stringByAppendingString:notice.text];
+        }
         [s log:notice.text];
     };
     e.onStopped = ^{
         TX500SSTVStationController *s=weakSelf;
+        if(weakEngine != s.engine && [s.reviewLabel.stringValue.lowercaseString containsString:@"decoding"]) {
+            s.reviewLabel.stringValue = @"Practice file finished; no complete picture was decoded. Check the mode or choose another WAV.";
+        }
         if(weakEngine==s.engine && s.engine.lastInputFailure.length) {
             s.enabled=NO;
             s.progressLabel.stringValue=s.engine.lastInputFailure;

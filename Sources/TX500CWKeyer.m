@@ -801,7 +801,7 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
     return YES;
 }
 
-- (void)transmitText:(NSString *)text targetCall:(NSString *)call rst:(NSString *)rst name:(NSString *)name qth:(NSString *)qth {
+- (BOOL)transmitText:(NSString *)text targetCall:(NSString *)call rst:(NSString *)rst name:(NSString *)name qth:(NSString *)qth {
     @synchronized (self) {
         // Anything the operator sends (Send, a macro, an Answer, the next step) starts or continues a
         // QSO: Auto-CQ must not call again on top of it.
@@ -809,17 +809,17 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
             [self stopAutoCQ];
             if (self.logHandler) self.logHandler(@"Auto-CQ stopped: the operator is sending.");
         }
-        if ([self blocksMissingCallsignForTemplate:text]) return;
+        if ([self blocksMissingCallsignForTemplate:text]) return NO;
         NSString *expanded = [self expandTemplate:text targetCall:call rst:rst name:name qth:qth];
-        if (expanded.length == 0) return;
+        if (expanded.length == 0) return NO;
         if ([expanded containsString:@"{"]) {
             if (self.logHandler) self.logHandler(@"[CW TX blocked] A macro value is missing (CALL, RST, NAME or QTH). Set it before sending.");
-            return;
+            return NO;
         }
         NSCharacterSet *supported = [NSCharacterSet characterSetWithCharactersInString:@"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 /?=+,.\n\r\t"];
         if (expanded.length > 4096 || [expanded rangeOfCharacterFromSet:supported.invertedSet].location != NSNotFound) {
             if (self.logHandler) self.logHandler(@"[CW TX blocked] Use supported Morse letters, digits and punctuation; maximum 4096 characters.");
-            return;
+            return NO;
         }
         expanded = [[expanded componentsSeparatedByCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet] componentsJoinedByString:@" "];
         NSInteger limitWPM = fmax(3, fmin(45, self.wpm));
@@ -827,13 +827,13 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
         NSTimeInterval messageLimit = isfinite(self.maximumTransmitSeconds) && self.maximumTransmitSeconds > 0 ? MIN(120.0, self.maximumTransmitSeconds) : 120.0;
         if (limitEstimate > messageLimit) {
             if (self.logHandler) self.logHandler([NSString stringWithFormat:@"[CW TX blocked] %.0f s at %ld WPM is longer than the %.0f s transmit limit: shorten the text or raise the speed.", limitEstimate, (long)limitWPM, messageLimit]);
-            return;
+            return NO;
         }
 
         [self abortTransmission];
         // No keying before the radio's audio output is open and running (practice opens none).
         BOOL practice = self.practiceModeActive && self.practiceModeActive();
-        if (!practice && ![self ensureRadioAudioReady]) return;
+        if (!practice && ![self ensureRadioAudioReady]) return NO;
         _activeTransmissionWasPractice = practice;
         NSUInteger token=self.transmissionGeneration;
         self.isTransmitting = YES;
@@ -864,7 +864,7 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
             BOOL ok = self.serialCommandSender(cmd);
             if (!ok) {
                 [self abortTransmission];
-                return;
+                return NO;
             }
         }
 
@@ -915,7 +915,9 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
         } @catch (NSException *exception) {
             [self abortTransmission];
             if (self.logHandler) self.logHandler([NSString stringWithFormat:@"CW audio failed; RX requested: %@", exception.reason]);
+            return NO;
         }
+        return self.isTransmitting;
     }
 }
 

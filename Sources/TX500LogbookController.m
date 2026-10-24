@@ -11,6 +11,60 @@
 #import "TX500WebAuthenticatorController.h"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
+// This request contains LoTW credentials in its documented query parameters. Keep it out of
+// shared caches/cookies and refuse redirects; never return URLSession's URL-bearing errors.
+@interface TX500LoTWReportTransport : NSObject <NSURLSessionTaskDelegate>
++ (NSURLSessionConfiguration *)privateConfiguration;
++ (void)fetchURL:(NSURL *)url configuration:(NSURLSessionConfiguration *)configuration
+     completion:(void (^)(NSData *data, NSError *error))completion;
+@end
+
+@implementation TX500LoTWReportTransport
++ (NSURLSessionConfiguration *)privateConfiguration {
+    NSURLSessionConfiguration *configuration = NSURLSessionConfiguration.ephemeralSessionConfiguration;
+    configuration.URLCache = nil;
+    configuration.HTTPCookieStorage = nil;
+    configuration.HTTPShouldSetCookies = NO;
+    configuration.URLCredentialStorage = nil;
+    configuration.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
+    configuration.timeoutIntervalForRequest = 30;
+    configuration.timeoutIntervalForResource = 90;
+    return configuration;
+}
++ (void)fetchURL:(NSURL *)url configuration:(NSURLSessionConfiguration *)configuration
+     completion:(void (^)(NSData *data, NSError *error))completion {
+    if (![url.scheme.lowercaseString isEqualToString:@"https"] ||
+        ![url.host.lowercaseString isEqualToString:@"lotw.arrl.org"] ||
+        ![url.path isEqualToString:@"/lotwuser/lotwreport.adi"] || url.user || url.password ||
+        (url.port && url.port.integerValue != 443)) {
+        completion(nil, [NSError errorWithDomain:@"TX500LogbookErrorDomain" code:21
+            userInfo:@{NSLocalizedDescriptionKey:@"LoTW request address is invalid."}]);
+        return;
+    }
+    TX500LoTWReportTransport *delegate = [TX500LoTWReportTransport new];
+    NSURLSession *session = [NSURLSession sessionWithConfiguration:configuration delegate:delegate delegateQueue:nil];
+    NSURLSessionDataTask *task = [session dataTaskWithURL:url completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        NSInteger status = [response isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)response).statusCode : 0;
+        if (error || status < 200 || status >= 300) {
+            NSString *message = error ? @"LoTW download failed. Check the connection and try again."
+                : [NSString stringWithFormat:@"LoTW download failed (HTTP %ld).", (long)status];
+            completion(nil, [NSError errorWithDomain:@"TX500LogbookErrorDomain" code:22
+                userInfo:@{NSLocalizedDescriptionKey:message}]);
+        } else {
+            completion(data, nil);
+        }
+        [session finishTasksAndInvalidate];
+    }];
+    [task resume];
+}
+- (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task
+    willPerformHTTPRedirection:(NSHTTPURLResponse *)response newRequest:(NSURLRequest *)request
+    completionHandler:(void (^)(NSURLRequest *))completionHandler {
+    (void)session; (void)task; (void)response; (void)request;
+    completionHandler(nil);
+}
+@end
+
 @interface TX500LogbookController ()
 
 @property (nonatomic, strong, readwrite) NSView *view;
@@ -2169,11 +2223,8 @@ static NSString *const TX500LogbookNoBand = @"—";
                                         userInfo:@{NSLocalizedDescriptionKey: @"LoTW download suppressed in test mode."}]);
         return;
     }
-    NSURLSessionDataTask *task = [NSURLSession.sharedSession dataTaskWithURL:url completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-        (void)response;
-        completion(data, error);
-    }];
-    [task resume];
+    [TX500LoTWReportTransport fetchURL:url configuration:[TX500LoTWReportTransport privateConfiguration]
+                           completion:completion];
 }
 
 // One sync at a time: a press while one runs (its uploads or its LoTW download) does nothing, and says so

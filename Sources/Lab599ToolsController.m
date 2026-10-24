@@ -2838,7 +2838,8 @@ static NSString *StudioTimestamp(NSDate *date) {
             return;
         }
         NSError *parseError = nil;
-        NSArray<TXMemoryChannel *> *imported = TXImportMemoryFromCSV(csv, &parseError);
+        NSDictionary *importReport=nil;
+        NSArray<TXMemoryChannel *> *imported = TXImportMemoryFromCSVWithReport(csv, &importReport, &parseError);
         if (!imported) {
             [self alert:@"CSV Parsing Failed" message:parseError.localizedDescription];
             return;
@@ -2856,7 +2857,9 @@ static NSString *StudioTimestamp(NSDate *date) {
         for (TXMemoryChannel *ch in imported) if (ch.frequency > 0) used++;
         NSString *msg = [NSString stringWithFormat:@"Imported %lu active channels from %@ into the bank. Click 'Write 100 Channels…' to write them to your transceiver.", (unsigned long)used, panel.URL.lastPathComponent];
         if (self.log) self.log(msg);
-        [self alert:@"CSV Import Successful" message:msg];
+        NSUInteger skipped=[importReport[@"skipped"] unsignedIntegerValue];
+        if(skipped) msg=[msg stringByAppendingFormat:@"\n\n%lu row(s) skipped:\n%@",(unsigned long)skipped,[importReport[@"reasons"] componentsJoinedByString:@"\n"]];
+        [self alert:skipped ? @"CSV Import: Review Skipped Rows" : @"CSV Import Successful" message:msg];
     }];
 }
 

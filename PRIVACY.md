@@ -28,7 +28,7 @@ Unknown fields, `APP_*`, `*_INTL`, `MY_CALL`, and cross-service upload/confirmat
 ## Other operator-enabled connections
 
 - QRZ (`xmldata.qrz.com`) and HamQTH (`www.hamqth.com`) receive requested callsigns and account/session credentials on lookup/enrichment. Local saving can retain returned contact details. HamQTH's current login URL carries its username/password in query parameters; avoid recording or sharing request URLs. No new claim about provider POST support is made here.
-- LoTW confirmation downloads (`lotw.arrl.org`) use the configured account and date filters. The published download URL includes credentials; URLs must not be copied into shared diagnostics.
+- LoTW confirmation downloads (`lotw.arrl.org`) use the configured account and date filters. Its documented GET URL includes credentials. The download now uses an ephemeral session without caches, cookies or shared credential storage, refuses redirects, checks HTTP success and returns redacted errors. Never copy the full URL into diagnostics.
 - PSK Reporter is opt-in and can receive station identity, locator and reception reports. DX cluster connects after the operator's Connect action, sends the login callsign and commands/spots, and may use unencrypted TCP.
 - Web authentication and Help/reference pages can load browser cookies, scripts, images and third-party subresources. Opening an external link uses the selected browser's network behavior.
 - Radio control and local services use the configured ports/endpoints. Selecting a remote host does not make that connection local. Firmware transfers and radio transmission have their own actions and safety interlocks.
@@ -43,3 +43,5 @@ project appcast and GitHub release hosts for approved downloads. The User-Agent
 identifies the application/version. No operator callsign, locator, logbook or
 cloud credentials are sent. Sparkle system profiling is disabled. Download and
 installation are user-controlled; feeds and archives must be signed.
+
+FT8 and Live Audio require an explicitly selected receive input. A disconnected UID is preserved and fails closed; the system default and heuristic USB suggestions no longer open an unselected input. Starting a built-in input requires a separate confirmation because it hears the room. Test mode refuses that input without opening it.

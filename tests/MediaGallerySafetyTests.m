@@ -1,6 +1,7 @@
 #import <Cocoa/Cocoa.h>
 #import "TX500SSTVStationController.h"
 #import "TX500FaxStationController.h"
+#import "TX500SSTVRecordingStore.h"
 
 @interface TX500SSTVStationController (GalleryTests)
 - (void)keepInGallery:(TX500SSTVPicture *)picture;
@@ -80,6 +81,25 @@ int main(void) {
         [NSApplication sharedApplication];
         NSURL *root = [NSURL fileURLWithPath:@(rootPath) isDirectory:YES];
         TestResponsiveMedia(root);
+            // Logged receptions are evidence attached to a QSO, even without a Keep mark.
+            NSURL *loggedRoot=[root URLByAppendingPathComponent:@"logged-protection" isDirectory:YES];
+            NSURL *loggedPictures=[loggedRoot URLByAppendingPathComponent:@"pictures" isDirectory:YES];
+            [NSFileManager.defaultManager createDirectoryAtURL:loggedPictures withIntermediateDirectories:YES attributes:nil error:nil];
+            TX500SSTVRecordingStore *loggedStore=[[TX500SSTVRecordingStore alloc] initWithDirectory:[loggedRoot URLByAppendingPathComponent:@"audio"] pictureDirectory:loggedPictures];
+            TX500SSTVStoredReception *loggedReception=[loggedStore addRecording:[[TX500SSTVRecording alloc] initWithSamples:[NSMutableData dataWithLength:24000] sampleRate:12000 startTime:0]];
+            NSURL *loggedPNG=[loggedPictures URLByAppendingPathComponent:@"logged.png"];
+            [[NSMutableData dataWithLength:1000] writeToURL:loggedPNG atomically:YES];
+            [loggedStore addPictureNamed:@"logged.png" toReception:loggedReception];
+            [loggedStore markLogged:loggedReception];
+            loggedStore.diskCapBytes=1;
+            Check(loggedReception.onDisk && loggedReception.pictureBytes==1000 && !loggedReception.keep && [NSFileManager.defaultManager fileExistsAtPath:loggedPNG.path],
+                @"A quota reduction preserves logged audio and pictures without an explicit Keep mark");
+            TX500SSTVRecordingStore *loggedReload=[[TX500SSTVRecordingStore alloc] initWithDirectory:loggedStore.directory pictureDirectory:loggedPictures];
+            loggedReload.diskCapBytes=1;
+            Check(loggedReload.receptions.firstObject.logged && loggedReload.receptions.firstObject.onDisk && loggedReload.receptions.firstObject.pictureBytes==1000,
+                @"Logged media protection survives reopening and quota enforcement");
+
+
         TX500SSTVStationController *sstv = [TX500SSTVStationController new];
         sstv.galleryDirectory = [root URLByAppendingPathComponent:@"SSTV" isDirectory:YES];
         sstv.defaults = [[NSUserDefaults alloc] initWithSuiteName:NSUUID.UUID.UUIDString];

@@ -344,6 +344,21 @@ int main(void) {
         Check(LitPODots(unread) > 0, @"Demo Mode still simulates the PO bar");
         fakePTReply = @"PT1;";
         fakeReplies[@"SM0;"] = @"SM00012;";
+        fakeReplies[@"RA;"] = @"RA0100;";
+        fakeReplies[@"LK;"] = @"LK10;";
+        RefreshFromFakeRadio(honest);
+        Check(honest.screenState.attenuator && honest.screenState.isLocked, @"Manufacturer RA two-digit state and LK status are parsed");
+        @synchronized(fakeRadioCommands) { [fakeRadioCommands removeAllObjects]; }
+        [honest handleChassisControlPress:TX500ControlLock atChassisPoint:NSZeroPoint];
+        BOOL unlockedSent=SpinUntil(^BOOL{ @synchronized(fakeRadioCommands) { return [fakeRadioCommands containsObject:@"LK00;"]; } },3);
+        Check(unlockedSent, @"Lock button sends the documented unlock command from a known locked state");
+        SpinUntil(^BOOL{ return ![[honest valueForKey:@"isPolling"] boolValue]; },10);
+        fakeReplies[@"LK;"] = @"LK00;";
+        RefreshFromFakeRadio(honest);
+        @synchronized(fakeRadioCommands) { [fakeRadioCommands removeAllObjects]; }
+        [honest handleChassisControlPress:TX500ControlLock atChassisPoint:NSZeroPoint];
+        BOOL lockedSent=SpinUntil(^BOOL{ @synchronized(fakeRadioCommands) { return [fakeRadioCommands containsObject:@"LK10;"]; } },3);
+        Check(lockedSent, @"Lock button sends the documented lock command from a known unlocked state");
         fakeReplies[@"FA;"] = @"FA00014074000;";
         RefreshFromFakeRadio(honest);
         [honest renderAndUpdateDisplay];

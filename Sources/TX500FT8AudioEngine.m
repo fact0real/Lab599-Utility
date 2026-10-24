@@ -929,6 +929,13 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
 
 #pragma mark - Decode Pipeline
 
++ (float)decodedDTForObservedStart:(double)observed slotStart:(double)slotStart slotPeriod:(double)period protocol:(tx500_ft8_protocol_t)protocol {
+    // Measured decoder window bias +0.200 s; WSJT-X FT8 nominal start is +0.500 s.
+    double correction=protocol==TX500_FT8_PROTOCOL_FT8 ? 0.700 : 0.0;
+    double dt=observed-slotStart-correction;
+    return (float)(dt-period*round(dt/period));
+}
+
 - (void)triggerSlotDecodeWithParity:(NSInteger)parity {
     if (self.isSimulationMode) {
         [self executeSimulationDecodeForParity:parity];
@@ -977,8 +984,7 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
             NSString *raw = [NSString stringWithUTF8String:results[i].text];
             if (raw.length > 0) {
                 double observedStartUTC = sampleStartUTC + results[i].time_sec;
-                float calibratedDT = (float)(observedStartUTC - slotStartEpoch);
-                calibratedDT = (float)(calibratedDT - slotPeriod * round(calibratedDT / slotPeriod));
+                float calibratedDT=[TX500FT8AudioEngine decodedDTForObservedStart:observedStartUTC slotStart:slotStartEpoch slotPeriod:slotPeriod protocol:proto];
                 TX500FT8Message *msg = [TX500FT8Message messageWithRawText:raw
                                                                     freqHz:results[i].freq_hz
                                                                      snrDb:results[i].snr_db
@@ -1048,8 +1054,8 @@ static OSStatus FT8AudioHardwareDevicesListener(AudioObjectID inObjectID,
 
         NSMutableString *buffer = [NSMutableString string];
         for (TX500FT8Message *m in messages) {
-            NSString *call = m.callerCall ?: @"";
-            if (call.length == 0) continue;
+            NSString *call = [TX500FT8Message normalizedUsableCallsign:m.callerCall];
+            if (!call) continue;
             NSDate *d = m.timestamp ?: [NSDate date];
             NSString *qsoDate = [dateFmt stringFromDate:d];
             NSString *timeOn = [timeFmt stringFromDate:d];

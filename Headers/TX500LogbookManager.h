@@ -19,6 +19,7 @@ extern NSString * const TX500LogbookDidChangeNotification;
 @property (nonatomic, copy) NSString *callsign;
 @property (nonatomic, copy) NSString *qsoDate;      // YYYYMMDD (UTC)
 @property (nonatomic, copy) NSString *timeOn;       // HHMMSS (UTC)
+@property (nonatomic, copy, nullable) NSString *qsoDateOff;
 @property (nonatomic, copy, nullable) NSString *timeOff;      // HHMMSS (UTC)
 @property (nonatomic, copy) NSString *band;         // e.g. "20m", "40m"
 @property (nonatomic, assign) uint64_t frequencyHz;

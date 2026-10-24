@@ -117,6 +117,7 @@ typedef NS_ENUM(NSInteger, TX500SSTVNoticeKind) {
 @property (nonatomic, readonly) BOOL isLive;               // the radio: YES; a file: NO
 @property (nonatomic, readonly, copy) NSString *sourceName;
 @optional
+- (nullable NSString *)inputFailure;
 /// For audio recorded earlier (decoding again): when its samples were heard, as pairs
 /// @[sample offset, seconds since 1970], in order; each holds until the next. The pictures get
 /// the time they were really received, not the time of decoding. Without it: now.
@@ -159,6 +160,7 @@ typedef NS_ENUM(NSInteger, TX500SSTVNoticeKind) {
 @end
 
 @interface TX500SSTVEngine : NSObject
+@property (atomic, readonly, copy, nullable) NSString *lastInputFailure;
 @property (nonatomic) TX500SSTVModeChoice modeChoice;
 @property (nonatomic) TX500SSTVColourScale colourScale;
 @property (nonatomic) TX500SSTVScottieLayout scottieLayout;

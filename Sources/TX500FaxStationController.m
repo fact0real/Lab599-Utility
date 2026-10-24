@@ -4,6 +4,9 @@
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 
 @interface TX500FaxStationController ()
+@property (nonatomic, strong) NSButton *cancelDecodeButton;
+@property (nonatomic, strong) TX500FaxEngine *pendingDecode;
+@property (nonatomic) BOOL decodeInProgress;
 @property (nonatomic, readwrite) NSView *view;
 @property (nonatomic, readwrite) TX500FaxEngine *engine;
 @property (nonatomic, readwrite, copy, nullable) NSURL *fileURL;
@@ -181,6 +184,8 @@ static NSString *FaxThumbnailName(TX500FaxChart *c) {
     NSTextField *intro = FaxNote();
     intro.stringValue = @"Radiofax, files only for now: it decodes a WAV file you open; it does not listen to the radio yet. "
                         @"Receive only. A chart is no contact: nothing here is ever logged.";
+    self.cancelDecodeButton=[NSButton buttonWithTitle:@"Cancel decode" target:self action:@selector(cancelDecode:)];
+    self.cancelDecodeButton.hidden=YES;
     self.openButton = [NSButton buttonWithTitle:@"Open WAV…" target:self action:@selector(openClicked:)];
     self.againButton = [NSButton buttonWithTitle:@"Decode again" target:self action:@selector(againClicked:)];
     self.exportButton = [NSButton buttonWithTitle:@"Export…" target:self action:@selector(exportClicked:)];
@@ -229,7 +234,7 @@ static NSString *FaxThumbnailName(TX500FaxChart *c) {
 
     // the chart with its title, and its own buttons under it; Decode again goes with the options it applies
     NSStackView *left = FaxColumn(@[FaxTitle(@"Offline decoding (a WAV file)"), intro, self.errorLabel, self.practiceLabel, self.pictureView,
-                                    FaxRow(@[self.openButton, self.exportButton, self.saveButton, self.chartPopup]), self.folderLabel,
+                                    FaxRow(@[self.openButton, self.cancelDecodeButton, self.exportButton, self.saveButton, self.chartPopup]), self.folderLabel,
                                     FaxRow(@[[NSTextField labelWithString:@"Margin, after receiving:"], self.marginSlider, self.marginLabel]),
                                     self.marginNote, self.infoLabel, self.noticeLabel,
                                     FaxRow(@[[NSTextField labelWithString:@"This session's charts"], self.showChartsButton]), stripScroll], 8);
@@ -603,17 +608,60 @@ static NSString *FaxThumbnailName(TX500FaxChart *c) {
     [self openFileAtURL:panel.URL];
 }
 
+- (void)cancelDecode:(id)sender { (void)sender; self.pendingDecode.cancelRequested=YES; self.cancelDecodeButton.enabled=NO; }
+
 - (BOOL)openFileAtURL:(NSURL *)url {
-    NSError *err = nil;
-    if ([self decodeFileAtURL:url error:&err]) return YES;
-    [self sayError:err.localizedDescription ?: @"The file could not be read."];
-    return NO;
+    if(self.decodeInProgress) return NO;
+    [self applyChoices];
+    TX500FaxEngine *trial=[[TX500FaxEngine alloc] initWithPreviousDecodeCount:self.engine.decodes];
+    trial.deviationHz=self.engine.deviationHz; trial.lpm=self.engine.lpm; trial.ioc=self.engine.ioc;
+    trial.width=self.engine.width; trial.lineStart=self.engine.lineStart;
+    self.pendingDecode=trial; self.decodeInProgress=YES;
+    self.openButton.enabled=NO; self.againButton.enabled=NO;
+    self.cancelDecodeButton.hidden=NO; self.cancelDecodeButton.enabled=YES;
+    self.practiceLabel.stringValue=@"Decoding WAV… 0%";
+    __weak typeof(self) weakSelf=self;
+    __weak TX500FaxEngine *weakTrial=trial;
+    trial.onDecodeProgress=^(double fraction) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) self=weakSelf;
+            if(self.pendingDecode==weakTrial) self.practiceLabel.stringValue=[NSString stringWithFormat:@"Decoding WAV… %.0f%%",fraction*100];
+        });
+    };
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0), ^{
+        NSError *failure=nil;
+        BOOL ok=[trial decodeFileAtURL:url error:&failure];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            typeof(self) self=weakSelf; if(!self || self.pendingDecode!=trial) return;
+            trial.onDecodeProgress=nil;
+            self.pendingDecode=nil; self.decodeInProgress=NO;
+            self.openButton.enabled=YES; self.cancelDecodeButton.hidden=YES;
+            self.againButton.enabled=self.fileURL!=nil;
+            if(!ok || trial.cancelRequested) {
+                [self sayError:failure.localizedDescription ?: @"Decode cancelled."];
+                self.practiceLabel.stringValue=@"WAV decode stopped; previous chart retained.";
+                return;
+            }
+            self.engine=trial; self.fileURL=url;
+            [self sayError:nil]; [self sayDone:nil];
+            [self.chartPopup removeAllItems];
+            NSArray *charts=trial.charts;
+            for(NSUInteger k=0;k<charts.count;k++) [self.chartPopup addItemWithTitle:[NSString stringWithFormat:@"Chart %lu of %lu",(unsigned long)k+1,(unsigned long)charts.count]];
+            self.chartPopup.hidden=charts.count<2; self.againButton.enabled=YES;
+            self.practiceLabel.stringValue=[NSString stringWithFormat:@"%@: a file: practice, never logged.",url.lastPathComponent];
+            NSMutableArray *lines=[NSMutableArray array];
+            for(TX500FaxNotice *notice in trial.notices) { [lines addObject:notice.text]; if(self.logHandler) self.logHandler([@"[Fax] " stringByAppendingString:notice.text]); }
+            self.noticeLabel.stringValue=[lines componentsJoinedByString:@"\n"];
+            for(TX500FaxChart *chart in charts) [self addToStrip:chart];
+            [self showChart:charts.firstObject];
+        });
+    });
+    return YES;
 }
 
 - (void)againClicked:(id)sender {
     (void)sender;
-    NSError *err = nil;
-    if (![self decodeAgain:&err]) [self sayError:err.localizedDescription ?: @"It could not be decoded again."];
+    if(self.fileURL) [self openFileAtURL:self.fileURL];
 }
 
 // the list holds the open file's charts, in their order

@@ -19,20 +19,24 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
     NSUInteger _queryCount, _failureCount, _receiveFailureStreak;
     double _lastLatency;
     NSUInteger _releaseRequests; // guarded by @synchronized(self), including requests waiting for _lock
+    NSMutableArray *_releaseCompletions;
+    BOOL _asyncReleasePending;
+    NSString *_pendingSafetyNotice;
+    id _publishedTransport;
     Lab599Cancellation *_pendingRead; // the meter read in flight; guarded by @synchronized(self)
 }
 - (instancetype)init { if((self=[super init])) { _lock=[NSRecursiveLock new]; _owner=@""; _port=@""; _status=@"Disconnected"; _snapshot=@{}; _transmitSafetyNotice=@""; _safetyQueue=dispatch_queue_create("com.lab599.core.tx-safety", DISPATCH_QUEUE_SERIAL); [self cacheState]; } return self; }
 // UI readers never wait behind serial I/O. Publish immutable diagnostic snapshots
 // under a separate short lock; command decisions still use the transport lock.
 - (void)cacheState {
-    @synchronized(self) { _published=@{@"owner":_owner ?: @"",@"status":_status ?: @"",@"snapshot":[_snapshot copy] ?: @{},@"ownsTX":@(_ownsTX),@"safetyNotice":_transmitSafetyNotice ?: @"",@"queries":@(_queryCount),@"failures":@(_failureCount),@"latency":@(_lastLatency)}; }
+    @synchronized(self) { _publishedTransport=_transport; _published=@{@"owner":_owner ?: @"",@"status":_status ?: @"",@"snapshot":[_snapshot copy] ?: @{},@"ownsTX":@(_ownsTX),@"safetyNotice":_transmitSafetyNotice ?: @"",@"queries":@(_queryCount),@"failures":@(_failureCount),@"latency":@(_lastLatency)}; }
 }
 - (id)cached:(NSString *)key { @synchronized(self) { return _published[key]; } }
 - (NSString *)owner { return [self cached:@"owner"]; }
 - (NSString *)status { return [self cached:@"status"]; }
 - (NSDictionary *)snapshot { return [self cached:@"snapshot"]; }
 - (BOOL)ownsTX { return [[self cached:@"ownsTX"] boolValue]; }
-- (NSString *)transmitSafetyNotice { return [self cached:@"safetyNotice"]; }
+- (NSString *)transmitSafetyNotice { @synchronized(self) { return _pendingSafetyNotice.length ? _pendingSafetyNotice : _published[@"safetyNotice"]; } }
 - (void)acknowledgeTransmitSafetyNotice {
     [_lock lock]; _transmitSafetyNotice=@""; [self cacheState]; [_lock unlock];
     dispatch_async(dispatch_get_main_queue(), ^{ [NSNotificationCenter.defaultCenter postNotificationName:TXStationRadioChanged object:self]; });
@@ -97,6 +101,8 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
 - (BOOL)reject:(NSString *)text error:(NSError **)error { if(error) *error=TXVoiceError(text); [self publish:text]; return NO; }
 - (BOOL)selectOwner:(NSString *)owner port:(NSString *)path error:(NSError **)error {
     [_lock lock];
+    if(!_transport && [_port isEqual:path] && path.length)
+        _transport=self.transportFactory ? self.transportFactory(path) : [[TX500VoiceCATRadio alloc] initWithPort:path];
     if(_ownsTX && (![_owner isEqual:owner] || ![_port isEqual:path])) {
         NSString *pt=[_transport query:@"PT;" error:nil];
         // Only an explicit PT0 means receiving; no reply keeps ownership and the fault latch.
@@ -347,6 +353,52 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
         return YES;
     } @finally { [self cacheState]; [_lock unlock]; }
 }
+- (void)requestReleaseForOwner:(NSString *)owner completion:(void (^)(BOOL))completion {
+    [self requestReleaseForOwner:owner restoreMode:0 completion:completion];
+}
+- (void)requestReleaseForOwner:(NSString *)owner restoreMode:(NSInteger)mode completion:(void (^)(BOOL))completion {
+    @synchronized(self) {
+        if (!_releaseCompletions) _releaseCompletions=[NSMutableArray array];
+        [_releaseCompletions addObject:@{ @"owner":owner ?: NSNull.null, @"restoreMode":@(mode), @"completion":completion ? [completion copy] : NSNull.null }];
+        if (_asyncReleasePending) return;
+        _asyncReleasePending=YES;
+        _pendingSafetyNotice=@"Stop requested: waiting for CAT receive confirmation. Check the radio locally if it is still transmitting.";
+        _releaseRequests++; _pendingRead.cancelled=YES;
+    }
+    dispatch_async(dispatch_get_main_queue(), ^{ [NSNotificationCenter.defaultCenter postNotificationName:TXStationRadioChanged object:self]; });
+    dispatch_async(_safetyQueue, ^{
+        for(;;) {
+            NSArray *requests;
+            @synchronized(self) {
+                if(!self->_releaseCompletions.count) {
+                    self->_asyncReleasePending=NO; self->_pendingSafetyNotice=nil; self->_releaseRequests--;
+                    break;
+                }
+                requests=[self->_releaseCompletions copy]; [self->_releaseCompletions removeAllObjects];
+            }
+            [self->_lock lock];
+            BOOL relevant=NO;
+            for(NSDictionary *request in requests) if(request[@"owner"]==NSNull.null || [self->_owner isEqual:request[@"owner"]]) relevant=YES;
+            BOOL confirmed=relevant ? [self releaseOwnedTX:nil] : !self->_ownsTX;
+            if(!confirmed && relevant) [self recordTransmitSafetyNotice:@"Stop completed locally; CAT receive is NOT confirmed"];
+            if(confirmed && relevant && !self->_ownsTX && [self->_owner isEqual:@"CW"]) {
+                NSInteger restore=0;
+                for(NSDictionary *request in requests) if([request[@"owner"] isEqual:@"CW"]) restore=[request[@"restoreMode"] integerValue];
+                if([@[@1,@2,@3,@7] containsObject:@(restore)] &&
+                   ![self send:[NSString stringWithFormat:@"MD%ld;",(long)restore] owner:@"CW" error:nil])
+                    [self recordTransmitSafetyNotice:@"RX was confirmed, but the selected receive mode could not be restored"];
+            }
+            [self->_lock unlock];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                for(NSDictionary *request in requests) {
+                    id done=request[@"completion"]; if(done!=NSNull.null) ((void (^)(BOOL))done)(confirmed);
+                }
+            });
+        }
+        dispatch_async(dispatch_get_main_queue(), ^{ [NSNotificationCenter.defaultCenter postNotificationName:TXStationRadioChanged object:self]; });
+    });
+}
+
 - (BOOL)releaseOwnedTX:(NSError **)error {
     BOOL releaseRequested = YES;
     if (releaseRequested) [self beginReleaseRequest];
@@ -381,17 +433,30 @@ NSString *const TXStationRadioChanged=@"TXStationRadioChanged";
     } @finally { if (releaseRequested) [self endReleaseRequest]; }
 }
 - (void)forceCloseTransport {
-    [_lock lock];
-    [_transport close];
-    _transport=nil;
-    _owner=@"";
-    _snapshot=@{};
-    _ownsTX=NO; [self cancelTransmitDeadline];
-    _faulted=NO;
-    [self publish:@"Disconnected"];
-    [self cacheState];
-    [_lock unlock];
+    // Cancel I/O cooperatively. Only its serialized owner may close the descriptor.
+    id transport;
+    @synchronized(self) {
+        _releaseRequests++; _pendingRead.cancelled=YES;
+        _pendingSafetyNotice=@"Disconnect requested. Receive is unconfirmed; check the radio locally.";
+        transport=_publishedTransport;
+    }
+    if([transport respondsToSelector:@selector(cancelPendingIO)]) [transport cancelPendingIO];
+    dispatch_async(_safetyQueue, ^{
+        [self->_lock lock];
+        BOOL uncertain=self->_ownsTX || self->_faulted;
+        [self->_transport close]; self->_transport=nil; self->_snapshot=@{};
+        [self cancelTransmitDeadline];
+        if(uncertain) {
+            self->_faulted=YES; // Preserve ownership until explicit PT0 after a reconnect.
+            [self recordTransmitSafetyNotice:@"Transport disconnected before receive could be confirmed"];
+        }
+        [self publish:@"Disconnected; check physical receive before reconnecting"];
+        [self->_lock unlock];
+        @synchronized(self) { self->_releaseRequests--; self->_pendingSafetyNotice=nil; }
+        dispatch_async(dispatch_get_main_queue(), ^{ [NSNotificationCenter.defaultCenter postNotificationName:TXStationRadioChanged object:self]; });
+    });
 }
+
 - (BOOL)handoffToOwner:(NSString *)owner port:(NSString *)path releaseFirst:(BOOL)releaseFirst closePort:(BOOL)closePort error:(NSError **)error {
     BOOL releaseRequested = releaseFirst || closePort;
     if (releaseRequested) [self beginReleaseRequest];

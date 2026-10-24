@@ -124,6 +124,10 @@ static double Rad2Deg(double rad) {
         if (t.length > 0) [nonEmpty addObject:[t uppercaseString]];
     }
 
+    for (NSUInteger i = 0; i < nonEmpty.count; i++) {
+        NSString *normalized = [TX500FT8Message normalizedUsableCallsign:nonEmpty[i]];
+        if (normalized) nonEmpty[i] = normalized;
+    }
     if (nonEmpty.count == 0) return;
 
     // Check if starts with CQ
@@ -220,6 +224,21 @@ static double Rad2Deg(double rad) {
         if (c < '0' || c > '9') allDigits = NO;
     }
     return allLetters || (allDigits && n == 3);
+}
+
++ (NSString *)normalizedUsableCallsign:(NSString *)call {
+    NSString *value = [call stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].uppercaseString;
+    if ([value hasPrefix:@"<"] && [value hasSuffix:@">"] && value.length > 2)
+        value = [value substringWithRange:NSMakeRange(1, value.length - 2)];
+    if (value.length < 3 || value.length > 15) return nil;
+    BOOL digit = NO, letter = NO;
+    for (NSUInteger i = 0; i < value.length; i++) {
+        unichar c = [value characterAtIndex:i];
+        if (c >= '0' && c <= '9') digit = YES;
+        else if (c >= 'A' && c <= 'Z') letter = YES;
+        else if (c != '/') return nil;
+    }
+    return digit && letter ? value : nil;
 }
 
 - (BOOL)isValidCallsign:(NSString *)str {
@@ -868,6 +887,8 @@ static NSString *NormalizeCallsignForPrefix(NSString *call) {
                            grid:(nullable NSString *)grid
                            date:(NSDate *)date
                            mode:(nullable NSString *)mode {
+    dxCall = [self normalizedUsableCallsign:dxCall];
+    if (!dxCall) return @"";
     if (!date) date = [NSDate date];
     NSDateFormatter *dfDate = [[NSDateFormatter alloc] init];
     dfDate.timeZone = [NSTimeZone timeZoneWithAbbreviation:@"UTC"];

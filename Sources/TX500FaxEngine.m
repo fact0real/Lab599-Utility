@@ -96,6 +96,11 @@ static NSString *FaxNoteName(wefax_note n) {
     return self;
 }
 
+- (instancetype)initWithPreviousDecodeCount:(NSUInteger)count {
+    if((self=[self init])) _decodes=count;
+    return self;
+}
+
 - (void)dealloc { if (_rx) wefax_rx_free(_rx); }
 
 - (NSArray<TX500FaxChart *> *)charts { return [_charts copy]; }
@@ -169,7 +174,17 @@ static NSString *FaxNoteName(wefax_note n) {
     float *buf = malloc(blk * sizeof(float));
     BOOL fed = buf != NULL;
     size_t got;
-    while (fed && (got = wav_read(&w, buf, blk)) > 0) if (wefax_rx_feed(rx, buf, got) != 0) fed = NO;
+    double lastProgress=-1;
+    while (fed && !self.cancelRequested && (got = wav_read(&w, buf, blk)) > 0) {
+        if (wefax_rx_feed(rx, buf, got) != 0) fed = NO;
+        double progress=w.frames ? (double)w.pos/w.frames : 1;
+        if(self.onDecodeProgress && progress-lastProgress>=0.01) { self.onDecodeProgress(progress); lastProgress=progress; }
+    }
+    if(self.cancelRequested) {
+        free(buf); wav_close(&w); wefax_rx_free(rx);
+        if(error) *error=FaxError(6,@"Decode cancelled. The previous chart is unchanged.");
+        return NO;
+    }
     if (fed && w.pos < w.frames) fed = NO;                 // the reader stopped early: it could not get its memory
     free(buf);
     wav_close(&w);

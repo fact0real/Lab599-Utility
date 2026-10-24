@@ -364,6 +364,15 @@ int main(int argc, const char * argv[]) {
                                 [NSString stringWithFormat:@"test_tx500_logbook_%@.sqlite", [[NSUUID UUID] UUIDString]]];
         NSURL *dbURL = [NSURL fileURLWithPath:tempDBPath];
         TX500LogbookManager *mgr = [[TX500LogbookManager alloc] initWithDatabaseURL:dbURL];
+        TX500LogbookManager *timingStore=[[TX500LogbookManager alloc] initWithDatabaseURL:[NSURL fileURLWithPath:[tempDBPath stringByAppendingString:@".cw-timing"]]];
+        TX500QSOContact *midnight=[TX500QSOContact new]; midnight.callsign=@"EA3JIC"; midnight.frequencyMHz=14.030; midnight.band=@"20m";
+        midnight.qsoDate=@"20261023"; midnight.timeOn=@"235900"; midnight.qsoDateOff=@"20261024"; midnight.timeOff=@"000300"; midnight.rstRcvd=@"";
+        TX500LogRecord *savedTiming=[timingStore savedContactFromCW:midnight myCall:@"EP2AES" myGrid:@"LL35"];
+        TX500LogRecord *loadedTiming=[timingStore contactWithUUID:savedTiming.uuid];
+        AssertTrue([loadedTiming.timeOn isEqual:@"235900"] && [loadedTiming.timeOff isEqual:@"000300"] && [loadedTiming.qsoDateOff isEqual:@"20261024"],@"CW start/end and midnight date survive SQLite persistence");
+        TX500LogRecord *timingRoundTrip=[TX500LogRecord recordFromADIFRecordText:loadedTiming.adifRecordString];
+        AssertTrue([timingRoundTrip.qsoDateOff isEqual:@"20261024"] && [timingRoundTrip.timeOn isEqual:@"235900"],@"CW midnight timing survives ADIF export/import");
+
 
         AssertTrue(mgr != nil, @"LogbookManager instantiated");
         AssertTrue(mgr.totalContactCount == 0, @"Initial contact count is 0");

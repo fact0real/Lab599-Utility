@@ -56,6 +56,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 // Serial Port & Logging Callbacks
 @property (nonatomic, copy, nullable) BOOL (^serialCommandSender)(NSString *catCommand);
+@property (nonatomic, copy, nullable) void (^radioReleaseRequester)(void);
 @property (nonatomic, copy, nullable) void (^logHandler)(NSString *line);
 @property (nonatomic, copy, nullable) void (^onTransmitStateChanged)(BOOL transmitting, NSString *activeText);
 // YES while Practice / Sim is on: the keyer then plays the local sidetone only and never opens or

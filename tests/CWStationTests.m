@@ -78,6 +78,15 @@ static void AssertTrue(BOOL condition, NSString *message) {
     }
 }
 
+static void InstallVerifiedDIGTransport(TX500CWStationController *station) {
+    [station setValue:@YES forKey:@"cwModeConfiguredOnRadio"];
+    __weak TX500CWStationController *weakStation=station;
+    station.prepareCWModeHandler=^(void (^done)(BOOL)) {
+        TX500CWStationController *s=weakStation;
+        done(s.serialCommandSender && s.serialCommandSender(@"MD6;"));
+    };
+}
+
 int main(int argc, const char * argv[]) {
     char testRootTemplate[] = "/tmp/Lab599CWStationTests.XXXXXX";
     char *testRoot = mkdtemp(testRootTemplate);
@@ -88,6 +97,64 @@ int main(int argc, const char * argv[]) {
     @autoreleasepool {
         (void)argc; (void)argv;
         NSLog(@"Running TX-500 CW Station & Audio DSP Tests...");
+
+        TX500CWQSOAssistant *ea3Partial=[TX500CWQSOAssistant new]; ea3Partial.myCallsign=@"EP2AES";
+        [ea3Partial startCallingCQ];
+        NSString *ea3Answer=@"EP2AES DE EA3JIC";
+        for(NSUInteger n=1;n<=ea3Answer.length;n++) {
+            [ea3Partial processDecodedTextStream:[ea3Answer substringToIndex:n] currentWPM:40 snrDb:10];
+            AssertTrue(!ea3Partial.activeTargetCallsign.length,@"An unterminated CW callsign cannot be selected");
+        }
+        [ea3Partial processDecodedTextStream:[ea3Answer stringByAppendingString:@" "] currentWPM:40 snrDb:10];
+        AssertTrue([ea3Partial.activeTargetCallsign isEqual:@"EA3JIC"],@"The full call is accepted after its word gap");
+        AssertTrue(!ea3Partial.activeRstRcvd.length,@"A new contact has no fabricated received report");
+        TX500CWQSOAssistant *ea3FirstReport=[TX500CWQSOAssistant new]; ea3FirstReport.myCallsign=@"EP2AES";
+        [ea3FirstReport processDecodedTextStream:@"EA3JIC 579 " currentWPM:24 snrDb:10];
+        AssertTrue([ea3FirstReport.activeTargetCallsign isEqual:@"EA3JIC"] && [ea3FirstReport.activeRstRcvd isEqual:@"579"],@"The first actual report survives selecting its newly decoded target");
+        NSDate *ea3Started=[NSDate dateWithTimeIntervalSinceNow:-480];
+        [ea3Partial setValue:ea3Started forKey:@"activeQSOStartedAt"];
+        [ea3Partial logCurrentQSO];
+        TX500QSOContact *ea3Timed=ea3Partial.loggedContacts.firstObject;
+        NSDateFormatter *ea3Stamp=[NSDateFormatter new]; ea3Stamp.timeZone=[NSTimeZone timeZoneForSecondsFromGMT:0]; ea3Stamp.dateFormat=@"yyyyMMddHHmmss";
+        NSDate *ea3On=[ea3Stamp dateFromString:[ea3Timed.qsoDate stringByAppendingString:ea3Timed.timeOn]];
+        NSDate *ea3Off=[ea3Stamp dateFromString:[ea3Timed.qsoDateOff stringByAppendingString:ea3Timed.timeOff]];
+        AssertTrue([ea3Off timeIntervalSinceDate:ea3On]>=479 && [ea3Off timeIntervalSinceDate:ea3On]<482,@"CW contact retains its start and actual end times");
+        AssertTrue(![ea3Timed.adifRecordString containsString:@"<RST_RCVD:"],@"Unknown RST is omitted from ADIF");
+        ea3Partial.qsoState=TX500QSOStateExchangeInfo;
+        AssertTrue([ea3Partial.suggestedActionMacro isEqual:@"73"],@"Optional station information is not fabricated");
+        TX500CWKeyer *ea3MissingValue=[TX500CWKeyer new]; ea3MissingValue.myCallsign=@"EA3JIC";
+        __block NSUInteger ea3ValueWrites=0; ea3MissingValue.serialCommandSender=^BOOL(NSString *c){(void)c;ea3ValueWrites++;return YES;};
+        [ea3MissingValue transmitText:@"{CALL} DE {MYCALL}" targetCall:@"" rst:@"" name:@"" qth:@""];
+        AssertTrue(!ea3ValueWrites && !ea3MissingValue.isTransmitting,@"A missing macro callsign cannot reach the radio");
+        TX500CWStationController *ea3Display=[TX500CWStationController new];
+        [ea3Display updateFrequencyHz:7032900 mode:@"DIG"];
+        AssertTrue([((NSTextField *)[ea3Display valueForKey:@"vfoLabel"]).stringValue isEqual:@"7.032.900 MHz"],@"VFO groups use integer hertz, without kHz rounding");
+        [ea3Display stopStation];
+
+        TX500CWStationController *ea3Prepare=[TX500CWStationController new];
+        ea3Prepare.keyer.myCallsign=@"EA3JIC";
+        __block void (^ea3ModeReply)(BOOL)=nil;
+        __block NSUInteger ea3TXCommands=0;
+        ea3Prepare.prepareCWModeHandler=^(void (^done)(BOOL)){ea3ModeReply=[done copy];};
+        ea3Prepare.serialCommandSender=^BOOL(NSString *command){if([command containsString:@"TX;"]) ea3TXCommands++;return YES;};
+        NSTimeInterval ea3PrepareBegan=NSDate.timeIntervalSinceReferenceDate;
+        [ea3Prepare prepareRadioForCWMode];
+        AssertTrue(NSDate.timeIntervalSinceReferenceDate-ea3PrepareBegan<0.05 && ea3ModeReply!=nil,@"CW mode preparation returns while its readback is pending");
+        [ea3Prepare.keyer transmitText:@"E" targetCall:@"" rst:@"" name:@"" qth:@""];
+        AssertTrue(!ea3TXCommands && !ea3Prepare.keyer.isTransmitting,@"TX is blocked before DIG readback");
+        ea3ModeReply(NO);
+        AssertTrue(![[ea3Prepare valueForKey:@"cwModeConfiguredOnRadio"] boolValue],@"Failed preparation cannot latch a configured mode");
+        [ea3Prepare prepareRadioForCWMode]; ea3ModeReply(YES);
+        [ea3Prepare.keyer transmitText:@"E" targetCall:@"" rst:@"" name:@"" qth:@""];
+        AssertTrue(ea3TXCommands==1 && ea3Prepare.keyer.isTransmitting,@"A confirmed DIG readback permits the next explicit send");
+        [ea3Prepare.keyer abortTransmission]; [ea3Prepare stopStation];
+        TX500CWAudioDecoder *ea3Gate=[TX500CWAudioDecoder new]; __block NSUInteger ea3AudioBuffers=0;
+        ea3Gate.onRawAudioSamples=^(const float *samples,int count){(void)samples;(void)count;ea3AudioBuffers++;};
+        float ea3Silence[128]={0}; ea3Gate.suppressDecodingForLocalTX=YES;
+        [ea3Gate processRawAudioSamples:ea3Silence count:128];
+        AssertTrue(!ea3AudioBuffers,@"Local TX buffers cannot reach the System Audio decoder");
+        ea3Gate.suppressDecodingForLocalTX=NO; [ea3Gate processRawAudioSamples:ea3Silence count:128];
+        AssertTrue(ea3AudioBuffers==1,@"Receive decoding resumes after local TX");
 
         // 1. Test Reverse Morse Alphabet
         NSDictionary *dict = [TX500CWAudioDecoder reverseMorseAlphabet];
@@ -206,6 +273,7 @@ int main(int argc, const char * argv[]) {
         __block NSMutableArray<NSString *> *stationCommands = [NSMutableArray array];
         __block NSMutableArray<NSString *> *stationLog = [NSMutableArray array];
         noCallStation.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) { [stationCommands addObject:catCommand]; return YES; };
+        InstallVerifiedDIGTransport(noCallStation);
         noCallStation.logHandler = ^(NSString *line) { [stationLog addObject:line]; };
         [noCallStation.assistant processDecodedTextStream:@"CQ CQ DE EP2AES EP2AES K" currentWPM:22.0 snrDb:14.5];
         AssertTrue(noCallStation.assistant.heardStations.count >= 1, @"Station heard the CQ");
@@ -255,11 +323,13 @@ int main(int argc, const char * argv[]) {
         idleAnswer.qsoState = TX500QSOStateCompleted;
         AssertTrue([idleAnswer.suggestedActionMacro containsString:@"{MYCALL}"], @"CQ after a QSO keeps {MYCALL} without a callsign");
         // Control: with a callsign both Answer buttons send the full answer.
+        noCallStation.keyer.wpm=18;
         noCallStation.keyer.myCallsign = @"EA3JIC";
         noCallStation.assistant.myCallsign = @"EA3JIC";
         [noCallStation rosterAnswerClicked:answerButton];
         AssertTrue([stationCommands containsObject:@"TX;"] && [noCallStation.keyer.activeBufferText isEqualToString:@"EP2AES DE EA3JIC K"],
                    @"Answer button sends the answer with the callsign");
+        AssertTrue(noCallStation.keyer.wpm==18,@"Answering preserves the operator's own WPM");
         AssertTrue([noCallTxField.stringValue isEqualToString:@"EP2AES DE EA3JIC K"], @"With a callsign the Answer button shows the answer in the TX field");
         [noCallStation.keyer abortTransmission];
         [stationCommands removeAllObjects];
@@ -401,6 +471,7 @@ int main(int argc, const char * argv[]) {
         TX500CWStationController *tuneStation = [TX500CWStationController new];
         __block NSMutableArray<NSString *> *tuneCmds = [NSMutableArray array];
         tuneStation.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) { [tuneCmds addObject:catCommand]; return YES; };
+        InstallVerifiedDIGTransport(tuneStation);
         [tuneStation setValue:@0.2 forKey:@"manualTuneCutoffSeconds"];
         Method carrierMethod = class_getInstanceMethod([TX500CWKeyer class], @selector(startContinuousCarrierWithPitchHz:));
         IMP carrierOriginal = method_setImplementation(carrierMethod, imp_implementationWithBlock(^BOOL(id k, double p) { (void)k; (void)p; [NSException raise:@"CWStationTests" format:@"carrier failed"]; return NO; }));
@@ -508,6 +579,7 @@ int main(int argc, const char * argv[]) {
         __block NSMutableArray<NSString *> *readyCmds = [NSMutableArray array];
         __block NSMutableArray<NSString *> *readyLog = [NSMutableArray array];
         readyStation.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) { [readyCmds addObject:catCommand]; return YES; };
+        InstallVerifiedDIGTransport(readyStation);
         readyStation.logHandler = ^(NSString *line) { [readyLog addObject:line]; };
         NSUInteger readyHistory = readyStation.keyer.sentHistory.count;
         NSTextField *readyStatus = [readyStation valueForKey:@"carrierLockStatusLabel"];
@@ -529,7 +601,9 @@ int main(int argc, const char * argv[]) {
         readyPractice.state = NSControlStateValueOff;
         [readyStation toggleSimulation:readyPractice];
         method_setImplementation(readyMethod, readyOriginal);
-        // The queue already open on the chosen output answers YES from its properties alone.
+        // OS health is injected for the synthetic output UID; no device is opened.
+        Method readyHealthMethod=class_getInstanceMethod([TX500CWKeyer class],@selector(radioAudioIsHealthy));
+        IMP readyHealthOriginal=method_setImplementation(readyHealthMethod,imp_implementationWithBlock(^BOOL(id k){ (void)k; return YES; }));
         readyStation.keyer.radioOutputDeviceUID = @"radio-out";
         [readyStation.keyer setValue:@YES forKey:@"radioQueueReady"];
         [readyStation.keyer setValue:@"radio-out" forKey:@"activeRadioUID"];
@@ -543,6 +617,7 @@ int main(int argc, const char * argv[]) {
         }
         [readyStation.keyer setValue:@NO forKey:@"radioQueueReady"];
         [readyStation.keyer setValue:nil forKey:@"activeRadioUID"];
+        method_setImplementation(readyHealthMethod,readyHealthOriginal);
         NSLog(@"PASS: No keying before the radio audio output is ready.");
 
         // 6d. Every keyer path stops a running Tune first (Auto-CQ, the roster Answer, the
@@ -554,6 +629,7 @@ int main(int argc, const char * argv[]) {
         __block NSMutableArray<NSString *> *pathCmds = [NSMutableArray array];
         __block NSMutableArray<NSString *> *pathLog = [NSMutableArray array];
         pathStation.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) { [pathCmds addObject:catCommand]; return YES; };
+        InstallVerifiedDIGTransport(pathStation);
         pathStation.logHandler = ^(NSString *line) { [pathLog addObject:line]; };
         BOOL (^releasedBeforeKeying)(void) = ^BOOL { // an RX; and, after it, the new TX;
             NSUInteger rx = [pathCmds indexOfObject:@"RX;"];
@@ -698,6 +774,7 @@ int main(int argc, const char * argv[]) {
         __block NSMutableArray<NSString *> *cwCommands = [NSMutableArray array];
         __block NSString *syncLine = @"";
         cwStation.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) { [cwCommands addObject:catCommand]; return YES; };
+        InstallVerifiedDIGTransport(cwStation);
         cwStation.logHandler = ^(NSString *line) { syncLine = line; };
         [cwStation updateFrequencyHz:0 mode:@"DIG"]; // what the radio sync passes when FA; gets no usable reply (the radio in DIG)
         AssertTrue(cwStation.currentDialFrequencyHz == 0 && cwStation.assistant.currentFrequencyHz == 0 && cwStation.assistant.currentBand.length == 0,
@@ -899,6 +976,7 @@ int main(int argc, const char * argv[]) {
         __block NSMutableArray<NSString *> *simKeyerCmds = [NSMutableArray array];
         __block NSMutableArray<NSString *> *simKeyerLog = [NSMutableArray array];
         simKeyerStation.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) { [simKeyerCmds addObject:catCommand]; return YES; };
+        InstallVerifiedDIGTransport(simKeyerStation);
         simKeyerStation.logHandler = ^(NSString *line) { [simKeyerLog addObject:line]; };
         __block NSUInteger simMeterQueries = 0;
         NSObject *simMeterLock = [NSObject new];
@@ -956,6 +1034,7 @@ int main(int argc, const char * argv[]) {
         __block NSMutableArray<NSString *> *meterCmds = [NSMutableArray array];
         __block NSMutableArray<NSString *> *meterLog = [NSMutableArray array];
         meterStation.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) { [meterCmds addObject:catCommand]; return YES; };
+        InstallVerifiedDIGTransport(meterStation);
         meterStation.logHandler = ^(NSString *line) { [meterLog addObject:line]; };
         NSObject *meterLock = [NSObject new];
         __block NSInteger meterInFlight = 0, meterMaxInFlight = 0;
@@ -1084,6 +1163,7 @@ int main(int argc, const char * argv[]) {
         __block NSMutableArray<NSString *> *sleepCmds = [NSMutableArray array];
         __block NSMutableArray<NSString *> *sleepLog = [NSMutableArray array];
         sleepStation.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) { [sleepCmds addObject:catCommand]; return YES; };
+        InstallVerifiedDIGTransport(sleepStation);
         sleepStation.logHandler = ^(NSString *line) { [sleepLog addObject:line]; };
         [sleepStation toggleAutoCQ:nil];
         AssertTrue(sleepStation.keyer.isAutoCQActive && sleepStation.keyer.isTransmitting && [sleepCmds containsObject:@"TX;"], @"Auto-CQ is on the air before sleep");
@@ -1106,6 +1186,8 @@ int main(int argc, const char * argv[]) {
             [controllerSentCmds addObject:catCommand];
             return YES;
         };
+        InstallVerifiedDIGTransport(stationController);
+        [stationController setValue:@NO forKey:@"cwModeConfiguredOnRadio"];
         [stationController prepareRadioForCWMode];
         AssertTrue([controllerSentCmds containsObject:@"MD6;"], @"prepareRadioForCWMode sends MD6; (DIG)");
         AssertTrue([stationController.operatingMode isEqualToString:@"DIG"], @"Operating mode is DIG");
@@ -1122,6 +1204,8 @@ int main(int argc, const char * argv[]) {
         TX500CWStationController *digStation = [TX500CWStationController new];
         __block NSMutableArray<NSString *> *digCmds = [NSMutableArray array];
         digStation.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) { [digCmds addObject:catCommand]; return YES; };
+        InstallVerifiedDIGTransport(digStation);
+        [digStation setValue:@NO forKey:@"cwModeConfiguredOnRadio"];
         NSUInteger (^md6Count)(void) = ^NSUInteger {
             return [digCmds indexesOfObjectsPassingTest:^BOOL(NSString *cmd, NSUInteger i, BOOL *stop) { (void)i; (void)stop; return [cmd isEqualToString:@"MD6;"]; }].count;
         };
@@ -1160,6 +1244,8 @@ int main(int argc, const char * argv[]) {
             [knobCmds addObject:catCommand];
             return !(knobRefusesTX && [catCommand isEqualToString:@"TX;"]);
         };
+        InstallVerifiedDIGTransport(knobStation);
+        [knobStation setValue:@NO forKey:@"cwModeConfiguredOnRadio"];
         knobStation.logHandler = ^(NSString *line) { [knobLog addObject:line]; };
         NSTextField *knobField = [knobStation valueForKey:@"txInputField"];
         BOOL (^knobDIGBeforeTX)(void) = ^BOOL {
@@ -1252,6 +1338,7 @@ int main(int argc, const char * argv[]) {
         TX500CWStationController *simStation = [TX500CWStationController new];
         __block NSMutableArray<NSString *> *simSentCmds = [NSMutableArray array];
         simStation.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) { [simSentCmds addObject:catCommand]; return YES; };
+        InstallVerifiedDIGTransport(simStation);
         NSButton *simCheckbox = [simStation valueForKey:@"simulationCheckbox"];
         NSButton *simDecoderButton = [simStation valueForKey:@"startStopDecoderButton"];
         [simStation toggleManualTransmit];                       // a Tune, before Practice is ticked
@@ -1290,6 +1377,7 @@ int main(int argc, const char * argv[]) {
         escStation.assistant.myCallsign = @"EA3JIC";
         __block NSMutableArray<NSString *> *escCmds = [NSMutableArray array];
         escStation.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) { [escCmds addObject:catCommand]; return YES; };
+        InstallVerifiedDIGTransport(escStation);
         NSButton *escCheckbox = [escStation valueForKey:@"simulationCheckbox"];
         escCheckbox.state = NSControlStateValueOn;
         [escStation toggleSimulation:escCheckbox];
@@ -1329,6 +1417,7 @@ int main(int argc, const char * argv[]) {
             [retuneCmds addObject:catCommand];
             return !(retuneRefusesFA && [catCommand hasPrefix:@"FA"]);
         };
+        InstallVerifiedDIGTransport(retuneStation);
         retuneStation.logHandler = ^(NSString *line) { [retuneLog addObject:line]; };
         NSTextField *retuneVFO = [retuneStation valueForKey:@"vfoLabel"];
         [retuneStation updateFrequencyHz:7030000 mode:@"CW"];
@@ -1401,6 +1490,7 @@ int main(int argc, const char * argv[]) {
             [rxCmds addObject:catCommand];
             return !(rxRefused && [catCommand hasPrefix:@"RX"]);
         };
+        InstallVerifiedDIGTransport(rxStation);
         rxStation.logHandler = ^(NSString *line) { [rxLog addObject:line]; };
         NSTextField *rxLabel = [rxStation valueForKey:@"carrierLockStatusLabel"];
         NSButton *rxAbort = [rxStation valueForKey:@"txAbortButton"];
@@ -1446,6 +1536,7 @@ int main(int argc, const char * argv[]) {
         __block NSMutableArray<NSString *> *audioErrCmds = [NSMutableArray array];
         __block NSMutableArray<NSString *> *audioErrLog = [NSMutableArray array];
         audioErrStation.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) { [audioErrCmds addObject:catCommand]; return YES; };
+        InstallVerifiedDIGTransport(audioErrStation);
         audioErrStation.logHandler = ^(NSString *line) { [audioErrLog addObject:line]; };
         NSButton *audioErrAutoCQ = [audioErrStation valueForKey:@"autoCQButton"];
         [audioErrStation toggleAutoCQ:nil];
@@ -1478,11 +1569,13 @@ int main(int argc, const char * argv[]) {
         TX500CWStationController *refusedBand = [TX500CWStationController new];
         [refusedBand updateFrequencyHz:14025000 mode:@"DIG"];
         refusedBand.serialCommandSender = ^BOOL(NSString *command) { (void)command; return NO; };
+        InstallVerifiedDIGTransport(refusedBand);
         [refusedBand selectAmateurBand:@"80m"];
         AssertTrue(refusedBand.currentDialFrequencyHz == 14025000 && refusedBand.assistant.currentFrequencyHz == 14025000,
                    @"A refused band change preserves both dial and QSO frequency");
         NSMutableArray<NSString *> *failedTuneCommands = [NSMutableArray new];
         refusedBand.serialCommandSender = ^BOOL(NSString *command) { [failedTuneCommands addObject:command]; return ![command containsString:@"TX;"]; };
+        InstallVerifiedDIGTransport(refusedBand);
         [refusedBand toggleManualTransmit];
         AssertTrue(!refusedBand.isManualTuneActive && [failedTuneCommands containsObject:@"RX;"],
                    @"A missing Tune TX acknowledgement is followed by an RX attempt");
@@ -1599,6 +1692,7 @@ int main(int argc, const char * argv[]) {
         TX500CWStationController *cqStation = [TX500CWStationController new];
         cqStation.keyer.myCallsign = @"EA3JIC";
         cqStation.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) { (void)catCommand; return YES; };
+        InstallVerifiedDIGTransport(cqStation);
         [cqStation toggleAutoCQ:nil];
         [cqStation.keyer abortTransmission]; // idle between two calls: the countdown is shown
         [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.5]];
@@ -1649,6 +1743,7 @@ int main(int argc, const char * argv[]) {
         answerStation.keyer.myCallsign = @"EA3JIC";
         answerStation.assistant.myCallsign = @"EA3JIC";
         answerStation.serialCommandSender = ^BOOL(NSString * _Nonnull catCommand) { (void)catCommand; return YES; };
+        InstallVerifiedDIGTransport(answerStation);
         [answerStation toggleAutoCQ:nil];
         AssertTrue(answerStation.keyer.isAutoCQActive && answerStation.decoder.onDecodedTextUpdated != nil, @"the pane's Auto-CQ is on");
         answerStation.decoder.onDecodedTextUpdated(@"EA3JIC DE EP2AES K", @"");

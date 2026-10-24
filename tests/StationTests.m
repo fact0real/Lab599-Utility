@@ -397,7 +397,50 @@ static void TestReporter(void) {
     reporter.enabled=NO;
 
 }
-int main(int argc,const char *argv[]) { @autoreleasepool { (void)argc;(void)argv; char path[]="/tmp/StationTests.XXXXXX"; Check(mkdtemp(path)!=NULL,@"Isolated test directory"); NSURL *root=[NSURL fileURLWithPath:[NSString stringWithUTF8String:path]]; TestStopVetoesPreflight(); TestCoreTransmitDeadline(); TestCore(); TestReceiveRecoveryReconnect(); TestLostReplyKeepsTX(); TestStore(root); TestReporter();
+@interface DelayedReleaseRadio : FakeStationRadio
+@property dispatch_semaphore_t entered, proceed;
+@end
+@implementation DelayedReleaseRadio
+- (BOOL)setTransmit:(BOOL)tx error:(NSError **)error {
+    if(!tx) { dispatch_semaphore_signal(self.entered); dispatch_semaphore_wait(self.proceed,dispatch_time(DISPATCH_TIME_NOW,2*NSEC_PER_SEC)); }
+    return [super setTransmit:tx error:error];
+}
+@end
+static void TestQueuedReleaseAndForceDisconnect(void) {
+    TX500StationCore *core=[TX500StationCore new]; DelayedReleaseRadio *radio=[DelayedReleaseRadio new];
+    radio.entered=dispatch_semaphore_create(0); radio.proceed=dispatch_semaphore_create(0);
+    core.transportFactory=^id(NSString *p){ (void)p; return radio; };
+    [core selectOwner:@"CW" port:@"queued-release" error:nil]; [core transmit:YES owner:@"CW" error:nil];
+    __block NSUInteger completed=0;
+    NSTimeInterval began=NSDate.timeIntervalSinceReferenceDate;
+    [core requestReleaseForOwner:@"CW" completion:^(BOOL confirmed){ Check(confirmed,@"Queued stop reports actual receive confirmation"); completed++; }];
+    Check(NSDate.timeIntervalSinceReferenceDate-began<0.05,@"Stop returns without waiting for slow CAT");
+    Check(dispatch_semaphore_wait(radio.entered,dispatch_time(DISPATCH_TIME_NOW,NSEC_PER_SEC))==0,@"Queued release reaches the serialized transport");
+    Check([core.transmitSafetyNotice containsString:@"waiting"],@"Pending release is visible without the transport lock");
+    [core requestReleaseForOwner:nil completion:^(BOOL confirmed){ Check(confirmed,@"All-stop coalesces without losing an owner"); completed++; }];
+    dispatch_semaphore_signal(radio.proceed);
+    NSDate *until=[NSDate dateWithTimeIntervalSinceNow:1];
+    while(completed<2 && until.timeIntervalSinceNow>0) [NSRunLoop.mainRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
+    Check(completed==2 && !core.ownsTX,@"All queued callbacks complete with receive confirmed");
+    Check([[radio.commands filteredArrayUsingPredicate:[NSPredicate predicateWithFormat:@"SELF == %@",@"RX;"]] count]==1,@"Repeated stop requests coalesce their CAT release");
+    TX500StationCore *other=[TX500StationCore new]; FakeStationRadio *digital=[FakeStationRadio new];
+    other.transportFactory=^id(NSString *p){(void)p;return digital;};
+    [other selectOwner:@"Digital" port:@"all-owner" error:nil]; [other transmit:YES owner:@"Digital" error:nil];
+    [other requestReleaseForOwner:@"CW" completion:nil]; [other requestReleaseForOwner:nil completion:nil];
+    until=[NSDate dateWithTimeIntervalSinceNow:1];
+    while(other.ownsTX && until.timeIntervalSinceNow>0) [NSRunLoop.mainRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
+    Check(!other.ownsTX,@"A CW request cannot hide a subsequent stop of the Digital owner");
+    [other transmit:YES owner:@"Digital" error:nil];
+    began=NSDate.timeIntervalSinceReferenceDate; [other forceCloseTransport];
+    Check(NSDate.timeIntervalSinceReferenceDate-began<0.05,@"Force disconnect returns immediately");
+    until=[NSDate dateWithTimeIntervalSinceNow:1];
+    while(![other.status hasPrefix:@"Disconnected;"] && until.timeIntervalSinceNow>0) [NSRunLoop.mainRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
+    Check(other.ownsTX && other.transmitSafetyNotice.length,@"Force disconnect preserves uncertain TX ownership and its warning");
+    digital.state[@"tx"]=@0;
+    Check([other selectOwner:@"Station" port:@"all-owner" error:nil] && !other.ownsTX,@"Same-port reconnect needs PT0 before changing owner");
+}
+
+int main(int argc,const char *argv[]) { @autoreleasepool { (void)argc;(void)argv; char path[]="/tmp/StationTests.XXXXXX"; Check(mkdtemp(path)!=NULL,@"Isolated test directory"); NSURL *root=[NSURL fileURLWithPath:[NSString stringWithUTF8String:path]]; TestQueuedReleaseAndForceDisconnect(); TestStopVetoesPreflight(); TestCoreTransmitDeadline(); TestCore(); TestReceiveRecoveryReconnect(); TestLostReplyKeepsTX(); TestStore(root); TestReporter();
     for (NSString *region in @[@"1", @"2", @"3"]) {
         NSURL *url=TX500BandPlanURLForRegion(region);
         Check([url.scheme isEqualToString:@"https"] && [url.host hasPrefix:@"www.iaru"], @"Official region document uses a fixed IARU HTTPS URL");

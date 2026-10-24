@@ -7,12 +7,24 @@ NSError *TXVoiceError(NSString *message) {
 @implementation TX500VoiceCATRadio {
     NSString *_path;
     Lab599SerialPort *_port;
+    Lab599Cancellation *_activeIO;
+    BOOL _cancelled;
+
 }
 - (instancetype)initWithPort:(NSString *)path {
     if ((self = [super init])) _path = [path copy];
     return self;
 }
+- (void)cancelPendingIO { @synchronized(self) { _cancelled=YES; _activeIO.cancelled=YES; } }
+- (BOOL)ioWasCancelled:(NSError **)error {
+    @synchronized(self) {
+        if(!_cancelled) return NO;
+        if(error) *error=TXVoiceError(@"Disconnected by the operator.");
+        return YES;
+    }
+}
 - (BOOL)open:(NSError **)error {
+    if([self ioWasCancelled:error]) return NO;
     if (!_port) _port = [Lab599SerialPort openPath:_path speed:B9600 error:error];
     return _port != nil;
 }
@@ -25,6 +37,9 @@ NSError *TXVoiceError(NSString *message) {
 }
 - (NSString *)query:(NSString *)command timeout:(NSTimeInterval)timeout
     cancellation:(Lab599Cancellation *)token error:(NSError **)error {
+    if([self ioWasCancelled:error]) return nil;
+    if(!token) token=[Lab599Cancellation new];
+    @synchronized(self) { _activeIO=token; if(_cancelled) token.cancelled=YES; }
     if (![self open:error] || ![_port discardInput:error] || ![self send:command error:error]) return nil;
     NSMutableData *pending = [NSMutableData data];
     double deadline = Lab599MonotonicTime() + timeout;
@@ -100,6 +115,7 @@ NSError *TXVoiceError(NSString *message) {
     // RX release. Never assume that an accepted CAT write is confirmed PTT.
     NSError *lastError = nil;
     for (NSInteger attempt = 0; attempt < 5; attempt++) {
+        if([self ioWasCancelled:error]) return NO;
         Lab599Pause(0.12, nil);
         lastError = nil;
         NSNumber *state = [self number:@"PT;" digits:1 error:&lastError];

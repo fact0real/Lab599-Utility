@@ -19,9 +19,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>2.286</string>
+	<string>2.288</string>
 	<key>CFBundleVersion</key>
-	<string>292</string>
+	<string>294</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>12.0</string>
 	<key>NSAudioCaptureUsageDescription</key>
@@ -46,9 +46,9 @@
 	<string>py9U49bfWNSNadG1WIAYbIzvCUjWaxnS4oGeVN2Nzok=</string>
 	<key>SURequireSignedFeed</key>
 	<true/>
-	<key>SUVerifyUpdateBeforeExtraction</key>
-	<true/>
 	<key>SUSignedFeedFailureExpirationInterval</key>
 	<integer>0</integer>
+	<key>SUVerifyUpdateBeforeExtraction</key>
+	<true/>
 </dict>
 </plist>

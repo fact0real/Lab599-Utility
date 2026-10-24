@@ -26,6 +26,9 @@ FOUNDATION_EXPORT NSString *const TXStationRadioChanged;
 - (nullable NSDictionary *)readState:(NSError **)error;
 - (BOOL)tune:(uint64_t)hz mode:(NSInteger)mode owner:(NSString *)owner error:(NSError **)error;
 - (BOOL)releaseOwnedTX:(NSError **)error;
+// Returns immediately; CAT work and readback run on the serial safety queue.
+- (void)requestReleaseForOwner:(nullable NSString *)owner completion:(nullable void (^)(BOOL confirmed))completion;
+- (void)requestReleaseForOwner:(nullable NSString *)owner restoreMode:(NSInteger)mode completion:(nullable void (^)(BOOL confirmed))completion;
 - (BOOL)suspend:(NSError **)error;
 - (void)forceCloseTransport;
 - (id<TX500VoiceRadio>)voiceAdapter;

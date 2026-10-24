@@ -383,9 +383,18 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 - (void)stopDigitalDiagnosticSessionLog;
 @end
 
+static NSInteger CWReceiveMode(NSString *command) {
+    NSDictionary *modes=@{@"RX;MD1;":@1,@"RX;MD2;":@2,@"RX;MD3;":@3,@"RX;MD7;":@7};
+    return [modes[command] integerValue];
+}
+
 @implementation AppDelegate
 
 - (BOOL)setSharedPTT:(BOOL)active {
+    if(!active && NSThread.isMainThread) {
+        [self.stationCore requestReleaseForOwner:@"Digital" completion:nil];
+        return NO; // Queued release is not physical RX confirmation.
+    }
     if (![self.stationCore.owner isEqual:@"Digital"]) {
         [self.stationCore selectOwner:@"Digital" port:[self currentStationPort] error:nil];
     }
@@ -477,10 +486,18 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         @"Stopped for system sleep: owned transmission released; pending voice TX cancelled."];
 }
 - (void)stationCommand:(NSString *)command {
+    if ([command isEqual:@"disconnect"]) {
+        [self.ft8StationController stopStation]; [self.cwStationController stopStation];
+        [self.audioMonitorController stopController]; [self.voiceKeyerController.keyer stop];
+        [self.stationCore forceCloseTransport];
+        return;
+    }
     if ([command isEqual:@"stop"]) {
         [self.ft8StationController stopStation]; [self.cwStationController stopStation];
         [self.audioMonitorController stopController]; [self.voiceKeyerController.keyer stop];
-        NSError *error=nil; if(![self.stationCore releaseOwnedTX:&error]) [self appendLog:error.localizedDescription];
+        [self.stationCore requestReleaseForOwner:nil completion:^(BOOL confirmed) {
+            if(!confirmed) [self appendLog:@"Stop: receive NOT confirmed. Check the radio locally."];
+        }];
         return;
     }
     NSDictionary *tabs=@{@"station":@15,@"voice":@14,@"cw":@10,@"digital":@12,@"logbook":@13};
@@ -1303,6 +1320,12 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     self.cwStationController.keyer.onRadioAudioLost = ^(BOOL confirmed) {
         [weakSelf.stationCore recordTransmitSafetyNotice:confirmed ? @"CW radio audio was lost; RX requested and PT0 confirmed" : @"CW radio audio was lost; RX requested, receive NOT confirmed"];
     };
+    self.cwStationController.keyer.radioReleaseRequester = ^{
+        [weakSelf.stationCore requestReleaseForOwner:@"CW" restoreMode:CWReceiveMode(weakSelf.cwStationController.keyer.rxSuffixCommand) completion:^(BOOL confirmed) {
+            [weakSelf.cwStationController noteRadioReleaseConfirmed:confirmed];
+            if(!confirmed) [weakSelf appendLog:@"CW stop: receive NOT confirmed; check the radio locally."];
+        }];
+    };
     self.cwStationController.selectedPortProvider = ^NSString * { return weakSelf.hasPorts ? weakSelf.portMenu.selectedItem.title : nil; };
     self.cwStationController.logHandler = ^(NSString *message) { [weakSelf appendLog:message]; };
     self.cwStationController.serialCommandSender = ^BOOL(NSString *catCommand) {
@@ -1312,6 +1335,12 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         // TX;, MD6; and FA (sent from the main thread) need CW to be the owner, and the core
         // refuses an RX; from a keyer that is not the owner, as before.
         BOOL release = [catCommand hasPrefix:@"RX"];
+        if(release && NSThread.isMainThread) {
+            [weakSelf.stationCore requestReleaseForOwner:@"CW" restoreMode:CWReceiveMode(catCommand) completion:^(BOOL confirmed) {
+                [weakSelf.cwStationController noteRadioReleaseConfirmed:confirmed];
+            }];
+            return NO; // The persistent core banner tracks acknowledgement asynchronously.
+        }
         if (!release && ![weakSelf.stationCore.owner isEqual:@"CW"] && !weakSelf.stationCore.ownsTX &&
             weakSelf.operationPicker.selectedSegment == 10) {
             [weakSelf.stationCore selectOwner:@"CW" port:[weakSelf currentStationPort] error:nil];
@@ -1322,6 +1351,15 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
                 catCommand, catErr.localizedDescription ?: weakSelf.stationCore.status]];
         }
         return sent;
+    };
+    self.cwStationController.prepareCWModeHandler = ^(void (^done)(BOOL)) {
+        TX500StationCore *core=weakSelf.stationCore;
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0), ^{
+            BOOL sent=[core.owner isEqual:@"CW"] && !core.ownsTX && [core send:@"MD6;" owner:@"CW" error:nil];
+            BOOL verified=sent && [[core query:@"MD;" timeout:0.8 error:nil] isEqual:@"MD6;"];
+            if(!verified) [core recordTransmitSafetyNotice:@"CW preparation failed: DIG mode was not confirmed; no TX was requested"];
+            done(verified);
+        });
     };
     self.cwStationController.catQueryHandler = ^NSString *(NSString *catCommand, NSTimeInterval timeout) {
         NSError *qErr = nil;
@@ -1368,6 +1406,10 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
     self.ft8StationController.selectedPortProvider = ^NSString * { return weakSelf.hasPorts ? weakSelf.portMenu.selectedItem.title : nil; };
     self.ft8StationController.logHandler = ^(NSString *message) { [weakSelf appendLog:message]; };
     self.ft8StationController.serialCommandSender = ^BOOL(NSString *catCommand) {
+        if([catCommand hasPrefix:@"RX"] && NSThread.isMainThread) {
+            [weakSelf.stationCore requestReleaseForOwner:@"Digital" completion:nil];
+            return NO;
+        }
         NSError *catError = nil;
         if (![weakSelf.stationCore.owner isEqual:@"Digital"] && !weakSelf.stationCore.ownsTX) {
             [weakSelf.stationCore selectOwner:@"Digital" port:[weakSelf currentStationPort] error:nil];
@@ -1411,11 +1453,13 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
         return [[TX500SSTVRadioSource alloc] initWithDeviceUID:TX500StationStore.sharedStore.activeProfile[@"radioInput"]];
     };
     self.sstvController.catFrequencyProvider = ^NSNumber * {
-        // the radio's frequency only when it answers now; never a stored or default value. With no CAT port
-        // there is nothing to ask: no read, so the Station screen is not told the radio failed (LAB-07)
-        if (![weakSelf currentStationPort].length) return nil;
-        NSDictionary *state = [weakSelf.stationCore readState:nil];
-        uint64_t hz = [state[@"frequency"] unsignedLongLongValue];
+        TX500StationCore *core=weakSelf.stationCore;
+        if(!core.owner.length) return nil;
+        NSString *reply=[core query:@"FA;" timeout:0.25 error:nil];
+        if(reply.length!=14 || ![reply hasPrefix:@"FA"] || ![reply hasSuffix:@";"]) return nil;
+        NSString *digits=[reply substringWithRange:NSMakeRange(2,11)];
+        if([digits rangeOfCharacterFromSet:NSCharacterSet.decimalDigitCharacterSet.invertedSet].location!=NSNotFound) return nil;
+        uint64_t hz=digits.longLongValue;
         return hz ? @(hz) : nil;
     };
     self.sstvController.myCallsignProvider = ^NSString * {

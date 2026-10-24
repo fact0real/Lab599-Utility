@@ -95,6 +95,7 @@ FOUNDATION_EXPORT int TX500CWRunLiveAudioCheck(NSString *directory, NSString *re
 // Feed Float32 PCM (8 - 192 kHz); arbitrary frame counts, mono or multichannel.
 // For finite streams, supply trailing silence to finish the last character/word.
 - (void)processAudioBuffer:(AVAudioPCMBuffer *)buffer;
+@property (atomic, assign) BOOL suppressDecodingForLocalTX;
 - (void)processRawAudioSamples:(const float *)samples count:(int)count;
 - (void)refreshAudioDevices;
 - (void)startSimulation;

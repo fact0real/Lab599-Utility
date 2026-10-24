@@ -99,6 +99,8 @@ typedef NS_ENUM(NSInteger, TX500FT8MessageType) {
                      myReport:(nullable NSString *)myReport
                    rcvdReport:(nullable NSString *)rcvdReport;
 
++ (nullable NSString *)normalizedUsableCallsign:(NSString *)call;
+
 // ADIF Record Formatter
 + (NSString *)adifRecordForCall:(NSString *)dxCall
                            band:(NSString *)band

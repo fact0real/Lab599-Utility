@@ -847,7 +847,7 @@ static inline float GoertzelMagnitude(const float *data, int frameCount, double 
 }
 
 - (void)processRawAudioSamples:(const float *)samples count:(int)count {
-    if (!samples || count <= 0) return;
+    if (!samples || count <= 0 || self.suppressDecodingForLocalTX) return;
     if (self.onRawAudioSamples) {
         self.onRawAudioSamples(samples, count);
     }

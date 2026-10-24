@@ -45,6 +45,9 @@ typedef NS_ENUM(NSInteger, TX500FaxLineStart) {
 @end
 
 @interface TX500FaxEngine : NSObject
+- (instancetype)initWithPreviousDecodeCount:(NSUInteger)count;
+@property (atomic) BOOL cancelRequested;
+@property (nonatomic, copy, nullable) void (^onDecodeProgress)(double fraction);
 @property (nonatomic) double deviationHz;                   // 400 (WMO, HF)
 @property (nonatomic) double lpm;                           // 120
 @property (nonatomic) NSInteger ioc;                        // 576

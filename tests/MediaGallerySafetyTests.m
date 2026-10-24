@@ -15,6 +15,60 @@ static void Check(BOOL ok, NSString *message) {
     checks++;
     if (!ok) { fprintf(stderr, "FAIL: %s\n", message.UTF8String); exit(1); }
 }
+@interface ReviewLiveSource : NSObject <TX500SSTVAudioSource>
+@property (atomic,copy) NSString *inputFailure;
+@property (copy) void (^finished)(void);
+@end
+@implementation ReviewLiveSource
+- (double)sampleRate { return 12000; }
+- (BOOL)isLive { return YES; }
+- (NSString *)sourceName { return @"Synthetic USB audio"; }
+- (BOOL)startDelivering:(void (^)(const float *,NSUInteger))deliver finished:(void (^)(void))finished error:(NSError **)error {
+    (void)deliver; (void)error; self.finished=finished; return YES;
+}
+- (void)stop { }
+@end
+@interface TX500FaxStationController (ReviewFixture)
+- (void)cancelDecode:(id)sender;
+@end
+static void TestResponsiveMedia(NSURL *root) {
+    TX500SSTVStationController *station=[TX500SSTVStationController new];
+    station.defaults=[[NSUserDefaults alloc] initWithSuiteName:NSUUID.UUID.UUIDString];
+    [station.defaults setInteger:0 forKey:@"TX500SSTVDiskShare"];
+    station.galleryDirectory=[root URLByAppendingPathComponent:@"live-review"];
+    ReviewLiveSource *source=[ReviewLiveSource new];
+    station.radioSourceFactory=^id<TX500SSTVAudioSource>{return source;};
+    __block BOOL catWasBackground=NO;
+    station.catFrequencyProvider=^NSNumber *{catWasBackground=!NSThread.isMainThread;[NSThread sleepForTimeInterval:0.2];return @14230000;};
+    NSTimeInterval began=NSDate.timeIntervalSinceReferenceDate;
+    Check([station setEnabled:YES error:nil] && NSDate.timeIntervalSinceReferenceDate-began<0.15,@"Listen returns immediately while CAT is delayed");
+    [NSRunLoop.mainRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.35]];
+    Check(catWasBackground && [[station valueForKey:@"cachedCATFrequency"] isEqual:@14230000],@"CAT runs off-main and publishes a fresh cached frequency");
+    source.inputFailure=@"Input Synthetic USB audio lost at 12:00:00 UTC. Listening stopped; reconnect it.";
+    source.finished();
+    [NSRunLoop.mainRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+    Check(!station.enabled && !station.engine.running && [station.progressLabel.stringValue containsString:@"lost"],@"Input loss stops decoding and clears the Listening state");
+    [station setEnabled:NO error:nil];
+    NSURL *wav=[root URLByAppendingPathComponent:@"cancel-fax.wav"];
+    TX500SSTVRecording *recording=[[TX500SSTVRecording alloc] initWithSamples:[NSMutableData dataWithLength:240000] sampleRate:12000 startTime:0];
+    Check([recording writeWAVToURL:wav error:nil],@"Cancellation uses an isolated synthetic WAV");
+    TX500FaxEngine *sequence=[[TX500FaxEngine alloc] initWithPreviousDecodeCount:41];
+    Check([sequence decodeFileAtURL:wav error:nil] && sequence.decodes==42,@"Background engine replacements preserve unique chart decode identities");
+    TX500FaxEngine *decoder=[TX500FaxEngine new];
+    __weak TX500FaxEngine *weakDecoder=decoder;
+    __block NSUInteger progress=0;
+    decoder.onDecodeProgress=^(double fraction){if(fraction>0) { progress++; weakDecoder.cancelRequested=YES; }};
+    NSError *failure=nil;
+    Check(![decoder decodeFileAtURL:wav error:&failure] && failure.code==6 && progress>0,@"The real fax decoder reports progress and cooperatively cancels between blocks");
+    TX500FaxStationController *fax=[TX500FaxStationController new]; TX500FaxEngine *previous=fax.engine;
+    began=NSDate.timeIntervalSinceReferenceDate;
+    Check([fax openFileAtURL:wav] && NSDate.timeIntervalSinceReferenceDate-began<0.05 && !fax.openButton.enabled,@"WAV decode starts in the background and disables duplicate starts");
+    [fax cancelDecode:nil];
+    NSDate *deadline=[NSDate dateWithTimeIntervalSinceNow:3];
+    while([[fax valueForKey:@"decodeInProgress"] boolValue] && deadline.timeIntervalSinceNow>0) [NSRunLoop.mainRunLoop runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];
+    Check(fax.openButton.enabled && fax.engine==previous && [fax.errorLabel.stringValue containsString:@"cancel"],@"Cancel keeps the prior chart/engine and restores the controls");
+}
+
 int main(void) {
     char rootTemplate[] = "/tmp/lab599-media-safety.XXXXXX";
     char *rootPath = mkdtemp(rootTemplate);
@@ -25,6 +79,7 @@ int main(void) {
     @autoreleasepool {
         [NSApplication sharedApplication];
         NSURL *root = [NSURL fileURLWithPath:@(rootPath) isDirectory:YES];
+        TestResponsiveMedia(root);
         TX500SSTVStationController *sstv = [TX500SSTVStationController new];
         sstv.galleryDirectory = [root URLByAppendingPathComponent:@"SSTV" isDirectory:YES];
         sstv.defaults = [[NSUserDefaults alloc] initWithSuiteName:NSUUID.UUID.UUIDString];

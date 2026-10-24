@@ -36,6 +36,8 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
 @end
 
 @interface TX500CWStationController ()
+@property (nonatomic) BOOL modePreparationInFlight;
+@property (nonatomic) NSUInteger modePreparationGeneration;
 
 @property (nonatomic, strong, readwrite) NSView *view;
 @property (nonatomic, strong, readwrite) TX500CWAudioDecoder *decoder;
@@ -372,11 +374,15 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
         typeof(self) strongSelf = weakSelf;
         if (strongSelf.decoder.isSimulationActive) { strongSelf.releaseNotConfirmed = NO; return YES; }
         BOOL ok = NO;
+        if ([catCommand containsString:@"TX;"] && [strongSelf.operatingMode isEqual:@"DIG"] && !strongSelf.cwModeConfiguredOnRadio) {
+            if(strongSelf.logHandler) strongSelf.logHandler(@"[CW TX blocked] DIG is not yet confirmed. Wait for MD6 readback or check CAT.");
+            return NO;
+        }
         if (strongSelf && strongSelf.serialCommandSender) {
             ok = strongSelf.serialCommandSender(catCommand);
         }
         // The keyer's releases ignore the answer: keep it, so the pane says when RX was not confirmed.
-        if ([catCommand hasPrefix:@"RX"]) strongSelf.releaseNotConfirmed = !ok;
+        if ([catCommand hasPrefix:@"RX"]) [strongSelf noteRadioReleaseConfirmed:ok];
         if (!ok && [catCommand containsString:@"TX;"]) [strongSelf noteTransmitRefused];
         return ok;
     };
@@ -397,6 +403,8 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
     self.keyer.onTransmitStateChanged = ^(BOOL transmitting, NSString *text) {
         typeof(self) strongSelf = weakSelf;
         if (!strongSelf) return;
+        BOOL globalInput=[strongSelf.decoder.selectedAudioDeviceUID isEqualToString:TX500CWSystemAudioDeviceUID];
+        strongSelf.decoder.suppressDecodingForLocalTX = (transmitting || strongSelf.isManualTuneActive) && globalInput;
         if (transmitting) {
             strongSelf.txAbortButton.enabled = YES;
             strongSelf.txSendButton.enabled = NO;
@@ -530,15 +538,28 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
     }
     // DIG, by default or chosen in the menu, keys with a plain TX;: MD6; goes out once per entry,
     // and again after a TX; was refused. The other modes carry MD6; in their own TX prefix.
-    if ([self.operatingMode isEqualToString:@"DIG"] && !self.cwModeConfiguredOnRadio) {
-        if (self.serialCommandSender) {
-            BOOL sent = self.serialCommandSender(@"MD6;");
-            if (sent) {
-                self.cwModeConfiguredOnRadio = YES;
-                if (self.logHandler) {
-                    self.logHandler(@"[CW Station] Transceiver configured for DIG mode (MD6;).");
-                }
-            }
+    if ([self.operatingMode isEqualToString:@"DIG"] && !self.cwModeConfiguredOnRadio && !self.modePreparationInFlight) {
+        self.modePreparationInFlight=YES;
+        NSUInteger generation=++self.modePreparationGeneration;
+        __weak typeof(self) weakSelf=self;
+        void (^done)(BOOL)=^(BOOL verified) {
+            void (^publish)(void)=^{
+                typeof(self) self=weakSelf;
+                if(!self || generation!=self.modePreparationGeneration || !self.modePreparationInFlight) return;
+                self.modePreparationInFlight=NO;
+                self.cwModeConfiguredOnRadio=verified && [self.operatingMode isEqualToString:@"DIG"];
+                if(self.logHandler) self.logHandler(self.cwModeConfiguredOnRadio ? @"[CW Station] DIG mode confirmed by MD6 readback." : @"[CW Station] DIG preparation failed; TX remains blocked until the radio confirms MD6.");
+            };
+            if(NSThread.isMainThread) publish(); else dispatch_async(dispatch_get_main_queue(),publish);
+        };
+        if(self.prepareCWModeHandler) self.prepareCWModeHandler(done);
+        else {
+            BOOL (^sender)(NSString *)=[self.serialCommandSender copy];
+            NSString *(^query)(NSString *,NSTimeInterval)=[self.catQueryHandler copy];
+            dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0), ^{
+                BOOL sent=sender && sender(@"MD6;");
+                done(sent && query && [query(@"MD;",0.8) isEqual:@"MD6;"]);
+            });
         }
     }
     [self updateKeyerCommandsForCurrentMode];
@@ -565,10 +586,14 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
 
     NSString *cmd = [NSString stringWithFormat:@"MD%ld;", (long)tag];
     if (!self.decoder.isSimulationActive && self.serialCommandSender) {
-        self.cwModeConfiguredOnRadio = self.serialCommandSender(cmd) && tag == 6;
+        self.cwModeConfiguredOnRadio = NO;
+        self.modePreparationGeneration++;
+        self.modePreparationInFlight=NO;
+        if(tag==6) [self prepareRadioForCWMode];
+        else self.serialCommandSender(cmd);
     }
     if (self.logHandler) {
-        self.logHandler([NSString stringWithFormat:@"[CW Station] Mode set to %@ (%@).", sender.selectedItem.title, cmd]);
+        self.logHandler([NSString stringWithFormat:@"[CW Station] Mode selected: %@ (%@); check CAT confirmation.", sender.selectedItem.title, cmd]);
     }
 }
 
@@ -584,6 +609,8 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
     // Another tab may change the radio's mode (an FM preset in Voice): each entry sets DIG again.
     // In Practice MD6; still goes out on entry, as before.
     self.cwModeConfiguredOnRadio = NO;
+    self.modePreparationGeneration++;
+    self.modePreparationInFlight=NO;
     [self stopAutoCQTimer];
     [self.decoder stopListening];
     // Practice ends here (Esc, leaving CW Station, Quit): the practice QSO must not reach the air
@@ -665,7 +692,7 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
 
 - (NSString *)vfoTextForFrequencyHz:(uint64_t)freqHz {
     if (freqHz == 0) return @"--.---.--- MHz";
-    return [NSString stringWithFormat:@"%.3f.%03llu MHz", (double)freqHz / 1e6, (unsigned long long)(freqHz % 1000)];
+    return [NSString stringWithFormat:@"%llu.%03llu.%03llu MHz", (unsigned long long)(freqHz / 1000000), (unsigned long long)((freqHz / 1000) % 1000), (unsigned long long)(freqHz % 1000)];
 }
 
 - (void)updateVFOOffsetLabel {
@@ -677,8 +704,8 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
         return;
     }
     uint64_t rf = dial + (uint64_t)round(pitch);
-    self.vfoOffsetLabel.stringValue = [NSString stringWithFormat:@"Pitch: +%.0fHz | RF: %.3f.%03llu MHz",
-                                       pitch, (double)rf / 1e6, (unsigned long long)(rf % 1000)];
+    self.vfoOffsetLabel.stringValue = [NSString stringWithFormat:@"Pitch: +%.0fHz | RF: %llu.%03llu.%03llu MHz",
+                                       pitch, (unsigned long long)(rf / 1000000), (unsigned long long)((rf / 1000) % 1000), (unsigned long long)(rf % 1000)];
 }
 
 // The pane shows the new frequency only once the radio has accepted FA: a refused FA (the radio
@@ -1900,6 +1927,7 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
     if (![self.decoder.selectedAudioDeviceUID isEqualToString:uid]) [self.decoder stopListening];
     self.decoder.preserveDeviceSelection = YES;
     self.decoder.selectedAudioDeviceUID = uid;
+    self.decoder.suppressDecodingForLocalTX=(self.keyer.isTransmitting || self.isManualTuneActive) && [uid isEqualToString:TX500CWSystemAudioDeviceUID];
     [self updateKeyerRadioOutputDevice];
     [self updateAudioDeviceMenu];
 }
@@ -1930,6 +1958,7 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
         self.hasLocalAudioSelection = YES;
         self.decoder.preserveDeviceSelection = YES;
         self.decoder.selectedAudioDeviceUID = uid;
+        self.decoder.suppressDecodingForLocalTX=(self.keyer.isTransmitting || self.isManualTuneActive) && [uid isEqualToString:TX500CWSystemAudioDeviceUID];
         [self updateKeyerRadioOutputDevice];
         [NSUserDefaults.standardUserDefaults setObject:uid forKey:CWInputPreferenceKey];
         if (self.logHandler) {
@@ -1948,6 +1977,12 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
 
 - (void)advanceQSOAction:(id)sender {
     (void)sender;
+    [self prepareRadioForCWMode];
+    if(self.assistant.suggestedActionMacro.length && !self.decoder.isSimulationActive &&
+       [self.operatingMode isEqualToString:@"DIG"] && !self.cwModeConfiguredOnRadio) {
+        if(self.logHandler) self.logHandler(@"[CW QSO] Wait for DIG confirmation before advancing the exchange.");
+        return;
+    }
     __weak typeof(self) weakSelf = self;
     [self.assistant advanceQSOStepWithAction:^(NSString * _Nonnull macroToTransmit) {
         typeof(self) strongSelf = weakSelf;
@@ -2046,7 +2081,7 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
                          rst:self.assistant.activeRstSent
                         name:self.assistant.activeName
                          qth:self.assistant.activeQTH];
-    self.txInputField.stringValue = @"";
+    if(self.keyer.isTransmitting) self.txInputField.stringValue = @"";
 }
 
 - (void)txTuneClicked:(id)sender {
@@ -2083,6 +2118,7 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
             BOOL ok = self.serialCommandSender(txCmd);
             if (ok) {
                 self.isManualTuneActive = YES;
+                self.decoder.suppressDecodingForLocalTX=[self.decoder.selectedAudioDeviceUID isEqualToString:TX500CWSystemAudioDeviceUID];
                 NSUInteger generation = ++self.manualTuneGeneration;
                 self.txTuneButton.title = @"■ RX (Stop)";
                 self.txTuneButton.contentTintColor = [NSColor systemRedColor];
@@ -2136,6 +2172,7 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
 - (void)stopManualTransmit {
     if (self.isManualTuneActive) {
         self.isManualTuneActive = NO;
+        self.decoder.suppressDecodingForLocalTX=self.keyer.isTransmitting && [self.decoder.selectedAudioDeviceUID isEqualToString:TX500CWSystemAudioDeviceUID];
         self.txTuneButton.title = @"TX (Tune)";
         self.txTuneButton.contentTintColor = nil;
         self.txAbortButton.enabled = self.keyer.isTransmitting;
@@ -2152,6 +2189,19 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
             self.logHandler(@"CW Station: Transceiver returned to RX");
         }
     }
+}
+
+- (void)noteRadioReleaseConfirmed:(BOOL)confirmed {
+    void (^publish)(void)=^{
+        self.releaseNotConfirmed=!confirmed;
+        if(!confirmed) [self showReleaseNotConfirmed];
+        else if(!self.isManualTuneActive && !self.keyer.isTransmitting) {
+            self.carrierLockStatusLabel.stringValue=@"○ LISTENING";
+            self.carrierLockStatusLabel.textColor=NSColor.secondaryLabelColor;
+            self.txAbortButton.enabled=NO;
+        }
+    };
+    if(NSThread.isMainThread) publish(); else dispatch_async(dispatch_get_main_queue(),publish);
 }
 
 // The radio did not confirm RX: say so, and keep ABORT usable (it sends RX; again).
@@ -2313,6 +2363,7 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
     [self stopAutoCQTimer];
     [self.keyer abortTransmission];
     [self.keyer stopAutoCQ];
+    if(self.releaseNotConfirmed && self.keyer.radioReleaseRequester) self.keyer.radioReleaseRequester();
     self.autoCQButton.title = @"Auto-CQ Repeater";
 }
 
@@ -2506,9 +2557,7 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
     TX500CWHeardStation *st = stations[row];
 
     [self.assistant selectAndAnswerStation:st];
-    self.keyer.wpm = (NSInteger)st.wpm;
-    self.wpmStepper.integerValue = self.keyer.wpm;
-    self.wpmLabel.stringValue = [NSString stringWithFormat:@"%ld WPM", (long)self.keyer.wpm];
+    // Answering a station preserves the speed chosen by the operator.
     [self.decoder setNominalWPM:st.wpm];
 
     // Through the keyer's template, so it refuses {MYCALL} while no callsign is set.
@@ -2567,9 +2616,7 @@ static NSArray<NSString *> *CWBandSelectorNames(void) {
 
     // 2. Set decoder & keyer WPM to match this station
     if (channel.estimatedWPM >= 5.0 && channel.estimatedWPM <= 45.0) {
-        self.keyer.wpm = (NSInteger)channel.estimatedWPM;
-        self.wpmStepper.integerValue = self.keyer.wpm;
-        self.wpmLabel.stringValue = [NSString stringWithFormat:@"%ld WPM", (long)self.keyer.wpm];
+    // Answering a station preserves the speed chosen by the operator.
         [self.decoder setNominalWPM:channel.estimatedWPM];
     }
 

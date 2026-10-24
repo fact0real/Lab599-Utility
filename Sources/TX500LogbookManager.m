@@ -74,6 +74,7 @@ static NSString *TX500ADIFFieldValue(NSString *captured, NSInteger length) {
     copy.qsoDate = [self.qsoDate copy];
     copy.timeOn = [self.timeOn copy];
     copy.timeOff = [self.timeOff copy];
+    copy.qsoDateOff = [self.qsoDateOff copy];
     copy.band = [self.band copy];
     copy.frequencyHz = self.frequencyHz;
     copy.mode = [self.mode copy];
@@ -167,6 +168,7 @@ static NSString *TX500ADIFFieldValue(NSString *captured, NSInteger length) {
 
     addField(@"CALL", [self.callsign uppercaseString]);
     addField(@"QSO_DATE", self.qsoDate);
+    if(self.qsoDateOff.length==8) addField(@"QSO_DATE_OFF", self.qsoDateOff);
     addField(@"TIME_ON", self.timeOn.length >= 4 ? [self.timeOn substringToIndex:MIN(6, self.timeOn.length)] : @"0000");
     if (self.timeOff.length >= 4) {
         addField(@"TIME_OFF", [self.timeOff substringToIndex:MIN(6, self.timeOff.length)]);
@@ -284,6 +286,7 @@ static NSString *TX500ADIFFieldValue(NSString *captured, NSInteger length) {
     if (fields[@"QSO_DATE"]) rec.qsoDate = fields[@"QSO_DATE"];
     if (fields[@"TIME_ON"]) rec.timeOn = fields[@"TIME_ON"];
     if (fields[@"TIME_OFF"]) rec.timeOff = fields[@"TIME_OFF"];
+    if (fields[@"QSO_DATE_OFF"]) rec.qsoDateOff = fields[@"QSO_DATE_OFF"];
     if (fields[@"BAND"]) rec.band = [fields[@"BAND"] lowercaseString];
     if (fields[@"FREQ"]) {
         double f = [fields[@"FREQ"] doubleValue];
@@ -454,7 +457,7 @@ static NSString *TX500ADIFFieldValue(NSString *captured, NSInteger length) {
         "  iota_ref TEXT,"
         "  cq_zone TEXT,"
         "  itu_zone TEXT,"
-        "  dxcc_code TEXT, station_profile TEXT, email TEXT"
+        "  dxcc_code TEXT, station_profile TEXT, email TEXT, qso_date_off TEXT"
         ");"
         "CREATE INDEX IF NOT EXISTS idx_qsos_call_date ON qsos(callsign, qso_date, time_on);"
         "CREATE INDEX IF NOT EXISTS idx_qsos_band_mode ON qsos(band, mode);"
@@ -490,7 +493,8 @@ static NSString *TX500ADIFFieldValue(NSString *captured, NSInteger length) {
                 @"ALTER TABLE qsos ADD COLUMN itu_zone TEXT;",
                 @"ALTER TABLE qsos ADD COLUMN dxcc_code TEXT;",
                 @"ALTER TABLE qsos ADD COLUMN station_profile TEXT;",
-                @"ALTER TABLE qsos ADD COLUMN email TEXT;"
+                @"ALTER TABLE qsos ADD COLUMN email TEXT;",
+                @"ALTER TABLE qsos ADD COLUMN qso_date_off TEXT;"
             ];
             for (NSString *mig in migrations) {
                 sqlite3_exec(self->_db, [mig UTF8String], NULL, NULL, NULL);
@@ -537,8 +541,8 @@ static NSString *TX500ADIFFieldValue(NSString *captured, NSInteger length) {
         "  uuid, callsign, qso_date, time_on, time_off, band, frequency_hz, mode, submode,"
         "  rst_sent, rst_rcvd, name, qth, state, country, grid, notes, power_watts, my_call, my_grid,"
         "  qrz_status, lotw_status, clublog_status, eqsl_status, image_url, created_at, updated_at,"
-        "  my_pota_ref, their_pota_ref, my_sota_ref, their_sota_ref, iota_ref, cq_zone, itu_zone, dxcc_code, station_profile, email"
-        ") VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37)"
+        "  my_pota_ref, their_pota_ref, my_sota_ref, their_sota_ref, iota_ref, cq_zone, itu_zone, dxcc_code, station_profile, email, qso_date_off"
+        ") VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38)"
         "ON CONFLICT(uuid) DO UPDATE SET "
         "  callsign=excluded.callsign, qso_date=excluded.qso_date, time_on=excluded.time_on, time_off=excluded.time_off,"
         "  band=excluded.band, frequency_hz=excluded.frequency_hz, mode=excluded.mode, submode=excluded.submode,"
@@ -548,7 +552,7 @@ static NSString *TX500ADIFFieldValue(NSString *captured, NSInteger length) {
         "  clublog_status=excluded.clublog_status, eqsl_status=excluded.eqsl_status, image_url=excluded.image_url,"
         "  my_pota_ref=excluded.my_pota_ref, their_pota_ref=excluded.their_pota_ref, my_sota_ref=excluded.my_sota_ref,"
         "  their_sota_ref=excluded.their_sota_ref, iota_ref=excluded.iota_ref, cq_zone=excluded.cq_zone,"
-        "  itu_zone=excluded.itu_zone, dxcc_code=excluded.dxcc_code, station_profile=excluded.station_profile, email=excluded.email, updated_at=excluded.updated_at;";
+        "  itu_zone=excluded.itu_zone, dxcc_code=excluded.dxcc_code, station_profile=excluded.station_profile, email=excluded.email, qso_date_off=excluded.qso_date_off, updated_at=excluded.updated_at;";
 
         sqlite3_stmt *stmt = NULL;
         if (sqlite3_prepare_v2(self->_db, sql, -1, &stmt, NULL) != SQLITE_OK) {
@@ -602,6 +606,7 @@ static NSString *TX500ADIFFieldValue(NSString *captured, NSInteger length) {
         NSString *identityText=identityJSON ? [[NSString alloc] initWithData:identityJSON encoding:NSUTF8StringEncoding] : nil;
         sqlite3_bind_text(stmt,36,identityText.UTF8String,-1,SQLITE_TRANSIENT);
         sqlite3_bind_text(stmt,37,record.email.UTF8String,-1,SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt,38,record.qsoDateOff.UTF8String,-1,SQLITE_TRANSIENT);
 
         if (sqlite3_step(stmt) != SQLITE_DONE) {
             localErr = [NSError errorWithDomain:@"TX500LogbookErrorDomain"
@@ -665,7 +670,7 @@ static const char *kQSOSelectColumns =
 "uuid, callsign, qso_date, time_on, time_off, band, frequency_hz, mode, submode,"
 " rst_sent, rst_rcvd, name, qth, state, country, grid, notes, power_watts, my_call, my_grid,"
 " qrz_status, lotw_status, clublog_status, eqsl_status, image_url, created_at, updated_at,"
-" my_pota_ref, their_pota_ref, my_sota_ref, their_sota_ref, iota_ref, cq_zone, itu_zone, dxcc_code, station_profile, email";
+" my_pota_ref, their_pota_ref, my_sota_ref, their_sota_ref, iota_ref, cq_zone, itu_zone, dxcc_code, station_profile, email, qso_date_off";
 
 - (nullable TX500LogRecord *)contactWithUUID:(NSString *)uuid {
     if (!uuid || uuid.length == 0) return nil;
@@ -753,6 +758,8 @@ static const char *kQSOSelectColumns =
     if(identity) { id parsed=[NSJSONSerialization JSONObjectWithData:[[NSString stringWithUTF8String:identity] dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil]; if([parsed isKindOfClass:NSDictionary.class]) r.stationProfile=parsed; }
     const char *email=(const char *)sqlite3_column_text(stmt,36);
     if(email) r.email=[NSString stringWithUTF8String:email];
+    const char *offDate=(const char *)sqlite3_column_text(stmt,37);
+    if(offDate) r.qsoDateOff=[NSString stringWithUTF8String:offDate];
 
     return r;
 }
@@ -1226,7 +1233,7 @@ static const char *kQSOSelectColumns =
         rec.band = [[TX500LogRecord bandForFrequencyHz:rec.frequencyHz] lowercaseString];
     rec.mode = @"CW";
     rec.rstSent = cwContact.rstSent ?: @"599";
-    rec.rstRcvd = cwContact.rstRcvd ?: @"599";
+    rec.rstRcvd = cwContact.rstRcvd ?: @"";
     rec.name = cwContact.name;
     rec.qth = cwContact.qth;
     rec.notes = cwContact.notes;
@@ -1235,7 +1242,8 @@ static const char *kQSOSelectColumns =
 
     if (cwContact.qsoDate.length == 8) rec.qsoDate = cwContact.qsoDate;
     if (cwContact.timeOn.length >= 4) rec.timeOn = cwContact.timeOn;
-    rec.timeOff = rec.timeOn;
+    rec.timeOff = cwContact.timeOff ?: @"";
+    rec.qsoDateOff = cwContact.qsoDateOff;
 
     return [self saveContact:rec error:nil] ? rec : nil;
 }

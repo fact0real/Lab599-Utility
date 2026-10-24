@@ -32,6 +32,10 @@ static NSString *const TX500SSTVDiskShareDefaultsKey = @"TX500SSTVDiskShare";   
 @property (nonatomic, strong) NSStackView *galleryStack;
 @property (nonatomic, strong, nullable) TX500SSTVRecordingStore *store;
 @property (nonatomic, strong) NSMutableArray<TX500SSTVLogDraft *> *waitingDrafts;   // one form at a time; none lost
+@property (nonatomic) BOOL catReadInFlight;
+@property (nonatomic, strong) NSNumber *cachedCATFrequency;
+@property (nonatomic, strong) NSDate *cachedCATDate;
+@property (nonatomic, strong) NSTimer *catRefreshTimer;
 @property (nonatomic, strong) NSMutableArray<NSArray *> *catReadings;            // @[date, hz], the last minutes
 @property (nonatomic) NSInteger serial;                                          // the gallery buttons' tags
 @property (nonatomic, strong) NSMutableDictionary<NSNumber *, TX500SSTVPicture *> *bySerial;
@@ -216,9 +220,25 @@ static NSString *SSTVRemoveTitle(TX500SSTVPicture *_Nullable p) { return SSTVHas
 }
 
 - (nullable NSNumber *)readCATNow {
-    NSNumber *hz = self.catFrequencyProvider ? self.catFrequencyProvider() : nil;
-    if (self.catFrequencyProvider) [self noteCATFrequency:hz atDate:[NSDate date]];
-    return hz;
+    if(!self.catReadInFlight && self.catFrequencyProvider) {
+        self.catReadInFlight=YES;
+        NSNumber *(^provider)(void)=[self.catFrequencyProvider copy];
+        __weak typeof(self) weakSelf=self;
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY,0), ^{
+            NSDate *began=[NSDate date];
+            NSNumber *hz=provider();
+            NSDate *ended=[NSDate date];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                typeof(self) self=weakSelf; if(!self) return;
+                self.catReadInFlight=NO;
+                // A long/stalled transaction cannot locate a picture's frequency in time.
+                self.cachedCATFrequency=[ended timeIntervalSinceDate:began]<=1.0 ? hz : nil;
+                self.cachedCATDate=ended;
+                [self noteCATFrequency:self.cachedCATFrequency atDate:ended];
+            });
+        });
+    }
+    return self.cachedCATDate && -self.cachedCATDate.timeIntervalSinceNow<=1.0 ? self.cachedCATFrequency : nil;
 }
 
 // The frequency a picture was received on: the valid readings taken during it (and the one taken
@@ -702,7 +722,15 @@ static NSString *SSTVSize(double bytes) {
         s.progressLabel.stringValue = notice.text;
         [s log:notice.text];
     };
-    e.onStopped = ^{ [weakSelf refreshStatus]; };
+    e.onStopped = ^{
+        TX500SSTVStationController *s=weakSelf;
+        if(weakEngine==s.engine && s.engine.lastInputFailure.length) {
+            s.enabled=NO;
+            s.progressLabel.stringValue=s.engine.lastInputFailure;
+            [s log:s.engine.lastInputFailure];
+        }
+        [s refreshStatus];
+    };
 }
 
 // Showing the screen never opens the audio, and Listen is not remembered: every session starts
@@ -741,6 +769,13 @@ static NSString *SSTVSize(double bytes) {
         }
         [self applyOptionsTo:self.engine];
         [self readCATNow];
+        [self.catRefreshTimer invalidate];
+        __weak typeof(self) weakSelf=self;
+        self.catRefreshTimer=[NSTimer scheduledTimerWithTimeInterval:1.0 repeats:YES block:^(NSTimer *timer) {
+            typeof(self) self=weakSelf;
+            if(!self || !self.enabled) { [timer invalidate]; return; }
+            [self readCATNow];
+        }];
         NSError *err = nil;
         ok = src && [self.engine startWithSource:src error:&err];
         if (!ok) {

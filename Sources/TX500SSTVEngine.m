@@ -226,6 +226,7 @@ static NSBitmapImageRep *SSTVBitmap(const uint8_t *rgb, NSInteger w, NSInteger h
 #define SSTV_RADIO_FRAMES 1200
 
 @interface TX500SSTVRadioSource ()
+@property (atomic, copy, nullable) NSString *inputFailure;
 @property (nonatomic, copy, nullable) void (^deliver)(const float *, NSUInteger);
 @property (nonatomic, copy, nullable) void (^finished)(void);
 @property (nonatomic, strong) dispatch_queue_t queue;
@@ -238,6 +239,7 @@ static NSBitmapImageRep *SSTVBitmap(const uint8_t *rgb, NSInteger w, NSInteger h
     AudioQueueRef _aq;
     AudioQueueBufferRef _buffers[SSTV_RADIO_BUFFERS];
     volatile BOOL _running;
+    dispatch_source_t _aliveWatch;
     NSDate *_blockDate;       // the block being delivered: when it was captured (on the delivery queue)
 }
 
@@ -280,6 +282,9 @@ static void SSTVRadioInput(void *user, AudioQueueRef aq, AudioQueueBufferRef buf
     AudioObjectID dev = kAudioObjectUnknown;
     UInt32 size = sizeof dev;
     if (AudioObjectGetPropertyData(kAudioObjectSystemObject, &a, sizeof cf, &cf, &size, &dev) != noErr || dev == kAudioObjectUnknown) return nil;
+    AudioObjectPropertyAddress aliveAddress={kAudioDevicePropertyDeviceIsAlive,kAudioObjectPropertyScopeGlobal,kAudioObjectPropertyElementMain};
+    UInt32 alive=0; size=sizeof alive;
+    if(AudioObjectGetPropertyData(dev,&aliveAddress,0,NULL,&size,&alive)!=noErr || !alive) return nil;
     AudioObjectPropertyAddress streams = { kAudioDevicePropertyStreams, kAudioObjectPropertyScopeInput, kAudioObjectPropertyElementMain };
     UInt32 bytes = 0;
     if (AudioObjectGetPropertyDataSize(dev, &streams, 0, NULL, &bytes) != noErr || bytes == 0) return nil;
@@ -376,10 +381,24 @@ static void SSTVRadioInput(void *user, AudioQueueRef aq, AudioQueueBufferRef buf
                                            "Check the station route and the microphone permission.", (int)st]);
         return NO;
     }
+    self.inputFailure=nil;
+    _aliveWatch=dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER,0,0,self.queue);
+    dispatch_source_set_timer(_aliveWatch,dispatch_time(DISPATCH_TIME_NOW,500*NSEC_PER_MSEC),500*NSEC_PER_MSEC,50*NSEC_PER_MSEC);
+    __weak typeof(self) weakSelf=self;
+    dispatch_source_set_event_handler(_aliveWatch, ^{
+        typeof(self) self=weakSelf; if(!self || !self->_running) return;
+        if(![TX500SSTVRadioSource inputDeviceWithUID:self->_uid]) {
+            NSDateFormatter *utc=[NSDateFormatter new]; utc.timeZone=[NSTimeZone timeZoneForSecondsFromGMT:0]; utc.dateFormat=@"HH:mm:ss 'UTC'";
+            self.inputFailure=[NSString stringWithFormat:@"Input %@ lost at %@. Listening stopped; reconnect it or select another input.",self->_deviceName ?: self->_uid,[utc stringFromDate:[NSDate date]]];
+            [self stop];
+        }
+    });
+    dispatch_resume(_aliveWatch);
     return YES;
 }
 
 - (void)stop {
+    if(_aliveWatch) { dispatch_source_cancel(_aliveWatch); _aliveWatch=nil; }
     if (!_aq) return;
     _running = NO;
     AudioQueueStop(_aq, true);
@@ -394,6 +413,10 @@ static void SSTVRadioInput(void *user, AudioQueueRef aq, AudioQueueBufferRef buf
 @end
 
 #pragma mark - Engine
+
+@interface TX500SSTVEngine ()
+@property (atomic, readwrite, copy, nullable) NSString *lastInputFailure;
+@end
 
 @implementation TX500SSTVEngine {
     NSLock *_lock;
@@ -454,6 +477,7 @@ static void SSTVRadioInput(void *user, AudioQueueRef aq, AudioQueueBufferRef buf
 
 - (BOOL)startWithSource:(id<TX500SSTVAudioSource>)source error:(NSError **)error {
     [self stop];
+    self.lastInputFailure=nil;
     sstv_rx_config cfg;
     [self fillConfig:&cfg];
     NSArray *given = [source respondsToSelector:@selector(timeAnchors)] ? [source timeAnchors] : nil;
@@ -773,6 +797,7 @@ static TX500SSTVNoticeKind SSTVKind(const sstv_event *e) {
 - (void)finishInputOfGeneration:(uint64_t)gen {
     [_lock lock];
     if (gen != _gen) { [_lock unlock]; return; }                // the end of a source already replaced
+    if([_source respondsToSelector:@selector(inputFailure)]) self.lastInputFailure=[_source inputFailure];
     if (_rx && _running) {
         _running = NO;
         sstv_rx_finish(_rx);

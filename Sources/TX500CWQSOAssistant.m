@@ -28,7 +28,7 @@
         _callsign = @"";
         _mode = @"CW";
         _rstSent = @"599";
-        _rstRcvd = @"599";
+        _rstRcvd = @"";
         _name = @"";
         _qth = @"";
         _notes = @"";
@@ -42,6 +42,8 @@
         dfTime.timeZone = [NSTimeZone timeZoneWithAbbreviation:@"UTC"];
         dfTime.dateFormat = @"HHmmss";
         _timeOn = [dfTime stringFromDate:[NSDate date]];
+        _timeOff = @"";
+        _qsoDateOff = @"";
     }
     return self;
 }
@@ -51,11 +53,13 @@
     [s appendFormat:@"<CALL:%lu>%@ ", (unsigned long)self.callsign.length, self.callsign.uppercaseString];
     [s appendFormat:@"<QSO_DATE:%lu>%@ ", (unsigned long)self.qsoDate.length, self.qsoDate];
     [s appendFormat:@"<TIME_ON:%lu>%@ ", (unsigned long)self.timeOn.length, self.timeOn];
+    if (self.timeOff.length) [s appendFormat:@"<TIME_OFF:%lu>%@ ", (unsigned long)self.timeOff.length, self.timeOff];
+    if (self.qsoDateOff.length) [s appendFormat:@"<QSO_DATE_OFF:%lu>%@ ", (unsigned long)self.qsoDateOff.length, self.qsoDateOff];
     if (self.band.length > 0) [s appendFormat:@"<BAND:%lu>%@ ", (unsigned long)self.band.length, self.band.lowercaseString];
     if (self.frequencyMHz > 0.0) [s appendFormat:@"<FREQ:%.6f> ", self.frequencyMHz];
     [s appendString:@"<MODE:2>CW "];
     [s appendFormat:@"<RST_SENT:%lu>%@ ", (unsigned long)self.rstSent.length, self.rstSent];
-    [s appendFormat:@"<RST_RCVD:%lu>%@ ", (unsigned long)self.rstRcvd.length, self.rstRcvd];
+    if (self.rstRcvd.length) [s appendFormat:@"<RST_RCVD:%lu>%@ ", (unsigned long)self.rstRcvd.length, self.rstRcvd];
     if (self.name.length > 0) [s appendFormat:@"<NAME:%lu>%@ ", (unsigned long)self.name.length, self.name];
     if (self.qth.length > 0) [s appendFormat:@"<QTH:%lu>%@ ", (unsigned long)self.qth.length, self.qth];
     if (self.notes.length > 0) [s appendFormat:@"<COMMENT:%lu>%@ ", (unsigned long)self.notes.length, self.notes];
@@ -69,6 +73,7 @@
 @property (nonatomic, strong, readwrite) NSMutableArray<TX500QSOContact *> *internalLoggedContacts;
 // Practice / Sim was on when the active QSO started: it stays a practice QSO to the end.
 @property (nonatomic, assign) BOOL activeQSOStartedInPractice;
+@property (nonatomic, strong) NSDate *activeQSOStartedAt;
 @end
 
 @implementation TX500CWQSOAssistant
@@ -79,7 +84,7 @@
         _qsoState = TX500QSOStateIdle;
         _activeTargetCallsign = @"";
         _activeRstSent = @"599";
-        _activeRstRcvd = @"599";
+        _activeRstRcvd = @"";
         _activeName = @"";
         _activeQTH = @"";
         _myCallsign = @"";
@@ -89,6 +94,15 @@
         _internalLoggedContacts = [NSMutableArray array];
     }
     return self;
+}
+
+- (void)setActiveTargetCallsign:(NSString *)callsign {
+    NSString *value = callsign ?: @"";
+    if (![_activeTargetCallsign isEqualToString:value]) {
+        _activeTargetCallsign = [value copy];
+        self.activeQSOStartedAt = value.length ? [NSDate date] : nil;
+        self.activeRstRcvd = @"";
+    }
 }
 
 - (NSArray<TX500CWHeardStation *> *)heardStations {
@@ -178,7 +192,7 @@
         case TX500QSOStateExchangeReport:
             return [NSString stringWithFormat:@"UR %@ BK", self.activeRstSent ?: @"5NN"];
         case TX500QSOStateExchangeInfo:
-            return [NSString stringWithFormat:@"NAME %@ QTH %@ 73", self.activeName.length ? self.activeName : @"OP", self.activeQTH.length ? self.activeQTH : @"QTH"];
+            return @"73"; // No operator name/QTH configured here; do not send fabricated values.
         case TX500QSOStateSigningOff:
             return [NSString stringWithFormat:@"TU 73 DE %@ SK", me];
         case TX500QSOStateCompleted:
@@ -192,7 +206,10 @@
     if (stream.length == 0) return;
 
     // 1. Pre-clean: strip non-alphanumeric noise chars (unicode glitches, dashes, hyphens, slashes)
-    NSMutableString *clean = [stream mutableCopy];
+    // The final word remains open until the decoder reports its word gap.
+    NSRange lastGap = [stream rangeOfCharacterFromSet:NSCharacterSet.whitespaceAndNewlineCharacterSet options:NSBackwardsSearch];
+    if (lastGap.location == NSNotFound) return;
+    NSMutableString *clean = [[stream substringToIndex:NSMaxRange(lastGap)] mutableCopy];
     NSRegularExpression *noiseRegex = [NSRegularExpression regularExpressionWithPattern:@"[^A-Za-z0-9\\s]" options:0 error:nil];
     [noiseRegex replaceMatchesInString:clean options:0 range:NSMakeRange(0, clean.length) withTemplate:@" "];
 
@@ -284,8 +301,6 @@
     for (NSInteger i = 0; i < (NSInteger)recentWords.count; i++) {
         NSString *w = recentWords[i];
         if ([w isEqualToString:@"599"] || [w isEqualToString:@"5NN"] || [w hasPrefix:@"579"] || [w hasPrefix:@"589"]) {
-            self.activeRstRcvd = [w isEqualToString:@"5NN"] ? @"599" : w;
-
             // Check if preceded by a valid callsign (e.g. "YE3AJJ 5NN 101")
             if (i > 0) {
                 NSString *prev = recentWords[i - 1];
@@ -297,6 +312,7 @@
                 }
             }
 
+            self.activeRstRcvd = [w isEqualToString:@"5NN"] ? @"599" : w;
             // Check if followed by serial exchange (e.g. "101", "042")
             if (i + 1 < (NSInteger)recentWords.count) {
                 NSString *nxt = recentWords[i + 1];
@@ -393,8 +409,9 @@
 - (void)selectAndAnswerStation:(TX500CWHeardStation *)station {
     self.activeQSOStartedInPractice = self.practiceModeActive && self.practiceModeActive();
     self.activeTargetCallsign = station.callsign;
+    self.activeQSOStartedAt = [NSDate date];
     self.activeRstSent = @"599";
-    self.activeRstRcvd = @"599";
+    self.activeRstRcvd = @"";
     self.qsoState = TX500QSOStateAnsweringCQ;
     [self notifyStateChanged];
 }
@@ -463,7 +480,7 @@
     self.activeTargetCallsign = @"";
     self.activeQSOStartedInPractice = NO;
     self.activeRstSent = @"599";
-    self.activeRstRcvd = @"599";
+    self.activeRstRcvd = @"";
     [self notifyStateChanged];
 }
 
@@ -486,7 +503,18 @@
     contact.callsign = self.activeTargetCallsign.uppercaseString;
     contact.mode = @"CW";
     contact.rstSent = self.activeRstSent.length > 0 ? self.activeRstSent : @"599";
-    contact.rstRcvd = self.activeRstRcvd.length > 0 ? self.activeRstRcvd : @"599";
+    contact.rstRcvd = self.activeRstRcvd ?: @"";
+    NSDate *ended = [NSDate date];
+    NSDate *started = self.activeQSOStartedAt;
+    NSDateFormatter *stamp = [NSDateFormatter new];
+    stamp.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+    stamp.timeZone = [NSTimeZone timeZoneWithAbbreviation:@"UTC"];
+    stamp.dateFormat = @"yyyyMMdd";
+    contact.qsoDate = started ? [stamp stringFromDate:started] : @"";
+    contact.qsoDateOff = [stamp stringFromDate:ended];
+    stamp.dateFormat = @"HHmmss";
+    contact.timeOn = started ? [stamp stringFromDate:started] : @"";
+    contact.timeOff = [stamp stringFromDate:ended];
     contact.name = self.activeName;
     contact.qth = self.activeQTH;
     contact.frequencyMHz = (double)self.currentFrequencyHz / 1000000.0;
@@ -506,7 +534,7 @@
         [self.internalLoggedContacts insertObject:contact atIndex:0];
     }
 
-    if (practice || self.currentFrequencyHz == 0) {
+    if (practice || self.currentFrequencyHz == 0 || !started) {
         if (self.onContactLogged) {
             dispatch_async(dispatch_get_main_queue(), ^{ self.onContactLogged(contact); });
         }
@@ -525,7 +553,7 @@
     cloudRec.frequencyHz = (uint64_t)(contact.frequencyMHz * 1e6);
     cloudRec.mode = @"CW";
     cloudRec.rstSent = contact.rstSent ?: @"599";
-    cloudRec.rstRcvd = contact.rstRcvd ?: @"599";
+    cloudRec.rstRcvd = contact.rstRcvd ?: @"";
     cloudRec.name = contact.name;
     cloudRec.qth = contact.qth;
     cloudRec.notes = contact.notes;

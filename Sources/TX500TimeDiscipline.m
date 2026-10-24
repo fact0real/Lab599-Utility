@@ -10,8 +10,8 @@
 #import <sys/socket.h>
 #import <unistd.h>
 
-static NSString * const kClockPersistenceKey = @"TX500_DisciplinedClock_v1";
-static NSString * const kStationPersistenceKey = @"TX500_FT8TimeBaselines_v1";
+static NSString * const kClockPersistenceKey = @"TX500_DisciplinedClock_v2";
+static NSString * const kStationPersistenceKey = @"TX500_FT8TimeBaselines_v2";
 static const double kNTPToUnix = 2208988800.0;
 
 static double Clamp(double value, double low, double high) {

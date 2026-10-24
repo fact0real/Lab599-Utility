@@ -283,7 +283,10 @@
 #pragma mark - Station Engagement & QSO Sequencer
 
 - (void)engageCaller:(TX500FT8Message *)caller inReplyToSlotParity:(NSInteger)slotParity {
-    if (!caller || caller.callerCall.length == 0) return;
+    if (!caller) return;
+    NSString *usable = [TX500FT8Message normalizedUsableCallsign:caller.callerCall];
+    if (!usable) { if (self.logHandler) self.logHandler(@"[FT8] Unknown hashed callsign: wait for a full decode before replying."); return; }
+    caller.callerCall = usable;
     if (self.isQSOActive && self.activeDXCall.length > 0) {
         if (self.logHandler) {
             self.logHandler([NSString stringWithFormat:
@@ -352,7 +355,10 @@
 }
 
 - (void)engageStation:(TX500FT8Message *)target automaticHunter:(BOOL)automaticHunter {
-    if (!target || target.callerCall.length == 0) return;
+    if (!target) return;
+    NSString *usable = [TX500FT8Message normalizedUsableCallsign:target.callerCall];
+    if (!usable) { if (self.logHandler) self.logHandler(@"[FT8] Unknown hashed callsign: wait for a full decode before replying."); return; }
+    target.callerCall = usable;
     // One radio can own exactly one FT8 exchange at a time.  All entry points
     // (Auto-CQ, Auto-Hunter, table double-click and keyboard shortcuts) pass
     // through this gate so none can overwrite the active DX call or frequency.
@@ -817,7 +823,9 @@
 #pragma mark - QSO Completion & Logging
 
 - (void)completeAndLogQSO {
-    if (self.activeDXCall.length == 0) return;
+    NSString *usable = [TX500FT8Message normalizedUsableCallsign:self.activeDXCall];
+    if (!usable) { if (self.logHandler) self.logHandler(@"[FT8 Log blocked] A full valid callsign is required."); return; }
+    self.activeDXCall = usable;
 
     TX500FT8LoggedQSO *qso = [[TX500FT8LoggedQSO alloc] init];
     qso.callsign = self.activeDXCall;

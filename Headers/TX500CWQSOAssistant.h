@@ -34,6 +34,8 @@ typedef NS_ENUM(NSInteger, TX500QSOState) {
 @interface TX500QSOContact : NSObject
 @property (nonatomic, copy) NSString *callsign;
 @property (nonatomic, copy) NSString *qsoDate;    // YYYYMMDD
+@property (nonatomic, copy) NSString *timeOff;
+@property (nonatomic, copy) NSString *qsoDateOff;
 @property (nonatomic, copy) NSString *timeOn;     // HHMMSS
 @property (nonatomic, copy) NSString *band;       // e.g. "20m", "40m"
 @property (nonatomic, assign) double frequencyMHz;

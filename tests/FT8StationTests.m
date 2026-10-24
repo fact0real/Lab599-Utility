@@ -43,6 +43,7 @@ static NSUInteger CloudUploadCount(void) {
 }
 
 @interface TX500FT8AudioEngine (WaterfallTestAccess)
++ (float)decodedDTForObservedStart:(double)observed slotStart:(double)slotStart slotPeriod:(double)period protocol:(tx500_ft8_protocol_t)protocol;
 - (void)appendIncomingAudioSamples:(const float *)samples count:(NSInteger)count timestamp:(const AudioTimeStamp *)timestamp;
 - (void)updateWaterfallStream;
 - (void)processSlotTickAtUTC:(NSTimeInterval)utc;
@@ -77,6 +78,28 @@ int main(int argc, const char * argv[]) {
     setenv("TX500_TEST_ROOT", testRoot, 1);
     setenv("CFFIXED_USER_HOME", testRoot, 1);
     @autoreleasepool {
+        unsigned char ea3Tones[105];
+        int ea3Count=tx500_ft8_encode_message("CQ EA3JIC JN11",TX500_FT8_PROTOCOL_FT8,ea3Tones,105);
+        AssertTrue(ea3Count==79,@"Timing fixture encodes a real FT8 message");
+        float *ea3Signal=calloc(180000,sizeof(float));
+        int ea3Samples=tx500_ft8_synthesize(ea3Tones,ea3Count,1000,TX500_FT8_PROTOCOL_FT8,12000,ea3Signal,180000);
+        for(int k=0;k<3;k++) {
+            int offset=k*6000; float *buffer=calloc(162000,sizeof(float));
+            memcpy(buffer+offset,ea3Signal,MIN(ea3Samples,162000-offset)*sizeof(float));
+            tx500_ft8_decoded_t decoded[100];
+            int count=tx500_ft8_decode_samples(buffer,162000,12000,TX500_FT8_PROTOCOL_FT8,decoded,100); BOOL found=NO;
+            for(int j=0;j<count;j++) if(!strcmp(decoded[j].text,"CQ EA3JIC JN11")) {
+                float dt=[TX500FT8AudioEngine decodedDTForObservedStart:1000+decoded[j].time_sec slotStart:1000 slotPeriod:15 protocol:TX500_FT8_PROTOCOL_FT8];
+                AssertTrue(fabs(dt-(offset/12000.0-0.5))<0.04,@"Actual decoder and engine DT agree with the known first-symbol time"); found=YES;
+            }
+            free(buffer); AssertTrue(found,@"Timing fixture is decoded at each known offset");
+        }
+        free(ea3Signal);
+        AssertTrue(fabs([TX500FT8AudioEngine decodedDTForObservedStart:1000.7 slotStart:1000 slotPeriod:7.5 protocol:TX500_FT8_PROTOCOL_FT4]-0.7)<0.001,@"Unverified FT4 timing is unchanged");
+        AssertTrue([TX500FT8Message normalizedUsableCallsign:@"<...>"]==nil,@"Unresolved hashes cannot be used as callsigns");
+        AssertTrue([[TX500FT8Message normalizedUsableCallsign:@"<EA3JIC>"] isEqual:@"EA3JIC"],@"Resolved hash callsigns lose their brackets");
+        AssertTrue([[TX500FT8Message adifRecordForCall:@"<...>" band:@"20m" freqHz:14074000 rstSent:@"-10" rstRcvd:@"-12" grid:@"JN11" date:[NSDate date]] length]==0,@"Unresolved hashes cannot enter ADIF");
+
         (void)argc; (void)argv;
         NSLog(@"Running Lab599 Discovery TX-500 FT8 Digital Suite Tests...");
 

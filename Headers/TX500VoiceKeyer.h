@@ -16,6 +16,7 @@ FOUNDATION_EXPORT BOOL TXVoiceDeviceAvailable(NSString *uid, BOOL input);
 @end
 @interface TX500VoiceCATRadio : NSObject <TX500VoiceRadio>
 - (instancetype)initWithPort:(NSString *)path;
+- (void)cancelPendingIO;
 - (nullable NSString *)query:(NSString *)command error:(NSError **)error;
 // The reply must come within timeout; a cancelled token ends the wait within one 40 ms
 // slice and returns nil with the serial port's own "Stopped" error.

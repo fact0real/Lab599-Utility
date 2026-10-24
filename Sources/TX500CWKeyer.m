@@ -774,8 +774,8 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
 
 - (NSString *)expandTemplate:(NSString *)tmpl targetCall:(NSString *)call rst:(NSString *)rst name:(NSString *)name qth:(NSString *)qth {
     NSString *myCall = [self.myCallsign stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet].uppercaseString ?: @"";
-    NSString *tgtCall = call.length > 0 ? call.uppercaseString : @"CALL";
-    NSString *rstVal = rst.length > 0 ? rst : @"599";
+    NSString *tgtCall = call.length > 0 ? call.uppercaseString : @"{CALL}";
+    NSString *rstVal = rst.length > 0 ? rst : @"{RST}";
     if (self.useCutNumbers && [rstVal isEqualToString:@"599"]) {
         rstVal = @"5NN";
     }
@@ -783,8 +783,8 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
     NSString *res = [tmpl stringByReplacingOccurrencesOfString:@"{MYCALL}" withString:myCall];
     res = [res stringByReplacingOccurrencesOfString:@"{CALL}" withString:tgtCall];
     res = [res stringByReplacingOccurrencesOfString:@"{RST}" withString:rstVal];
-    res = [res stringByReplacingOccurrencesOfString:@"{NAME}" withString:(name.length > 0 ? name.uppercaseString : @"OP")];
-    res = [res stringByReplacingOccurrencesOfString:@"{QTH}" withString:(qth.length > 0 ? qth.uppercaseString : @"QTH")];
+    res = [res stringByReplacingOccurrencesOfString:@"{NAME}" withString:(name.length > 0 ? name.uppercaseString : @"{NAME}")];
+    res = [res stringByReplacingOccurrencesOfString:@"{QTH}" withString:(qth.length > 0 ? qth.uppercaseString : @"{QTH}")];
     return [res stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]].uppercaseString;
 }
 
@@ -812,6 +812,10 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
         if ([self blocksMissingCallsignForTemplate:text]) return;
         NSString *expanded = [self expandTemplate:text targetCall:call rst:rst name:name qth:qth];
         if (expanded.length == 0) return;
+        if ([expanded containsString:@"{"]) {
+            if (self.logHandler) self.logHandler(@"[CW TX blocked] A macro value is missing (CALL, RST, NAME or QTH). Set it before sending.");
+            return;
+        }
         NSCharacterSet *supported = [NSCharacterSet characterSetWithCharactersInString:@"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 /?=+,.\n\r\t"];
         if (expanded.length > 4096 || [expanded rangeOfCharacterFromSet:supported.invertedSet].location != NSNotFound) {
             if (self.logHandler) self.logHandler(@"[CW TX blocked] Use supported Morse letters, digits and punctuation; maximum 4096 characters.");
@@ -921,7 +925,9 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
 
 // release NO: the time-out has already sent RX; from its own queue.
 - (void)abortTransmissionReleasingRadio:(BOOL)release {
+    void (^releaseRequest)(void)=nil;
     @synchronized (self) {
+        BOOL wasActive=self.isTransmitting || self.activeBufferText.length>0;
         [self cancelTransmitTimeout];
         self.transmissionGeneration++;
         self.isTransmitting = NO;
@@ -936,15 +942,21 @@ static AVAudioPCMBuffer *TX500GenerateMorsePCMBuffer(AVAudioFormat *fmt, NSArray
 
         [self stopLocalSidetoneSafely];
 
-        if (release && self.serialCommandSender && !(self.practiceModeActive && self.practiceModeActive())) {
+        if (release && (wasActive || !self.radioReleaseRequester) && self.serialCommandSender && !(self.practiceModeActive && self.practiceModeActive())) {
             NSString *rxCmd = self.rxSuffixCommand.length > 0 ? self.rxSuffixCommand : @"RX;";
-            self.serialCommandSender(rxCmd);
+            if(self.radioReleaseRequester) releaseRequest=[self.radioReleaseRequester copy];
+            else {
+                BOOL (^sender)(NSString *)=[self.serialCommandSender copy];
+                releaseRequest=^{ sender(rxCmd); };
+            }
         }
 
         if (self.onTransmitStateChanged) {
             self.onTransmitStateChanged(NO, @"");
         }
     }
+    // Neither CAT I/O nor a callback that can wait for it runs under the keyer lock.
+    if(releaseRequest) releaseRequest();
 }
 
 - (BOOL)startContinuousCarrierWithPitchHz:(double)pitch {

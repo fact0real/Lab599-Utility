@@ -77,8 +77,9 @@ NSURL *TX500BandPlanURLForRegion(NSString *region) {
     _vfo=Label(@"— . ——— ———",34,NSFontWeightMedium); _vfo.font=[NSFont monospacedDigitSystemFontOfSize:34 weight:NSFontWeightMedium];
     _state=Label(@"Read the radio to see its current frequency",11,NSFontWeightRegular); _state.textColor=NSColor.secondaryLabelColor;
     NSButton *read=[self button:@"Read radio" symbol:@"arrow.clockwise" action:@selector(readRadio:)];
+    NSButton *disconnect=[self button:@"Disconnect CAT" symbol:@"cable.connector.slash" action:@selector(disconnectCAT:)];
     NSButton *stop=[self button:@"Stop all · Esc" symbol:@"stop.fill" action:@selector(stop:)]; stop.contentTintColor=NSColor.systemRedColor;
-    NSStackView *vfo=Stack(@[Stack(@[_vfo,Spacer(),read,stop],NO,10),_state],YES,8); [vfo.arrangedSubviews[0].widthAnchor constraintEqualToAnchor:vfo.widthAnchor].active=YES;
+    NSStackView *vfo=Stack(@[Stack(@[_vfo,Spacer(),read,stop,disconnect],NO,10),_state],YES,8); [vfo.arrangedSubviews[0].widthAnchor constraintEqualToAnchor:vfo.widthAnchor].active=YES;
     NSStackView *bar=Stack(@[],NO,8);
     NSArray *commands=@[@[@"Voice",@"mic",@"voice"],@[@"CW",@"waveform",@"cw"],@[@"FT8 / FT4",@"dot.radiowaves.left.and.right",@"digital"],@[@"Logbook",@"book",@"logbook"],@[@"Save VFO",@"star",@"favorite"]];
     for(NSArray *c in commands) { NSButton *b=[self button:c[0] symbol:c[1] action:@selector(quick:)]; b.identifier=c[2]; [bar addArrangedSubview:b]; }
@@ -187,6 +188,7 @@ NSURL *TX500BandPlanURLForRegion(NSString *region) {
 }
 - (void)readRadio:(id)sender { (void)sender; [self performRadio:NO]; }
 - (void)tune:(id)sender { (void)sender; [self performRadio:YES]; }
+- (void)disconnectCAT:(id)sender { (void)sender; if(self.commandHandler) self.commandHandler(@"disconnect"); }
 - (void)stop:(id)sender { (void)sender; if(self.commandHandler) self.commandHandler(@"stop"); }
 - (void)quick:(NSButton *)sender { [self runCommand:sender.identifier]; }
 - (void)runCommand:(NSString *)command {

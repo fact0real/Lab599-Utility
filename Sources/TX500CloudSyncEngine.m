@@ -1,3 +1,4 @@
+#import "TX500DiagnosticPrivacy.h"
 //
 //  TX500CloudSyncEngine.m
 //  Lab599 Utility
@@ -448,7 +449,7 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
 
     [[self.urlSession dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
         if (err) {
-            completion(NO, err.localizedDescription);
+            completion(NO, [NSString stringWithFormat:@"%@: network request failed (code %ld). Check the connection and service settings.", req.URL.host ?: @"Cloud service", (long)err.code]);
             return;
         }
         NSString *respText = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
@@ -490,15 +491,13 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
 
     [[self.urlSession dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
         if (err) {
-            completion(NO, err.localizedDescription);
+            completion(NO, [NSString stringWithFormat:@"%@: network request failed (code %ld). Check the connection and service settings.", req.URL.host ?: @"Cloud service", (long)err.code]);
             return;
         }
-        NSString *resText = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
         if (TX500ClubLogResponseIsSuccess((NSHTTPURLResponse *)resp, data)) {
             completion(YES, @"OK");
         } else {
-            completion(NO, resText.length ? [resText substringToIndex:MIN(50, resText.length)] :
-                [NSString stringWithFormat:@"Club Log returned HTTP %ld with no success response", (long)((NSHTTPURLResponse *)resp).statusCode]);
+            completion(NO, [NSString stringWithFormat:@"Club Log: upload not confirmed (HTTP %ld). Check credentials and retry.", (long)((NSHTTPURLResponse *)resp).statusCode]);
         }
     }] resume];
 }
@@ -524,7 +523,7 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
 
     [[self.urlSession dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
         if (err) {
-            completion(NO, err.localizedDescription);
+            completion(NO, [NSString stringWithFormat:@"%@: network request failed (code %ld). Check the connection and service settings.", req.URL.host ?: @"Cloud service", (long)err.code]);
             return;
         }
         NSString *resText = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
@@ -533,7 +532,7 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
              [resText localizedCaseInsensitiveContainsString:@"Result: 1"])) {
             completion(YES, @"OK");
         } else {
-            completion(NO, [resText substringToIndex:MIN(60, resText.length)]);
+            completion(NO, @"eQSL: upload not confirmed. Check credentials and retry.");
         }
     }] resume];
 }
@@ -576,8 +575,7 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
         [task waitUntilExit];
         [self tqslRunEnded];
 
-        NSData *outData = [[outPipe fileHandleForReading] readDataToEndOfFile];
-        NSString *outStr = [[NSString alloc] initWithData:outData encoding:NSUTF8StringEncoding] ?: @"";
+        (void)[[outPipe fileHandleForReading] readDataToEndOfFile];
 
         [[NSFileManager defaultManager] removeItemAtPath:tempFile error:nil];
         NSString *companionTq8 = [[tempFile stringByDeletingPathExtension] stringByAppendingPathExtension:@"tq8"];
@@ -587,7 +585,7 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
         if (code == 0) {
             completion(YES, @"OK");
         } else {
-            completion(NO, [NSString stringWithFormat:@"TQSL exited with %d: %@", code, [outStr substringToIndex:MIN(80, outStr.length)]]);
+            completion(NO, [NSString stringWithFormat:@"TQSL exited with %d: %@", code, @"Output withheld to protect credentials; check TQSL configuration."]);
         }
     } @catch (NSException *ex) {
         [[NSFileManager defaultManager] removeItemAtPath:tempFile error:nil];
@@ -915,7 +913,7 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
        NSString *adif = [TX500CloudSyncEngine uploadDocumentForRecords:records service:@"LoTW"];
         if (![adif writeToFile:tempFile atomically:YES encoding:NSUTF8StringEncoding error:&err]) {
             dispatch_async(dispatch_get_main_queue(), ^{
-                if (completion) completion(NO, err.localizedDescription);
+                if (completion) completion(NO, [NSString stringWithFormat:@"LoTW: could not create temporary ADIF (code %ld). Check free space and folder permissions; nothing was uploaded.", (long)err.code]);
             });
             return;
         }
@@ -941,8 +939,7 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
             [task waitUntilExit];
             [self tqslRunEnded];
 
-            NSData *data = [[pipe fileHandleForReading] readDataToEndOfFile];
-            NSString *outStr = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
+            (void)[[pipe fileHandleForReading] readDataToEndOfFile];
 
             [[NSFileManager defaultManager] removeItemAtPath:tempFile error:nil];
             NSString *companionTq8 = [[tempFile stringByDeletingPathExtension] stringByAppendingPathExtension:@"tq8"];
@@ -951,7 +948,7 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
             int code = task.terminationStatus;
             BOOL ok = (code == 0);
             NSString *resultMsg = ok ? @"LoTW Full Batch Uploaded Successfully via TQSL!" :
-                [NSString stringWithFormat:@"LoTW Error (exit %d): %@", code, outStr];
+                [NSString stringWithFormat:@"LoTW Error (exit %d): %@", code, @"Output withheld to protect credentials; check TQSL configuration."];
 
             if (ok) {
                 // Mark all uploaded in DB
@@ -1018,7 +1015,7 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
         NSError *err = nil;
         if (![adif writeToFile:tempFile atomically:YES encoding:NSUTF8StringEncoding error:&err]) {
             dispatch_async(dispatch_get_main_queue(), ^{
-                if (completion) completion(NO, err.localizedDescription ?: @"Failed to write temporary ADIF");
+                if (completion) completion(NO, [NSString stringWithFormat:@"LoTW: could not create temporary ADIF (code %ld). Check free space and folder permissions; nothing was uploaded.", (long)err.code]);
             });
             return;
         }
@@ -1044,8 +1041,7 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
             [task waitUntilExit];
             [self tqslRunEnded];
 
-            NSData *data = [[pipe fileHandleForReading] readDataToEndOfFile];
-            NSString *outStr = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
+            (void)[[pipe fileHandleForReading] readDataToEndOfFile];
 
             [[NSFileManager defaultManager] removeItemAtPath:tempFile error:nil];
             NSString *companionTq8 = [[tempFile stringByDeletingPathExtension] stringByAppendingPathExtension:@"tq8"];
@@ -1055,7 +1051,7 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
             BOOL ok = (code == 0);
             NSString *resultMsg = ok ?
                 [NSString stringWithFormat:@"Successfully signed & uploaded %ld QSO(s) to LoTW via TQSL!", (long)targets.count] :
-                [NSString stringWithFormat:@"TQSL exited with code %d: %@", code, [outStr substringToIndex:MIN(100, outStr.length)]];
+                [NSString stringWithFormat:@"TQSL exited with code %d: %@", code, @"Output withheld to protect credentials; check TQSL configuration."];
 
             if (ok) {
                 for (TX500LogRecord *r in targets) {
@@ -1092,7 +1088,7 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
         [[self.urlSession dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
             if (err) {
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    completion(NO, err.localizedDescription);
+                    completion(NO, [NSString stringWithFormat:@"%@: network request failed (code %ld). Check the connection and service settings.", req.URL.host ?: @"Cloud service", (long)err.code]);
                 });
                 return;
             }
@@ -1128,13 +1124,12 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
         [[self.urlSession dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
             if (err) {
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    completion(NO, err.localizedDescription);
+                    completion(NO, [NSString stringWithFormat:@"%@: network request failed (code %ld). Check the connection and service settings.", req.URL.host ?: @"Cloud service", (long)err.code]);
                 });
                 return;
             }
-            NSString *resText = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
             BOOL ok = TX500ClubLogResponseIsSuccess((NSHTTPURLResponse *)resp, data);
-            NSString *msg = ok ? @"ClubLog Credentials Verified!" : resText;
+            NSString *msg = ok ? @"ClubLog Credentials Verified!" : @"Club Log: credential check was not confirmed. Verify account settings and retry.";
             dispatch_async(dispatch_get_main_queue(), ^{
                 completion(ok, msg);
             });
@@ -1159,7 +1154,7 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
         [[self.urlSession dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *resp, NSError *err) {
             if (err) {
                 dispatch_async(dispatch_get_main_queue(), ^{
-                    completion(NO, err.localizedDescription);
+                    completion(NO, [NSString stringWithFormat:@"%@: network request failed (code %ld). Check the connection and service settings.", req.URL.host ?: @"Cloud service", (long)err.code]);
                 });
                 return;
             }
@@ -1167,7 +1162,7 @@ static BOOL TX500CloudExternalSideEffectsAreDisabled(void) {
             BOOL ok = TX500CloudResponseMatchesEndpoint(resp, endpoint) &&
                       ([resText localizedCaseInsensitiveContainsString:@"Success"] ||
                        [resText localizedCaseInsensitiveContainsString:@"Result: 1"]);
-            NSString *msg = ok ? @"eQSL.cc Login Verified!" : resText;
+            NSString *msg = ok ? @"eQSL.cc Login Verified!" : @"eQSL: credential check was not confirmed. Verify account settings and retry.";
             dispatch_async(dispatch_get_main_queue(), ^{
                 completion(ok, msg);
             });

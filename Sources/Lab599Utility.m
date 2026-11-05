@@ -1,3 +1,4 @@
+#import "TX500DiagnosticPrivacy.h"
 #import "TX500TransmitSafetyBanner.h"
 #import "Lab599AppUpdater.h"
 #import "TX500CWAudioDecoder.h"
@@ -526,6 +527,7 @@ static NSInteger CWReceiveMode(NSString *command) {
 }
 
 - (void)appendLog:(NSString *)message {
+    message = TX500PrivateDiagnostic(message);
     if(!NSThread.isMainThread) { dispatch_async(dispatch_get_main_queue(), ^{ [self appendLog:message]; }); return; }
     NSDateFormatter *df = [NSDateFormatter new];
     df.dateFormat = @"HH:mm:ss";

@@ -45,3 +45,8 @@ cloud credentials are sent. Sparkle system profiling is disabled. Download and
 installation are user-controlled; feeds and archives must be signed.
 
 FT8 and Live Audio require an explicitly selected receive input. A disconnected UID is preserved and fails closed; the system default and heuristic USB suggestions no longer open an unselected input. Starting a built-in input requires a separate confirmation because it hears the room. Test mode refuses that input without opening it.
+
+### Diagnostic privacy (2.289.3)
+Activity/diagnostic log entries remove credential-shaped fields, URL queries/fragments, URL user information, authentication/cookie headers and control characters. Oversized messages are omitted. QRZ/HamQTH credential checks no longer reveal partial session identifiers; cloud upload failures and TQSL failures withhold raw output. This cannot identify every secret in arbitrary prose. Review diagnostics before sharing; historical logs are not rewritten.
+
+TQSL certificate passwords supplied to the existing automated signing workflow are passed using its command-line password option and can be visible to local process inspection while TQSL runs. Diagnostic redaction does not remove this local process exposure. Use an interactive TQSL workflow when this exposure is unacceptable; no alternative password transport is claimed here.

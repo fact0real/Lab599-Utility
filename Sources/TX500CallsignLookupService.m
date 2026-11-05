@@ -415,7 +415,7 @@
                 NSString *key = [TX500CallsignLookupService extractXMLTag:@"Key" fromString:xml];
                 if (key.length > 0) {
                     ok = YES;
-                    msg = [NSString stringWithFormat:@"QRZ XML Login Successful! Session Key: %@", [key substringToIndex:MIN(8, key.length)]];
+                    msg = @"QRZ XML login successful.";
                 } else {
                     NSString *errorMsg = [TX500CallsignLookupService extractXMLTag:@"Error" fromString:xml];
                     msg = errorMsg.length > 0 ? errorMsg : @"Invalid username or password.";
@@ -446,7 +446,7 @@
                 if (!key) key = [TX500CallsignLookupService extractXMLTag:@"id" fromString:xml];
                 if (key.length > 0) {
                     ok = YES;
-                    msg = [NSString stringWithFormat:@"HamQTH Login Successful! Session ID: %@", [key substringToIndex:MIN(8, key.length)]];
+                    msg = @"HamQTH login successful.";
                 } else {
                     NSString *errorMsg = [TX500CallsignLookupService extractXMLTag:@"error" fromString:xml];
                     msg = errorMsg.length > 0 ? errorMsg : @"Invalid username or password.";

@@ -3,7 +3,7 @@
 set -eu
 cd "$(dirname "$0")/.."
 APP_PATH=${1:-"Lab599 Utility.app"}
-NOTES_PATH=${2:-"RELEASE-NOTES-2.286.md"}
+NOTES_PATH=${2:-"RELEASE-NOTES-2.291.md"}
 sh scripts/prepare-sparkle.sh
 VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_PATH/Contents/Info.plist")
 case "$VERSION" in ''|*[!0-9.]*) echo 'Invalid application version' >&2; exit 1;; esac
@@ -22,7 +22,7 @@ ditto -c -k --sequesterRsrc --keepParent "$APP_PATH" "$OUTPUT/$ARCHIVE"
 cp "$NOTES_PATH" "$OUTPUT/${ARCHIVE%.zip}.md"
 cp updates/appcast.xml "$OUTPUT/appcast.xml"
 Vendor/Sparkle/bin/generate_appcast --account ir.factoreal.lab599-utility.updates \
-    --download-url-prefix "https://github.com/fact0real/Lab599-Utility/releases/download/$VERSION/" \
+    --download-url-prefix "https://lab599-utility.asis.sh/releases/" \
     --embed-release-notes --maximum-deltas 0 "$OUTPUT"
 Vendor/Sparkle/bin/sign_update --account ir.factoreal.lab599-utility.updates --verify "$OUTPUT/appcast.xml"
 (cd "$OUTPUT" && shasum -a 256 "$ARCHIVE" > "$ARCHIVE.sha256")

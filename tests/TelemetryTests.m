@@ -85,8 +85,10 @@ int main(void) {
         Check([TX500TelemetryEngine parsePTReply:@"PT0;" intoData:stateData], @"Physical PT reply parsed");
         Check(stateData.txStateValid && !stateData.isTransmitting, @"PT0 maps to RX");
         Check([TX500TelemetryEngine parsePCReply:@"PC050;" intoData:stateData], @"Physical PC reply parsed");
-        Check(stateData.rfPowerValid && fabs(stateData.rfPowerWatts - 5.0) < 0.01,
-              @"PC050 maps to the configured 5.0W setpoint");
+        Check(stateData.configuredPowerValid && stateData.configuredPowerPC == 50 && !stateData.rfPowerValid,
+              @"PC050 retains raw 50 and cannot establish measured watts");
+        Check(![TX500TelemetryEngine parsePCReply:@"PC101;" intoData:stateData], @"PC above documented range rejected");
+        Check(((TXTelemetryData *)[stateData copy]).configuredPowerPC == 50, @"Raw PC survives telemetry snapshot copying");
 
         // 3. Parser: RM; meter frames
         TXTelemetryData *rmData = [TXTelemetryData new];
@@ -187,6 +189,9 @@ int main(void) {
         Check(queryCount >= 4, @"Telemetry used the serialized shared CAT query transport");
         Check(sharedSnapshot.frequencyValid && sharedSnapshot.frequencyHz == 14074000,
               @"Shared CAT transport produced a valid telemetry snapshot");
+        Check(sharedSnapshot.configuredPowerValid && sharedSnapshot.configuredPowerPC == 50 &&
+              !sharedSnapshot.rfPowerValid && !sharedSnapshot.currentValid && !sharedSnapshot.temperatureValid,
+              @"Live PC does not fabricate RF watts, DC current or PA temperature");
 
         printf("PASS: Telemetry validity, CAT parser, alarm, demo, and rolling-average checks passed.\n");
     }

@@ -1,13 +1,71 @@
-<?xml version="1.0" encoding="utf-8" standalone="yes"?><!-- sparkle-sign-warning:
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<!-- sparkle-sign-warning:
 IMPORTANT: This file was signed by Sparkle. Any modifications to this file requires re-signing this file with generate_appcast or sign_update! The signed signature will be embedded at the end of this file.
---><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
-  <channel>
-    <title>Lab599 Utility application updates</title>
-    <link>https://github.com/fact0real/Lab599-Utility</link>
-    <description>Stable macOS application releases. No firmware updates are delivered through this feed.</description>
-    <language>en</language>
-  </channel>
-</rss><!-- sparkle-signatures:
-edSignature: Qg2PrFoj1hY+hGDn3BWVkQK3SUaFQ8UgnR5S/jhB0ZyKl3iDT6m1nWNmoEa3PppMO73xv0jAb28lfDZXvucZCA==
-length: 672
+-->
+<rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle" version="2.0">
+    <channel>
+        <title>Lab599 Utility application updates</title>
+        <link>https://lab599-utility.asis.sh/</link>
+        <description>Reviewed macOS application releases. No firmware updates are delivered through this feed.</description>
+        <language>en</language>
+        <item>
+            <title>2.293</title>
+            <pubDate>Sun, 08 Nov 2026 19:52:24 +0330</pubDate>
+            <sparkle:version>299</sparkle:version>
+            <sparkle:shortVersionString>2.293</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[# Lab599 Utility 2.293 — Build 299
+
+- Add a Radio Family menu for one diagnostics folder/export, default-off station identity sharing/import and explicit supported Keychain account transfer. Preserve historical diagnostic/contact files and current radio/cloud consent.
+- Validate CAT snapshot reply prefixes, ignore unrelated/late frames and reject results from a previously selected port. Extend fake-radio coverage without physical PTT or RF.
+- Include the owner's reviewed offline power-calibration analysis, telemetry labeling and signed application-update settings. Calibration remains a measurement/analysis workflow; it is not a hardware calibration or RF verification claim.
+- Retain the upstream diagnostic/cloud-failure privacy protection and the pinned signed update feed/archive checks.
+
+Shared settings never import CAT/audio routing, power, transmit permission or contact history. Archive/feed signatures are verified before publication. Existing logs and contacts are not repaired or migrated by this version.
+]]></description>
+            <enclosure url="https://lab599-utility.asis.sh/releases/Lab599-Utility-2.293.zip" length="9176159" type="application/octet-stream" sparkle:edSignature="zjIxkSgqNIy61TMKaIjXSfMy06ES5ZC6zTpQmPv3tHT0mhnZTtQNTB3o+K7MQ5NEpx7EscKLE9iQu+oXJEXdDw=="/>
+        </item>
+        <item>
+            <title>2.291</title>
+            <pubDate>Thu, 05 Nov 2026 14:00:40 +0330</pubDate>
+            <sparkle:version>297</sparkle:version>
+            <sparkle:shortVersionString>2.291</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[# Lab599 Utility 2.291 (Build 297)
+
+This pre-release adds product-server application updates and includes the reviewed
+local 2.286–2.290 changes. It is ad-hoc signed, not Apple notarized.
+
+## Application updates
+
+- Check for App Updates… and App Update Settings… in the application menu.
+- Optional six-hourly, daily or weekly checks; manual is the initial policy.
+- Official Sparkle 2.10.1, pinned by upstream archive SHA-256.
+- Ed25519 verification of appcast and archive; archive validation before extraction.
+- Fixed HTTPS feed at lab599-utility.asis.sh; matching release archives at the same host only.
+- Embedded signed release notes; no unsigned API fallback, signature-expiration bypass, automatic installation or system profiling.
+- Explicit Install & Relaunch and Later, with radio-activity, receive-recovery, file-operation and unsaved settings/memory checks. Canceled termination returns to the pending installer.
+- Existing logs, station preferences and Keychain credentials remain in their existing stores.
+
+Users of 2.285 install this bootstrap release manually once. Version 2.285 has
+no updater or pinned update key. App updates never flash radio firmware.
+
+## Included local improvements
+
+- Strict Lab599 filter parsing, verified changes and clearer digital Stop, Halt TX and Stop Tone controls (2.286).
+- Responsive CAT release, asynchronous CW preparation, CW QSO metadata corrections, SSTV device-loss handling and cancellable background Fax decoding (2.288).
+- Private LoTW confirmation transport, explicit receive inputs, safer CSV import, SSTV recording preservation and stale CW-meter handling (2.289).
+- Offline Power Calibration: compare manually recorded meter dots with external wattmeter observations or import EA3JIC v0.7 sweep CSV. Measured-range interpolation and CSV/report export; no radio connection or transmission (2.290).
+
+Validation uses simulated serial devices, isolated data stores and disposable
+local app copies. No RF transmission is part of release testing. Physical radio,
+firmware, audio-interface and cloud-provider behavior retain their documented limits.
+]]></description>
+            <enclosure url="https://lab599-utility.asis.sh/releases/Lab599-Utility-2.291.zip" length="9143419" type="application/octet-stream" sparkle:edSignature="CUUxKP0Qws/A0lEUHq7z2lhvVQvKRkzqNzrbkC0n28bvJ9S55pIoDtpVPQU/1jKVoIAqSZLKQJEkwvCXF6s/Bw=="/>
+        </item>
+    </channel>
+</rss>
+<!-- sparkle-signatures:
+edSignature: rSNtWzlz1eabPYWg1fglUDMSGnPhqFFb9vthzKM7osjLyXR22k4nPPYEQ84OGW41coQG+9F6rgzj5nyyoYdSAQ==
+length: 5155
 -->

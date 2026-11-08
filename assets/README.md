@@ -11,6 +11,7 @@ current build source.
 The current artwork includes Lab599-branded elements. The repository also
 contains a Lab599 logo and radio photographs under `../Resources/`. Their
 presence here does not establish redistribution permission or imply Lab599
-endorsement. Written permission is being sought. Existing app ZIP assets are
-left intact, and no new app release is planned until permission is clarified.
+endorsement. The project owner confirmed receipt of the required written permission on
+5 November 2026 in the release conversation. Redistribution permission does
+not imply manufacturer endorsement.
 The model photos in firmware confirmation must remain accurate for each radio.

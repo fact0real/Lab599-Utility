@@ -2,11 +2,27 @@
 
 A native macOS application for the Lab599 TX-500 family of transceivers. It includes a Station workspace, DX Cluster, FT8/FT4 and CW operation, Voice Keyer, contact logbook, firmware updates, live telemetry, radio screen capture, time sync, CAT diagnostics, settings and memory management. Developed by **EP2AES (factoreal)**.
 
-**Newest published pre-release: v2.284 (Build 290) · macOS 12+ · Apple Silicon and Intel · English interface · Persian guide included**
+**Newest pre-release: v2.291 (Build 297) · macOS 12+ · Apple Silicon and Intel · English interface · Persian guide included**
 
-[Download v2.284](https://github.com/fact0real/Lab599-Utility/releases/tag/2.284) · [In-app Help guide](Resources/Help/index.html) · [راهنمای فارسی](QUICKSTART-FA.md) · [Build instructions](UPDATER-README.md) · [Report an issue](https://github.com/fact0real/Lab599-Utility/issues/new)
+[Download v2.291](https://lab599-utility.asis.sh/releases/Lab599-Utility-2.291.zip) · [Release notes](RELEASE-NOTES-2.291.md) · [Illustrated guide](Resources/Help/index.html) · [Report an issue](https://github.com/fact0real/Lab599-Utility/issues/new)
 
-## Local review build: v2.285 (Build 291)
+Version 2.291 bootstraps signed in-app updates from lab599-utility.asis.sh. Users
+of 2.285 must install this version manually once. See [application updates](docs/APP-UPDATES.md).
+
+## Included since v2.290 (Build 296)
+
+**Telemetry → Power Calibration…** compares manually recorded TX meter dots
+with external wattmeter readings, or imports EA3JIC's v0.7 sweep CSV. It provides
+local analysis, measured-range interpolation and CSV/report export. This
+workbench does not connect to a radio or start transmission. Conditions and
+physical radio labels stay separate; simulated data is excluded. Live
+Telemetry shows PC as its raw 10–100 setting, without assuming watts.
+See [2.290 notes](RELEASE-NOTES-2.290.md) and the
+[source/security review and hardware limits](docs/POWER-CALIBRATION-REVIEW-20261025.md).
+The automatic-transmit script was not integrated due to safety findings.
+This workbench is included in the 2.291 pre-release.
+
+## Earlier local review build: v2.285 (Build 291)
 
 The local source includes reviewed CW/FT8 transmit-safety fixes from EA3JIC's
 2026-10-15 report. Practice/Sim suppresses CW CAT and radio audio, missing RX
@@ -14,31 +30,30 @@ confirmation keeps the transmitter fault latched, and independent watchdogs
 bound CW messages and tuning carriers. Local CW sidetone uses built-in Mac audio.
 See [2.285 notes](RELEASE-NOTES-2.285.md) and the
 [detailed proposal review and hardware limits](docs/EA3JIC-REVIEW-20261018.md).
-This local build has not been published; the download links below still refer
-to the published 2.284 release.
+The reviewed fixes are included in 2.291.
 
 ## Download and install
 
-Download `Lab599-Utility-v2.284-macOS-universal.zip` from the [v2.284 release](https://github.com/fact0real/Lab599-Utility/releases/tag/2.284). Extract the ZIP and move `Lab599 Utility.app` to `/Applications`. The ZIP contains the app, offline illustrated Help, English and Persian guides, and license notices; manufacturer firmware is not included.
+Download `Lab599-Utility-2.291.zip` from the [project website](https://lab599-utility.asis.sh/). Extract the ZIP and move `Lab599 Utility.app` to `/Applications`. The ZIP contains the app, offline illustrated Help, English and Persian guides, and license notices; manufacturer firmware is not included.
 
 Verify the download before opening the app:
 
 ```sh
-shasum -a 256 Lab599-Utility-v2.284-macOS-universal.zip
+shasum -a 256 Lab599-Utility-2.291.zip
 ```
 
-Compare the result with the `SHA256SUMS.txt` asset on the release page. The app is ad-hoc signed, **not Apple notarized**. If macOS blocks the first launch, select this app in **System Settings → Privacy & Security → Open Anyway** after verifying the checksum.
+Compare the result with the matching `.zip.sha256` checksum file on the project website. The app is ad-hoc signed, **not Apple notarized**. If macOS blocks the first launch, select this app in **System Settings → Privacy & Security → Open Anyway** after verifying the checksum.
 
 ## What's new in v2.284
 
 - **AudioQueue CoreAudio Engine for CW Modulation & Tune Carrier:** Replaced `AVAudioEngine` in `TX500CWKeyer` with low-level Apple `AudioQueue` streaming at 48000 Hz Float32 stereo. This completely eliminates the 0-Watt transmit issue where `AVAudioEngine` locked to default internal speakers and failed to route modulation to external USB DACs.
-- **Full 10W Transmit RF Drive in `DIG` Mode:** Morse tones and continuous tuning carriers are now streamed interleaved across both Left and Right channels with calibrated ~0.85 amplitude (-1.4 dBFS) and 4ms raised-cosine envelopes, delivering full ~10 W RF power verified live via CAT power meter polling (`RM00009;`).
+- **Full 10W Transmit RF Drive in `DIG` Mode:** Morse tones and continuous tuning carriers are now streamed interleaved across both Left and Right channels with calibrated ~0.85 amplitude (-1.4 dBFS) and 4ms raised-cosine envelopes, with live CAT power-meter polling (`RM00009;`). This is a dots reading; an external wattmeter is required to establish actual RF watts.
 - **Automatic Audio Input/Output Endpoint Pairing:** CW Station now automatically pairs and binds the matching USB audio output interface when an input audio device is selected or changed.
 - **Strict Device Selection Preservation:** Fixed `preserveDeviceSelection` handling in audio device enumeration to prevent missing audio routes from being silently overridden.
 
 ## What's new in v2.283
 
-- **Full-Power CW Transmission via REM/DATA (`DIG` Mode):** Solved zero RF output when sending Morse over the REM/DATA audio interface by routing audio in `DIG` mode (`MD6;`) with raised-cosine sine shaping at the nominal pitch (650 Hz), delivering full ~10 W RF power.
+- **Full-Power CW Transmission via REM/DATA (`DIG` Mode):** Solved zero RF output when sending Morse over the REM/DATA audio interface by routing audio in `DIG` mode (`MD6;`) with raised-cosine sine shaping at the nominal pitch (650 Hz), providing RF drive. Actual output watts require an external wattmeter.
 - **Automatic Mode Cycling:** When operating in `CW (Paddle Key)` mode, transmissions automatically switch to `MD6;TX;` during transmit and restore `RX;MD3;` on release, keeping hardware keyers and internal CW audio filters fully functional.
 - **Live Transmit Telemetry (⚡ PWR & 📶 SWR):** Real-time CAT polling of transmit power (Watts via `RM0`) and calibrated antenna SWR ratio (via `RM1`) with animated level bars and color-coded alerts during TX and manual antenna tuning.
 - **Safety Watchdog Cutoff:** Manual `TX (Tune)` is protected by an automatic 10-second safety cutoff timer to prevent accidental transmitter lockup.
@@ -145,7 +160,7 @@ The updater accepts only firmware whose complete SHA-256 matches a reviewed offi
 | Logbook & Cloud | Local QSO records, ADIF import/export, callbook enrichment and configured cloud services | Offline for local records |
 | Firmware Update | Select a reviewed official `.fw` file or download from the built-in Lab599 catalog; verify normal-mode CAT identity first, then enter the loader; checks the complete file hash and known target, blocks a mismatch with the CAT family or operator-declared radio model, transfers with a two-ACK handshake and TIOCOUTQ-paced streaming, and prevents system sleep during flash | CAT 9600 first, then bootloader — "The loader is waiting..." |
 | Time Sync | Disciplines a continuous internal UTC clock from multi-source NTP, TLS/HTTPS fallback, calibrated holdover and robust FT8 timing consensus; sets the radio to local time or UTC and verifies read-back | Normal operation, CAT 9600 |
-| Telemetry | Live arc-gauge dashboard: RF power, SWR (RM1 dots), supply/battery voltage, S-meter, frequency, mode, TX/RX state; rolling averages at 5 m / 15 m / 30 m / 60 m; over-voltage, low-voltage and high-SWR alert guards; selectable poll rate (250 ms / 500 ms / 1 s); Demo Mode | Normal operation, CAT 9600 |
+| Telemetry | Raw PC setting (10–100), TX/RX meter dots, voltage, frequency, mode and state; rolling averages for available readings; Demo Mode; offline Power Calibration with manual wattmeter observations and CSV/report export | Normal operation, CAT 9600 |
 | Radio Screen | Real-time 256×128 LCD mirror via CAT; four display themes (Amber, Cool White / Daylight, Green phosphor, OLED); meter bars in the radio's own dots (Live CAT reads no spectrum; the panadapter is shown in Demo Mode); save screenshot to PNG or copy to clipboard; Demo Mode | Normal operation, CAT 9600 |
 | CAT Studio | Verified live controls and band presets; named quick-launch CAT macros with safe command validation and read-back; full 1024-byte settings snapshots with model check and pre-restore backup; app-owned CAT protocol monitor with TX/RX/error filters and response timeline; the separate system console starts collapsed | Normal operation, CAT 9600 |
 | Settings | Read, save, compare and restore 1024-byte `.set` backups; edit described fields and import/export their JSON representation; read-back comparison after every write | Normal operation, CAT 9600 |
@@ -173,12 +188,12 @@ The app does not read cloud credentials just to open its main window or the Stat
 
 ## Application updates
 
-Use the application menu → **Check for App Updates…**. Automatic checks are
+Use the Settings → Application Updates → **Check for App Updates…**, under **Settings → Application Updates…** for manual, six-hourly, daily or weekly checks. Automatic checks are
 optional and off initially; installation always needs an explicit decision and
 an idle radio. Signed feeds and archives are required. This updates the Mac
 application, not radio firmware. The first upgrade from 2.285 is manual.
-The empty signed feed establishes the update channel; the new binary remains
-a review build pending public release.
+The signed product-server feed delivers reviewed releases; v2.291 establishes
+the updater for users upgrading manually from v2.285.
 See [application update setup and release procedure](docs/APP-UPDATES.md).
 
 ## Use
@@ -229,7 +244,7 @@ The 15 release tags published through `2.273` still contain older review documen
 
 ## Branding and release status
 
-This is an independent community project, not an official Lab599 application. The existing app uses Lab599-branded images and radio photographs whose redistribution permission is being clarified. No new app release will be published until written permission is in place. See [asset provenance and status](assets/README.md).
+This is an independent community project, not an official Lab599 application. The project owner confirmed receipt of written permission for the existing Lab599 imagery on 5 November 2026. The app remains independent without a claim of manufacturer endorsement. See [asset provenance and status](assets/README.md).
 
 ## Project
 
@@ -240,3 +255,8 @@ See [LICENSE](LICENSE) (GNU GPL version 3) and [THIRD_PARTY_LICENSES.md](THIRD_P
 ### Privacy and connection controls
 
 See [PRIVACY.md](PRIVACY.md) for startup destinations, opt-in NTP, cloud upload switches and field-sharing policy. Cloud Settings → Privacy controls automatic and per-service uploads and optional personal fields; unset preferences default off.
+
+
+## Radio Utility Family diagnostics and optional settings
+
+New diagnostic records include original product identity, version, build and run under the common Radio-Utility-Family folder. Open Radio Family settings to export the family logs or explicitly share/import compatible station identity. Sharing is off by default. Compatible log-service credentials use a separate explicit macOS Keychain transfer; radio control and contact history remain separate. See [the storage and consent contract](docs/RADIO-FAMILY-STORAGE.md).

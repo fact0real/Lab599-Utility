@@ -12,5 +12,6 @@
 - (void)selectTool:(NSInteger)tool; // CAT=0, Settings=1, Memory=2
 - (void)portsAvailable:(BOOL)available;
 - (void)cancelActiveOperation;
+@property(nonatomic, readonly) BOOL hasUnsavedChanges;
 - (BOOL)confirmDiscard;
 @end

@@ -1576,6 +1576,7 @@ static NSString *StudioTimestamp(NSDate *date) {
                             button:@"Replace"];
 }
 
+- (BOOL)hasUnsavedChanges { return self.settingsDirty || self.memoryDirty; }
 - (BOOL)confirmDiscard {
     return (!self.settingsDirty && !self.memoryDirty) || [self confirm:@"Close with unsaved backups?"
         message:@"Settings or memory changes have not been saved to a file."

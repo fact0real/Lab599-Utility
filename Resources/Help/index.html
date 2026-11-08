@@ -94,7 +94,7 @@
     <a class="back" href="#top">Back to contents ↑</a>
   </section>
 
-  <p><strong>Application updates:</strong> use the application menu → <strong>Check for App Updates…</strong>. Optional automatic checks start off. Signed updates show release notes and require your installation decision. Stop radio operations before installing; <strong>Later</strong> keeps the current app running. Application updates do not flash radio firmware.</p>
+  <p><strong>Application updates:</strong> use the Settings → Station → Application Updates → <strong>Check for App Updates…</strong>. Use <strong>Settings → Application Updates…</strong> for manual, six-hourly, daily or weekly checks. Optional automatic checks start off. Signed updates from lab599-utility.asis.sh show release notes and require your download and installation decision. Stop radio operations before installing; <strong>Later</strong> keeps the current app running. Application updates do not flash radio firmware.</p>
   <section id="digital">
     <h2>4. FT8 / FT4 Digital</h2>
     <ol>
@@ -150,6 +150,7 @@
 
   <section id="radio-view">
     <h2>10. Radio Screen and Telemetry</h2>
+    <p><strong>Power Calibration…</strong> in Telemetry opens an offline workbench. Record TX meter dots and an external wattmeter reading on a rated 50 Ω dummy load, return the radio to receive, then add the point. The operator controls the radio manually; this workbench sends no radio commands. You can also import sweep CSV and export measurements or analysis. Keep model, firmware, individual radio, frequency, measured supply voltage, carrier and instrument consistent. Simulated data is excluded, and table estimates stay inside the measured range. They are never applied automatically to live telemetry. Export before quitting to keep the session. Live Telemetry displays raw PC (10–100) instead of assuming watts; live DC current and PA temperature remain unavailable.</p>
     <p><strong>Radio Screen</strong> reads the radio's display over CAT, can refresh it continuously, and saves or copies a screenshot. Its V/M on-screen control does not send a CAT command because the proposed mapping has not been verified on the TX-500; use the physical radio key. <strong>Telemetry</strong> shows live CAT measurements and warnings such as high SWR or voltage. Use Demo Mode to learn the panels without hardware. Do not treat demo values as readings from a connected radio.</p>
     <figure><img src="images/radio-screen-preview.png" alt="Radio Screen page with Live CAT and Demo Sim controls visible"><figcaption>Radio Screen preview while disconnected. Click Demo Sim for simulated motion; Live CAT requires a verified radio connection.</figcaption></figure>
     <figure><img src="images/telemetry-demo.png" alt="Telemetry gauges shown in Demo Mode"><figcaption>Telemetry in Demo Mode; readings are simulated.</figcaption></figure>

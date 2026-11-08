@@ -1,5 +1,11 @@
 # Privacy and network connections
 
+The Power Calibration workbench (2.290) processes manually entered observations
+or a selected local CSV in memory. It never opens a radio port, uploads data,
+reads credentials or launches supplied scripts. CSV and analysis files are
+written only through explicit export to a user-selected path. Unexported
+measurements are lost when the application quits.
+
 Reviewed against source on October 18, 2026 following EA3JIC's review of 2.285. This describes what the application requests, not external providers' retention policies. Every remote peer sees the public/proxy IP address, connection timing and normal transport metadata. DNS lookups disclose hostnames to the resolver even if the connection later fails. This document works offline.
 
 ## Startup and public services
@@ -38,8 +44,8 @@ Credentials use the existing macOS Keychain store. This change adds no telemetry
 ## Application update checks
 
 Sparkle checks are off by default. Explicit checks, or optional automatic checks
-selected in the application menu, contact raw.githubusercontent.com for the
-project appcast and GitHub release hosts for approved downloads. The User-Agent
+selected in Settings → Application Updates, contact lab599-utility.asis.sh for the
+signed project appcast and approved downloads under /releases/. The User-Agent
 identifies the application/version. No operator callsign, locator, logbook or
 cloud credentials are sent. Sparkle system profiling is disabled. Download and
 installation are user-controlled; feeds and archives must be signed.
@@ -50,3 +56,8 @@ FT8 and Live Audio require an explicitly selected receive input. A disconnected 
 Activity/diagnostic log entries remove credential-shaped fields, URL queries/fragments, URL user information, authentication/cookie headers and control characters. Oversized messages are omitted. QRZ/HamQTH credential checks no longer reveal partial session identifiers; cloud upload failures and TQSL failures withhold raw output. This cannot identify every secret in arbitrary prose. Review diagnostics before sharing; historical logs are not rewritten.
 
 TQSL certificate passwords supplied to the existing automated signing workflow are passed using its command-line password option and can be visible to local process inspection while TQSL runs. Diagnostic redaction does not remove this local process exposure. Use an interactive TQSL workflow when this exposure is unacceptable; no alternative password transport is claimed here.
+
+
+## Radio Utility Family
+
+New console/digital-session diagnostics are stored locally under Radio-Utility-Family/Logs with original app/version/build/run provenance. The Radio Family menu explicitly exports this log folder. Existing diagnostic and contact files are preserved. Station sharing/import is off by default. A separate default-off credential control transfers compatible accounts only on explicit publish/import actions using macOS Keychain; credentials are excluded from diagnostics/settings JSON/export. No radio or cloud-upload permission is shared. See docs/RADIO-FAMILY-STORAGE.md.

@@ -61,6 +61,8 @@
     copy.voltageValid = self.voltageValid;
     copy.currentAmps = self.currentAmps;
     copy.currentValid = self.currentValid;
+    copy.configuredPowerPC = self.configuredPowerPC;
+    copy.configuredPowerValid = self.configuredPowerValid;
     copy.rfPowerWatts = self.rfPowerWatts;
     copy.rfPowerValid = self.rfPowerValid;
     copy.swr = self.swr;
@@ -173,8 +175,6 @@ static const NSInteger kMaxTelemetryHistory = 3600;
 @property (nonatomic, assign) NSTimeInterval lastSlowPollTime;
 @property (nonatomic, assign) NSInteger consecutiveEmptyCycles;
 @property (nonatomic, assign) BOOL reportedConnected;
-@property (nonatomic, assign) double paTemperatureCelsius;
-@property (nonatomic, assign) NSTimeInterval lastPollTickTime;
 @end
 
 @implementation TX500TelemetryEngine
@@ -187,8 +187,6 @@ static const NSInteger kMaxTelemetryHistory = 3600;
         _historyCount = 0;
         _historyHead = 0;
         _lastSampleTime = 0;
-        _paTemperatureCelsius = 25.0;
-        _lastPollTickTime = 0;
     }
     return self;
 }
@@ -401,40 +399,18 @@ static void TXApplyRollingAverages(TXRollingAverages *avg, const double sums[4],
         liveData.txStateValid = self.lastTXStateTime > 0 && now - self.lastTXStateTime <= 2.0;
         liveData.sMeterValid = self.lastSMeterTime > 0 && now - self.lastSMeterTime <= 2.0;
         liveData.swrMeterValid = liveData.isTransmitting && self.lastSWRMeterTime > 0 && now - self.lastSWRMeterTime <= 2.0;
-        liveData.rfPowerValid = self.lastPowerTime > 0 && now - self.lastPowerTime <= 3.0;
+        liveData.configuredPowerValid = self.lastPowerTime > 0 && now - self.lastPowerTime <= 3.0;
+        liveData.rfPowerValid = NO;
         liveData.voltageValid = self.lastVoltageTime > 0 && now - self.lastVoltageTime <= 3.0;
         liveData.swrValid = liveData.isTransmitting && liveData.swrMeterValid;
         if (!liveData.swrValid) {
             liveData.swr = 1.0;
         }
 
-        // Live DC Current Drain
-        if (liveData.isTransmitting) {
-            double pwr = (liveData.rfPowerValid && liveData.rfPowerWatts > 0) ? liveData.rfPowerWatts : 5.0;
-            double volt = (liveData.voltageValid && liveData.voltage > 7.0) ? liveData.voltage : 12.0;
-            double swrVal = (liveData.swrValid && liveData.swr >= 1.0) ? liveData.swr : 1.2;
-            liveData.currentAmps = 0.12 + (pwr / (volt * 0.48)) * (1.0 + 0.1 * (swrVal - 1.0));
-        } else {
-            liveData.currentAmps = 0.12; // 120 mA quiescent RX
-        }
-        liveData.currentValid = YES;
-
-        // PA Chassis Thermal Model
-        double dt = (self.lastPollTickTime > 0) ? (now - self.lastPollTickTime) : 0.25;
-        self.lastPollTickTime = now;
-        if (self.paTemperatureCelsius <= 0.0) {
-            self.paTemperatureCelsius = 25.0;
-        }
-        if (liveData.isTransmitting) {
-            double pwr = (liveData.rfPowerValid && liveData.rfPowerWatts > 0) ? liveData.rfPowerWatts : 5.0;
-            self.paTemperatureCelsius += (pwr / 10.0) * (dt / 15.0) * 0.35;
-            if (self.paTemperatureCelsius > 75.0) self.paTemperatureCelsius = 75.0;
-        } else {
-            self.paTemperatureCelsius -= (self.paTemperatureCelsius - 25.0) * (dt / 300.0);
-            if (self.paTemperatureCelsius < 25.0) self.paTemperatureCelsius = 25.0;
-        }
-        liveData.temperatureCelsius = self.paTemperatureCelsius;
-        liveData.temperatureValid = YES;
+        // Neither PC nor the raw meter establishes watts, PA temperature or DC
+        // current. Do not present models derived from assumed watts as sensors.
+        liveData.currentValid = NO;
+        liveData.temperatureValid = NO;
 
         if (receivedThisCycle) {
             self.consecutiveEmptyCycles = 0;
@@ -633,9 +609,11 @@ static NSString *TXModeName(unichar mode) {
     if (!TXStringContainsOnlyDigits(field)) return NO;
     NSInteger raw = field.integerValue;
     if (raw < 10 || raw > 100) return NO;
-    // TX-500 power range is 1-10 W; PC encodes it in tenths of a watt.
-    data.rfPowerWatts = raw / 10.0;
-    data.rfPowerValid = YES;
+    // Rev.3 specifies 010–100 without an engineering unit.
+    data.configuredPowerPC = raw;
+    data.configuredPowerValid = YES;
+    data.rfPowerWatts = 0;
+    data.rfPowerValid = NO;
     return YES;
 }
 
@@ -784,6 +762,8 @@ static NSString *TXModeName(unichar mode) {
     data.isTransmitting = txPhase;
     data.txStateValid = YES;
     data.currentValid = YES;
+    data.configuredPowerPC = 100;
+    data.configuredPowerValid = YES;
     data.rfPowerValid = YES;
     data.temperatureValid = YES;
     data.swrValid = txPhase;

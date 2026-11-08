@@ -811,3 +811,67 @@
 				CODE_SIGN_IDENTITY = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 299;
+				DEAD_CODE_STRIPPING = YES;
+				INFOPLIST_FILE = Resources/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Lab599 Utility";
+				FRAMEWORK_SEARCH_PATHS = ("$(inherited)", "$(PROJECT_DIR)/Vendor/Sparkle", );
+                LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 12.0;
+				MARKETING_VERSION = 2.293;
+				PRODUCT_BUNDLE_IDENTIFIER = "ir.factoreal.lab599-utility";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Debug;
+		};
+		70000004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 299;
+				DEAD_CODE_STRIPPING = YES;
+				INFOPLIST_FILE = Resources/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "Lab599 Utility";
+				FRAMEWORK_SEARCH_PATHS = ("$(inherited)", "$(PROJECT_DIR)/Vendor/Sparkle", );
+                LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 12.0;
+				MARKETING_VERSION = 2.293;
+				PRODUCT_BUNDLE_IDENTIFIER = "ir.factoreal.lab599-utility";
+				PRODUCT_NAME = "$(TARGET_NAME)";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		60000002 /* Build configuration list for PBXNativeTarget "Lab599 Utility" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				70000003 /* Debug */,
+				70000004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		60000003 /* Build configuration list for PBXProject "Lab599-Utility" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				70000001 /* Debug */,
+				70000002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 60000001 /* Project object */;
+}

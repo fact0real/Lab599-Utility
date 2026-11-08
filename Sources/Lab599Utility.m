@@ -1,3 +1,4 @@
+#import "RadioFamilySupport.h"
 #import "TX500DiagnosticPrivacy.h"
 #import "TX500TransmitSafetyBanner.h"
 #import "Lab599AppUpdater.h"
@@ -424,7 +425,8 @@ static NSInteger CWReceiveMode(NSString *command) {
 }
 - (NSString *)currentStationPort { return self.hasPorts ? self.portMenu.selectedItem.title : @""; }
 - (BOOL)applicationUpdateIsSafe {
-    return [self stationCanEdit] && !self.tools.operationInProgress &&
+    return NSApp.modalWindow == nil && self.window.attachedSheet == nil &&
+        [self stationCanEdit] && !self.tools.operationInProgress && !self.tools.hasUnsavedChanges &&
         !self.ft8StationController.audioEngine.isMonitoring &&
         !self.ft8StationController.audioEngine.isTuning &&
         !self.ft8StationController.audioEngine.isReceiveRecoveryPending &&
@@ -529,6 +531,7 @@ static NSInteger CWReceiveMode(NSString *command) {
 - (void)appendLog:(NSString *)message {
     message = TX500PrivateDiagnostic(message);
     if(!NSThread.isMainThread) { dispatch_async(dispatch_get_main_queue(), ^{ [self appendLog:message]; }); return; }
+    [RadioFamilySupport recordEvent:@"console" details:@{@"message":message ?: @""}];
     NSDateFormatter *df = [NSDateFormatter new];
     df.dateFormat = @"HH:mm:ss";
     NSString *entry = [NSString stringWithFormat:@"[%@] %@\n", [df stringFromDate:[NSDate date]], message];
@@ -537,52 +540,25 @@ static NSInteger CWReceiveMode(NSString *command) {
         NSForegroundColorAttributeName: NSColor.labelColor
     };
     [self.logView.textStorage appendAttributedString:[[NSAttributedString alloc] initWithString:entry attributes:attributes]];
-    if (self.digitalSessionLogHandle) {
-        NSData *lineData = [entry dataUsingEncoding:NSUTF8StringEncoding];
-        @try { [self.digitalSessionLogHandle writeData:lineData]; }
-        @catch (__unused NSException *exception) { [self stopDigitalDiagnosticSessionLog]; }
-    }
     if (self.logView.textStorage.length > 200000) [self.logView.textStorage deleteCharactersInRange:NSMakeRange(0, self.logView.textStorage.length - 150000)];
     [self.logView scrollRangeToVisible:NSMakeRange(self.logView.string.length, 0)];
 }
 
 - (void)startDigitalDiagnosticSessionLog {
-    if (self.digitalSessionLogHandle) return;
-    NSString *support = NSSearchPathForDirectoriesInDomains(NSApplicationSupportDirectory, NSUserDomainMask, YES).firstObject;
-    NSString *directory = [support stringByAppendingPathComponent:@"Lab599 Utility/Diagnostic Logs"];
-    [[NSFileManager defaultManager] createDirectoryAtPath:directory withIntermediateDirectories:YES attributes:nil error:nil];
-    NSDateFormatter *nameFormatter = [NSDateFormatter new];
-    nameFormatter.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
-    nameFormatter.timeZone = [NSTimeZone timeZoneWithAbbreviation:@"UTC"];
-    nameFormatter.dateFormat = @"yyyy-MM-dd_HH-mm-ss'Z'";
-    NSString *mode = self.ft8StationController.protocol == TX500_FT8_PROTOCOL_FT4 ? @"FT4" : @"FT8";
-    NSString *filename = [NSString stringWithFormat:@"%@-Diagnostic-%@.log", mode, [nameFormatter stringFromDate:NSDate.date]];
-    self.digitalSessionLogURL = [NSURL fileURLWithPath:[directory stringByAppendingPathComponent:filename]];
-    [[NSFileManager defaultManager] createFileAtPath:self.digitalSessionLogURL.path contents:nil attributes:nil];
-    self.digitalSessionLogHandle = [NSFileHandle fileHandleForWritingToURL:self.digitalSessionLogURL error:nil];
-    self.digitalSessionStartedAt = NSDate.date;
-    NSString *header = [NSString stringWithFormat:@"Lab599 Utility Digital Diagnostic Session\nMode: %@\nStarted: %@\nPort: %@\n%@\n",
-                        mode, self.digitalSessionStartedAt, [self currentStationPort] ?: @"Unavailable",
-                        @"────────────────────────────────────────────────────────"];
-    [self.digitalSessionLogHandle writeData:[header dataUsingEncoding:NSUTF8StringEncoding]];
-    [self appendLog:[NSString stringWithFormat:@"[Diagnostic] Digital session log: %@", self.digitalSessionLogURL.path]];
+    if(self.digitalSessionStartedAt) return;
+    self.digitalSessionStartedAt=NSDate.date;
+    [RadioFamilySupport recordEvent:@"digital-session-start" details:@{@"mode":self.ft8StationController.protocol==TX500_FT8_PROTOCOL_FT4?@"FT4":@"FT8"}];
+    [self appendLog:@"[Diagnostic] New session diagnostics are saved in Radio-Utility-Family/Logs."];
 }
-
 - (void)stopDigitalDiagnosticSessionLog {
-    NSFileHandle *handle = self.digitalSessionLogHandle;
-    if (!handle) return;
-    NSTimeInterval elapsed = self.digitalSessionStartedAt ? [NSDate.date timeIntervalSinceDate:self.digitalSessionStartedAt] : 0;
-    NSString *footer = [NSString stringWithFormat:@"────────────────────────────────────────────────────────\nEnded: %@\nDuration: %.0f seconds\n", NSDate.date, elapsed];
-    @try {
-        [handle writeData:[footer dataUsingEncoding:NSUTF8StringEncoding]];
-        [handle synchronizeFile];
-        [handle closeFile];
-    } @catch (__unused NSException *exception) {}
-    self.digitalSessionLogHandle = nil;
-    self.digitalSessionStartedAt = nil;
+    if(!self.digitalSessionStartedAt) return;
+    [RadioFamilySupport recordEvent:@"digital-session-stop" details:@{@"durationSeconds":@([NSDate.date timeIntervalSinceDate:self.digitalSessionStartedAt])}];
+    self.digitalSessionStartedAt=nil;
 }
+- (void)showRadioFamilySettings:(id)sender { [RadioFamilySupport showSettings]; }
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
+    [RadioFamilySupport recordEvent:@"application-start" details:@{}];
     (void)notification;
 
     // Reset simulation mode preference on launch so real transceivers always operate in live mode
@@ -636,14 +612,11 @@ static NSInteger CWReceiveMode(NSString *command) {
     NSMenu *appMenu = [NSMenu new];
     NSMenuItem *aboutItem = [appMenu addItemWithTitle:@"About Lab599 Utility" action:@selector(showAboutWindow:) keyEquivalent:@""];
     aboutItem.target = self;
-    NSMenuItem *updates = [appMenu addItemWithTitle:@"Check for App Updates…" action:@selector(checkForUpdates:) keyEquivalent:@""];
-    updates.target = self.appUpdater;
-    NSMenuItem *autoUpdates = [appMenu addItemWithTitle:@"Automatically Check for App Updates" action:@selector(toggleAutomaticChecks:) keyEquivalent:@""];
-    autoUpdates.target = self.appUpdater;
-
     [appMenu addItem:[NSMenuItem separatorItem]];
     NSMenuItem *prefsItem = [appMenu addItemWithTitle:@"Preferences…" action:@selector(showPreferencesWindow:) keyEquivalent:@","];
     prefsItem.target = self;
+    NSMenuItem *familyItem=[appMenu addItemWithTitle:@"Radio Family…" action:@selector(showRadioFamilySettings:) keyEquivalent:@""];
+    familyItem.target=self;
     [appMenu addItem:[NSMenuItem separatorItem]];
     [appMenu addItemWithTitle:@"Hide Lab599 Utility" action:@selector(hide:) keyEquivalent:@"h"];
     NSMenuItem *hideOthers = [appMenu addItemWithTitle:@"Hide Others" action:@selector(hideOtherApplications:) keyEquivalent:@"h"];
@@ -2564,7 +2537,7 @@ static NSInteger CWReceiveMode(NSString *command) {
         self.instructions.stringValue = @"Turn the radio on normally with POWER. Lab599 Utility disciplines an internal continuous UTC clock using multi-source network time, calibrated holdover, and robust FT8 timing consensus when offline. Choose local time or UTC for the radio display; the host system clock is never stepped.";
         self.statusLabel.stringValue = @"Ready to synchronize the radio clock in normal operating mode.";
     } else if (isTelemetry) {
-        self.instructions.stringValue = @"Live diagnostic telemetry monitoring for Lab599 TX-500 Discovery / TX-500MP. Displays real-time RF output power, antenna SWR, supply/battery voltage, current consumption, and PA temperature via Kenwood / LAB599 CAT protocol.";
+        self.instructions.stringValue = @"Live LAB599 CAT telemetry for the TX-500 family: raw power setting, meter dots, voltage, frequency and TX/RX state. Power Calibration compares manually recorded dots with an external wattmeter; it does not transmit.";
         self.statusLabel.stringValue = @"Ready. Select CAT serial port or enable Demo Mode to observe live telemetry meters.";
     } else if (isScreen) {
         self.instructions.stringValue = @"Real-Time LCD Screen Capture & Live Display for Lab599 TX-500 Discovery / TX-500MP. Faithfully simulates the 256×128 monochrome LCD matrix with authentic typography, S-meter and power-out bars in the radio's own dots, a panadapter spectrum in Demo Mode, and milled aluminum chassis bezel. Capture screenshots, copy to clipboard, or choose amber, daylight, green, or OLED themes.";
@@ -3358,7 +3331,7 @@ static NSInteger CWReceiveMode(NSString *command) {
         boxTitle.font = [NSFont systemFontOfSize:12 weight:NSFontWeightBold];
 
         NSTextField *featuresList = [NSTextField wrappingLabelWithString:
-            @"• Live Radio Telemetry Dashboard: supply voltage, current drain, RF power, SWR & PA temp\n"
+            @"• Telemetry: voltage, raw PC power setting and meter dots; offline wattmeter calibration\n"
             @"• Firmware Updates with reviewed firmware hashes, BL20 target checks and explicit radio-model confirmation\n"
             @"• Precision Real-Time Clock (RTC) synchronization with host time / UTC\n"
             @"• Real-time CAT command terminal and transceiver diagnostics\n"
@@ -3874,7 +3847,11 @@ static NSInteger CWReceiveMode(NSString *command) {
         ]];
 
 
-        NSStackView *stationOuterStack = [NSStackView stackViewWithViews:@[titleLabel, subLabel, stationBox, timeBox, logBox, appearanceBox, safetyBox]];
+        NSButton *appUpdateSettings = [NSButton buttonWithTitle:@"Application Updates…" target:self.appUpdater action:@selector(showSettings:)];
+        appUpdateSettings.bezelStyle = NSBezelStyleRounded;
+        appUpdateSettings.toolTip = @"Check for updates, choose automatic check frequency, and view update status. Changes apply immediately.";
+
+        NSStackView *stationOuterStack = [NSStackView stackViewWithViews:@[titleLabel, subLabel, stationBox, timeBox, logBox, appearanceBox, safetyBox, appUpdateSettings]];
         stationOuterStack.orientation = NSUserInterfaceLayoutOrientationVertical;
         stationOuterStack.alignment = NSLayoutAttributeLeading;
         stationOuterStack.spacing = 10;
@@ -4453,6 +4430,7 @@ static NSInteger CWReceiveMode(NSString *command) {
     (void)sender;
     if (self.appUpdater.installRequested && ![self applicationUpdateIsSafe]) {
         [self appendLog:@"Application update postponed: stop radio operations before installing."];
+        [self.appUpdater installationWasDeferred];
         return NSTerminateCancel;
     }
     if (self.terminateAfterToolsStop) return NSTerminateLater;

@@ -65,10 +65,17 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
 USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-## Sparkle 2.10.0
+## Power calibration inspiration
+
+The offline Power Calibration workbench was inspired by EA3JIC's
+`tx500_power_cat` v0.7 explanation and tools (GPLv3 or later). The native code
+is implemented in this GPLv3 project. The supplied Python scripts, simulator
+examples and automatic-transmit sweep are not bundled.
+
+## Sparkle 2.10.1
 
 The application update framework is distributed by the Sparkle Project under
 its permissive licence, including the upstream notices. Full text:
 [Resources/Sparkle-LICENSE.txt](Resources/Sparkle-LICENSE.txt). Official upstream:
-https://github.com/sparkle-project/Sparkle/tree/2.10.0 . The build fetches the
+https://github.com/sparkle-project/Sparkle/tree/2.10.1 . The build fetches the
 version-pinned distribution and verifies its SHA-256 before extraction.

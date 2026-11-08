@@ -1770,19 +1770,24 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
             if (![port writeData:data timeout:0.25 cancellation:tok error:nil]) return nil;
 
             NSMutableData *resp = [NSMutableData data];
+            NSString *prefix=[s substringToIndex:s.length-1];
             double deadline = Lab599MonotonicTime() + 0.25;
             while (Lab599MonotonicTime() < deadline) {
                 NSData *chunk = [port readMaximum:64 timeout:0.04 cancellation:tok error:nil];
-                if (chunk.length > 0) {
-                    [resp appendData:chunk];
-                    NSData *semi = [@";" dataUsingEncoding:NSASCIIStringEncoding];
-                    if ([resp rangeOfData:semi options:0 range:NSMakeRange(0, resp.length)].location != NSNotFound) {
-                        break;
-                    }
+                if(!chunk.length) continue;
+                [resp appendData:chunk];
+                if(resp.length>1024) return nil;
+                NSData *semi=[@";" dataUsingEncoding:NSASCIIStringEncoding];
+                NSRange end;
+                while((end=[resp rangeOfData:semi options:0 range:NSMakeRange(0,resp.length)]).location!=NSNotFound) {
+                    NSData *frame=[resp subdataWithRange:NSMakeRange(0,end.location+1)];
+                    [resp replaceBytesInRange:NSMakeRange(0,end.location+1) withBytes:NULL length:0];
+                    NSString *reply=[[NSString alloc] initWithData:frame encoding:NSASCIIStringEncoding];
+                    if([reply isEqualToString:@"?;"]) return nil;
+                    // Echoes, unsolicited updates and late replies to another
+                    // query cannot establish a fresh snapshot of this value.
+                    if(reply.length>s.length && [reply hasPrefix:prefix]) return reply;
                 }
-            }
-            if (resp.length > 0) {
-                return [[NSString alloc] initWithData:resp encoding:NSASCIIStringEncoding];
             }
             return nil;
         };
@@ -1923,7 +1928,10 @@ static const size_t kAmateurBandsCount = sizeof(kAmateurBands) / sizeof(kAmateur
 
         // Update state on Main Queue
         dispatch_async(dispatch_get_main_queue(), ^{
-            if (self.demoModeActive) { self->_isPolling = NO; return; } // switched to Demo meanwhile
+            NSString *currentPort=self.selectedPortProvider ? self.selectedPortProvider() : nil;
+            if (self.demoModeActive || ![currentPort isEqualToString:portPath]) {
+                self->_isPolling = NO; return;
+            } // A stale port/session cannot publish a fresh radio snapshot.
             if (detectedModel.length > 0) self.screenState.hardwareModelName = detectedModel;
             if (freqA > 0) {
                 self.screenState.frequencyHz = freqA;

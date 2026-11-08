@@ -1,4 +1,5 @@
 #import "Lab599TelemetryController.h"
+#import "TX500PowerCalibrationController.h"
 
 @interface Lab599TelemetryController ()
 
@@ -7,6 +8,7 @@
 
 // Gauges
 @property (nonatomic, strong) TXGaugeView *powerGauge;
+@property (nonatomic, strong) TX500PowerCalibrationController *powerCalibration;
 @property (nonatomic, strong) TXGaugeView *swrGauge;
 @property (nonatomic, strong) TXGaugeView *voltGauge;
 @property (nonatomic, strong) TXGaugeView *currentGauge;
@@ -126,16 +128,14 @@
     ]];
 
     // 2. Gauges Setup
-    // PC; reports the configured power in tenths of a watt. It is a setpoint,
-    // not a calibrated forward-power measurement.
-    self.powerGauge = [[TXGaugeView alloc] initWithTitle:@"TX POWER SETPOINT" unit:@"W" min:1.0 max:10.0 format:@"%.1f"];
-    self.powerGauge.greenStart = 1.0;
-    self.powerGauge.greenEnd = 10.0;
-    self.powerGauge.yellowStart = 10.0;
-    self.powerGauge.yellowEnd = 10.0;
-    self.powerGauge.redStart = 10.0;
-    self.powerGauge.redEnd = 10.0;
-    self.powerGauge.subBadge = @"PC; configured";
+    // Raw PC setpoint: neither CAT rev.3 nor an external measurement defines
+    // a universal conversion of this setting into watts.
+    self.powerGauge = [[TXGaugeView alloc] initWithTitle:@"CONFIGURED POWER" unit:@"PC" min:10 max:100 format:@"%.0f"];
+    self.powerGauge.greenStart = 10;
+    self.powerGauge.greenEnd = 100;
+    self.powerGauge.yellowStart = self.powerGauge.yellowEnd = 100;
+    self.powerGauge.redStart = self.powerGauge.redEnd = 100;
+    self.powerGauge.subBadge = @"Raw PC; value • not watts";
 
     self.swrGauge = [[TXGaugeView alloc] initWithTitle:@"ANTENNA SWR" unit:@":1" min:1.0 max:5.0 format:@"%.1f:1"];
     self.swrGauge.greenStart = 1.0;
@@ -170,7 +170,7 @@
     self.currentGauge.yellowEnd = 3.2;
     self.currentGauge.redStart = 3.2;
     self.currentGauge.redEnd = 4.0;
-    self.currentGauge.subBadge = @"DC drain (live)";
+    self.currentGauge.subBadge = @"Unavailable via CAT • demo only";
     [self.currentGauge setUnavailable:@"N/A"];
 
     self.tempGauge = [[TXGaugeView alloc] initWithTitle:@"PA TEMPERATURE" unit:@"°C" min:10.0 max:80.0 format:@"%.1f"];
@@ -180,7 +180,7 @@
     self.tempGauge.yellowEnd = 58.0;
     self.tempGauge.redStart = 60.0;
     self.tempGauge.redEnd = 80.0;
-    self.tempGauge.subBadge = @"PA thermal sensor";
+    self.tempGauge.subBadge = @"Unavailable via CAT • demo only";
     [self.tempGauge setUnavailable:@"N/A"];
 
     NSStackView *bottomGauges = [NSStackView stackViewWithViews:@[self.voltGauge, self.currentGauge, self.tempGauge]];
@@ -200,7 +200,7 @@
     self.swrGuard.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
     self.swrGuard.textColor = [NSColor secondaryLabelColor];
 
-    self.tempGuard = [NSTextField labelWithString:@"ⓘ PA temperature & DC current active"];
+    self.tempGuard = [NSTextField labelWithString:@"ⓘ PA temperature & DC current unavailable via CAT"];
     self.tempGuard.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
     self.tempGuard.textColor = [NSColor secondaryLabelColor];
 
@@ -228,6 +228,7 @@
     guardsRow1.alignment = NSLayoutAttributeCenterY;
 
     NSStackView *guardsRow2 = [NSStackView stackViewWithViews:@[self.tempGuard, avgLabel, self.avgSegment, resetPeakBtn]];
+    NSButton *calibrationButton = [NSButton buttonWithTitle:@"Power Calibration…" target:self action:@selector(openPowerCalibration:)];
     guardsRow2.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     guardsRow2.spacing = 12;
     guardsRow2.alignment = NSLayoutAttributeCenterY;
@@ -242,7 +243,7 @@
     self.connStatusLabel.textColor = [NSColor secondaryLabelColor];
 
     // Master Vertical Stack
-    NSStackView *master = [NSStackView stackViewWithViews:@[statusCard, topGauges, bottomGauges, guardsStack, self.connStatusLabel]];
+    NSStackView *master = [NSStackView stackViewWithViews:@[statusCard, topGauges, bottomGauges, guardsStack, calibrationButton, self.connStatusLabel]];
     master.translatesAutoresizingMaskIntoConstraints = NO;
     master.orientation = NSUserInterfaceLayoutOrientationVertical;
     master.spacing = 10;
@@ -261,6 +262,12 @@
 }
 
 #pragma mark - Actions
+
+- (void)openPowerCalibration:(id)sender {
+    if (!self.powerCalibration) self.powerCalibration = [TX500PowerCalibrationController new];
+    [self.powerCalibration showWindow:self];
+    [self.powerCalibration.window makeKeyAndOrderFront:self];
+}
 
 - (void)toggleMonitoring:(id)sender {
     if (self.engine.isRunning) {
@@ -392,7 +399,7 @@
     }
 
     // Update Gauges
-    if (d.rfPowerValid) [self.powerGauge setValue:d.rfPowerWatts animated:YES];
+    if (d.configuredPowerValid) [self.powerGauge setValue:d.configuredPowerPC animated:YES];
     else [self.powerGauge setUnavailable:@"N/A"];
 
     if (d.swrValid && d.swr >= 1.0) {
@@ -412,12 +419,7 @@
     else [self.tempGauge setUnavailable:@"N/A"];
 
     // Update Multi-Interval Rolling Averages (5m, 15m, 30m, 60m)
-    if (d.rfPowerAverages && d.rfPowerAverages.hasData) {
-        [self.powerGauge setAverages5m:d.rfPowerAverages.avg5m
-                                   m15:d.rfPowerAverages.avg15m
-                                   m30:d.rfPowerAverages.avg30m
-                                   m60:d.rfPowerAverages.avg60m];
-    }
+    self.powerGauge.hasAverages = NO; // Raw PC settings are not RF watt averages.
     if (d.swrAverages && d.swrAverages.hasData) {
         [self.swrGauge setAverages5m:d.swrAverages.avg5m
                                  m15:d.swrAverages.avg15m
@@ -500,7 +502,7 @@
         self.tempGuard.stringValue = [NSString stringWithFormat:@"🌡️ Thermal Guard: OK (%.1f°C)", d.temperatureCelsius];
         self.tempGuard.textColor = [NSColor systemGreenColor];
     } else {
-        self.tempGuard.stringValue = @"ⓘ PA temperature & DC current active";
+        self.tempGuard.stringValue = @"ⓘ PA temperature & DC current unavailable via CAT";
         self.tempGuard.textColor = [NSColor secondaryLabelColor];
     }
 }

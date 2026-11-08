@@ -17,7 +17,9 @@ NS_ASSUME_NONNULL_BEGIN
 @property (nonatomic, assign) BOOL voltageValid;          // YES only after a real VL; reply (or demo sample)
 @property (nonatomic, assign) double currentAmps;         // Reserved until CAT exposes a real current measurement
 @property (nonatomic, assign) BOOL currentValid;
-@property (nonatomic, assign) double rfPowerWatts;        // Configured TX power from PC; (1.0 - 10.0W), not measured RF
+@property (nonatomic, assign) NSInteger configuredPowerPC; // Raw documented PC range 10–100; CAT does not specify watts
+@property (nonatomic, assign) BOOL configuredPowerValid;
+@property (nonatomic, assign) double rfPowerWatts;        // Synthetic watts in Demo only; unavailable in live CAT
 @property (nonatomic, assign) BOOL rfPowerValid;
 @property (nonatomic, assign) double swr;                 // Engineering SWR ratio, currently unavailable in live CAT
 @property (nonatomic, assign) BOOL swrValid;

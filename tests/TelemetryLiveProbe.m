@@ -14,7 +14,7 @@ int main(int argc, const char *argv[]) {
         __block NSString *lastStatus = @"";
         [engine startWithPort:path interval:0.25 update:^(TXTelemetryData *data) {
             if (data.frequencyValid && data.modeValid && data.txStateValid &&
-                data.sMeterValid && data.rfPowerValid && data.voltageValid) {
+                data.sMeterValid && data.configuredPowerValid && data.voltageValid) {
                 received = data;
             }
         } status:^(NSString *status, BOOL connected) {
@@ -33,12 +33,12 @@ int main(int argc, const char *argv[]) {
             fprintf(stderr, "FAIL: %s\n", lastStatus.UTF8String);
             return 1;
         }
-        printf("PASS: %.6f MHz, %s, %s, SM=%ld/30, PC=%.1f W, VL=%.1f V, current=N/A, temp=N/A\n",
+        printf("PASS: %.6f MHz, %s, %s, SM=%ld/30, PC=%ld raw, VL=%.1f V, current=N/A, temp=N/A\n",
                (double)received.frequencyHz / 1000000.0,
                received.operatingMode.UTF8String,
                received.isTransmitting ? "TX" : "RX",
                (long)received.sMeterDots,
-               received.rfPowerWatts,
+               (long)received.configuredPowerPC,
                received.voltage);
     }
     return 0;

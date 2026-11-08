@@ -63,7 +63,9 @@ static NSInteger LitPODots(TX500ScreenState *s) {
     NSInteger (*call)(id, SEL, TX500ScreenState *) = (NSInteger (*)(id, SEL, TX500ScreenState *))[TX500ScreenRenderer methodForSelector:sel];
     return call([TX500ScreenRenderer class], sel, s);
 }
+static void Check(BOOL passed, NSString *message);
 static void RefreshFromFakeRadio(TX500ScreenCaptureController *c) {
+    Check(SpinUntil(^BOOL{ return ![[c valueForKey:@"isPolling"] boolValue]; },10.0), @"Previous fake-radio poll completed");
     @synchronized (fakeRadioCommands) { [fakeRadioCommands removeAllObjects]; }
     [c refreshSnapshotFromRadio];
     SpinUntil(^BOOL{ @synchronized (fakeRadioCommands) { return [fakeRadioCommands containsObject:@"NT;"]; } }, 10.0);
@@ -359,14 +361,14 @@ int main(void) {
         [honest handleChassisControlPress:TX500ControlLock atChassisPoint:NSZeroPoint];
         BOOL lockedSent=SpinUntil(^BOOL{ @synchronized(fakeRadioCommands) { return [fakeRadioCommands containsObject:@"LK10;"]; } },3);
         Check(lockedSent, @"Lock button sends the documented lock command from a known unlocked state");
-        fakeReplies[@"FA;"] = @"FA00014074000;";
+        fakeReplies[@"FA;"] = @"MD2;FA00014074000;"; // unrelated complete frame must not consume the FA reply
         RefreshFromFakeRadio(honest);
         [honest renderAndUpdateDisplay];
         Check([hud.stringValue containsString:@"PO: 12 dots"] && ![hud.stringValue containsString:@" W "],
               [NSString stringWithFormat:@"TX shows the radio's power-out dots, not invented watts (%@)", hud.stringValue]);
         Check(LitPODots(honest.screenState) == 12, @"The PO bar lights the radio's 12 dots");
         Check(honest.screenState.spectrumAmplitudes.count == 0, @"Live CAT draws no invented spectrum");
-        Check([hud.stringValue hasSuffix:@"[LIVE CAT 9600]"], @"After a real answer the panel says Live CAT");
+        Check([hud.stringValue hasSuffix:@"[LIVE CAT 9600]"], [NSString stringWithFormat:@"After a real answer the panel says Live CAT (HUD: %@)", hud.stringValue]);
         fakeReplies[@"FA;"] = @"FA00014074000;";
         for (NSInteger rx = 0; rx < 4; rx++) {
             fakeReplies[@"FL;"] = [NSString stringWithFormat:@"FL%ld1;", (long)rx];

@@ -1,4 +1,5 @@
 #import "RadioFamilySupport.h"
+#import "Lab599FamilyFleet.h"
 #import "TX500DiagnosticPrivacy.h"
 #import "TX500TransmitSafetyBanner.h"
 #import "Lab599AppUpdater.h"
@@ -358,6 +359,7 @@ static void dumpViewTree(NSView *v, int depth, NSMutableString *outStr) {
 @property(nonatomic, strong) NSPopUpButton *prefDefaultBandPopup;
 @property(nonatomic, strong) NSButton *prefLogQsoCheckbox;
 @property(nonatomic, strong) NSButton *prefLogDecodesCheckbox;
+@property(nonatomic, strong) NSButton *prefFamilyFleetCheckbox;
 @property(nonatomic, strong) NSPopUpButton *prefThemePopup;
 @property(nonatomic, strong) NSTextField *prefSWRThresholdField;
 @property(nonatomic, strong) NSTextField *prefMaxReplyAttemptsField;
@@ -559,6 +561,7 @@ static NSInteger CWReceiveMode(NSString *command) {
 
 - (void)applicationDidFinishLaunching:(NSNotification *)notification {
     [RadioFamilySupport recordEvent:@"application-start" details:@{}];
+    [[Lab599FamilyFleet sharedFleet] refreshFromPreferences];
     (void)notification;
 
     // Reset simulation mode preference on launch so real transceivers always operate in live mode
@@ -3427,6 +3430,15 @@ static NSInteger CWReceiveMode(NSString *command) {
 
 #pragma mark - Preferences Window
 
+- (void)showFamilyFleetStatus:(id)sender {
+    (void)sender;
+    NSAlert *alert = [NSAlert new];
+    alert.messageText = @"Radio Utility Family Status";
+    alert.informativeText = [Lab599FamilyFleet.sharedFleet liveStatusSummary];
+    [alert addButtonWithTitle:@"OK"];
+    [alert runModal];
+}
+
 - (void)showPreferencesWindow:(id)sender {
     (void)sender;
     if (!self.preferencesWindow) {
@@ -3714,7 +3726,17 @@ static NSInteger CWReceiveMode(NSString *command) {
         autoLogDesc.textColor = NSColor.tertiaryLabelColor;
         autoLogDesc.translatesAutoresizingMaskIntoConstraints = NO;
 
-        NSStackView *logStack = [NSStackView stackViewWithViews:@[logTitle, self.prefLogQsoCheckbox, autoLogDesc, self.prefLogDecodesCheckbox, openLogsBtn]];
+        self.prefFamilyFleetCheckbox = [NSButton checkboxWithTitle:@"Share this app's online status with my other Radio Utility apps" target:nil action:nil];
+        self.prefFamilyFleetCheckbox.font = [NSFont systemFontOfSize:12];
+        self.prefFamilyFleetCheckbox.translatesAutoresizingMaskIntoConstraints = NO;
+        NSTextField *familyFleetDesc = [NSTextField wrappingLabelWithString:@"Opt-in heartbeat every 15 seconds in iCloud Drive. Other family apps can see that Lab599 Utility is open; CAT and radio state remain unverified. This app does not accept remote radio commands."];
+        familyFleetDesc.font = [NSFont systemFontOfSize:11];
+        familyFleetDesc.textColor = NSColor.tertiaryLabelColor;
+        familyFleetDesc.translatesAutoresizingMaskIntoConstraints = NO;
+        NSButton *familyFleetStatusButton = [NSButton buttonWithTitle:@"Show online family apps…" target:self action:@selector(showFamilyFleetStatus:)];
+        familyFleetStatusButton.bezelStyle = NSBezelStyleInline;
+        familyFleetStatusButton.translatesAutoresizingMaskIntoConstraints = NO;
+        NSStackView *logStack = [NSStackView stackViewWithViews:@[logTitle, self.prefLogQsoCheckbox, autoLogDesc, self.prefLogDecodesCheckbox, openLogsBtn, self.prefFamilyFleetCheckbox, familyFleetDesc, familyFleetStatusButton]];
         logStack.orientation = NSUserInterfaceLayoutOrientationVertical;
         logStack.alignment = NSLayoutAttributeLeading;
         logStack.spacing = 8;
@@ -3726,7 +3748,8 @@ static NSInteger CWReceiveMode(NSString *command) {
             [logStack.trailingAnchor constraintEqualToAnchor:logBox.contentView.trailingAnchor constant:-14],
             [logStack.topAnchor constraintEqualToAnchor:logBox.contentView.topAnchor constant:12],
             [logStack.bottomAnchor constraintEqualToAnchor:logBox.contentView.bottomAnchor constant:-12]
-            ,[autoLogDesc.widthAnchor constraintEqualToAnchor:logStack.widthAnchor]
+            ,[autoLogDesc.widthAnchor constraintEqualToAnchor:logStack.widthAnchor],
+            [familyFleetDesc.widthAnchor constraintEqualToAnchor:logStack.widthAnchor]
         ]];
 
         // --- Card 4: Appearance (Theme) ---
@@ -3982,6 +4005,8 @@ static NSInteger CWReceiveMode(NSString *command) {
     id autoLogDecodesVal = [[NSUserDefaults standardUserDefaults] objectForKey:@"TX500_AutoLogDecodes"];
     self.prefLogDecodesCheckbox.state = (autoLogDecodesVal == nil || [autoLogDecodesVal boolValue]) ? NSControlStateValueOn : NSControlStateValueOff;
 
+    self.prefFamilyFleetCheckbox.state = [[NSUserDefaults standardUserDefaults] boolForKey:@"TX500_FamilyFleetPresenceEnabled"] ? NSControlStateValueOn : NSControlStateValueOff;
+
     // Theme
     NSInteger themeIdx = [[NSUserDefaults standardUserDefaults] integerForKey:@"TX500_AppTheme"];
     if (themeIdx < 0 || themeIdx > 2) themeIdx = 0;
@@ -4062,6 +4087,7 @@ static NSInteger CWReceiveMode(NSString *command) {
     NSString *band = self.prefDefaultBandPopup.titleOfSelectedItem ?: @"20m (14.074 MHz)";
     BOOL autoLogQSO = (self.prefLogQsoCheckbox.state == NSControlStateValueOn);
     BOOL autoLogDecodes = (self.prefLogDecodesCheckbox.state == NSControlStateValueOn);
+    BOOL shareFamilyPresence = (self.prefFamilyFleetCheckbox.state == NSControlStateValueOn);
     NSInteger themeIdx = self.prefThemePopup.indexOfSelectedItem; // 0=System, 1=Light, 2=Dark
     double swrThreshold = [self.prefSWRThresholdField.stringValue doubleValue];
     if (swrThreshold < 0.0) swrThreshold = 0.0;
@@ -4081,6 +4107,8 @@ static NSInteger CWReceiveMode(NSString *command) {
     [[NSUserDefaults standardUserDefaults] setObject:band forKey:@"TX500_DefaultBand"];
     [[NSUserDefaults standardUserDefaults] setBool:autoLogQSO forKey:@"TX500_AutoLogQSO"];
     [[NSUserDefaults standardUserDefaults] setBool:autoLogDecodes forKey:@"TX500_AutoLogDecodes"];
+    [[NSUserDefaults standardUserDefaults] setBool:shareFamilyPresence forKey:@"TX500_FamilyFleetPresenceEnabled"];
+    [Lab599FamilyFleet.sharedFleet refreshFromPreferences];
     [[NSUserDefaults standardUserDefaults] setInteger:themeIdx forKey:@"TX500_AppTheme"];
     [[NSUserDefaults standardUserDefaults] setDouble:swrThreshold forKey:@"TX500_SWRThreshold"];
     [[NSUserDefaults standardUserDefaults] setInteger:maxAttempts forKey:@"TX500_MaxReplyAttempts"];
@@ -4575,6 +4603,7 @@ static NSInteger CWReceiveMode(NSString *command) {
 - (void)applicationWillTerminate:(NSNotification *)notification {
     (void)notification;
     [self stopDigitalDiagnosticSessionLog];
+    [Lab599FamilyFleet.sharedFleet stop];
 }
 
 @end

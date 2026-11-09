@@ -2,12 +2,11 @@
 
 A native macOS application for the Lab599 TX-500 family of transceivers. It includes a Station workspace, DX Cluster, FT8/FT4 and CW operation, Voice Keyer, contact logbook, firmware updates, live telemetry, radio screen capture, time sync, CAT diagnostics, settings and memory management. Developed by **EP2AES (factoreal)**.
 
-**Newest pre-release: v2.291 (Build 297) · macOS 12+ · Apple Silicon and Intel · English interface · Persian guide included**
+**Latest release: v2.294 (Build 300) · macOS 12+ · Apple Silicon and Intel · English interface · Persian guide included**
 
-[Download v2.291](https://lab599-utility.asis.sh/releases/Lab599-Utility-2.291.zip) · [Release notes](RELEASE-NOTES-2.291.md) · [Illustrated guide](Resources/Help/index.html) · [Report an issue](https://github.com/fact0real/Lab599-Utility/issues/new)
+[Download v2.294](https://lab599-utility.asis.sh/releases/Lab599-Utility-2.294.zip) · [Release notes](RELEASE-NOTES-2.294.md) · [Illustrated guide](Resources/Help/index.html) · [Report an issue](https://github.com/fact0real/Lab599-Utility/issues/new)
 
-Version 2.291 bootstraps signed in-app updates from lab599-utility.asis.sh. Users
-of 2.285 must install this version manually once. See [application updates](docs/APP-UPDATES.md).
+Version 2.294 is available through the signed in-app update channel at lab599-utility.asis.sh. See [application updates](docs/APP-UPDATES.md).
 
 ## Included since v2.290 (Build 296)
 
@@ -34,12 +33,12 @@ The reviewed fixes are included in 2.291.
 
 ## Download and install
 
-Download `Lab599-Utility-2.291.zip` from the [project website](https://lab599-utility.asis.sh/). Extract the ZIP and move `Lab599 Utility.app` to `/Applications`. The ZIP contains the app, offline illustrated Help, English and Persian guides, and license notices; manufacturer firmware is not included.
+Download `Lab599-Utility-2.294.zip` from the [project website](https://lab599-utility.asis.sh/). Extract the ZIP and move `Lab599 Utility.app` to `/Applications`. The ZIP contains the app, offline illustrated Help, English and Persian guides, and license notices; manufacturer firmware is not included.
 
 Verify the download before opening the app:
 
 ```sh
-shasum -a 256 Lab599-Utility-2.291.zip
+shasum -a 256 Lab599-Utility-2.294.zip
 ```
 
 Compare the result with the matching `.zip.sha256` checksum file on the project website. The app is ad-hoc signed, **not Apple notarized**. If macOS blocks the first launch, select this app in **System Settings → Privacy & Security → Open Anyway** after verifying the checksum.
@@ -192,7 +191,7 @@ Use the Settings → Application Updates → **Check for App Updates…**, under
 optional and off initially; installation always needs an explicit decision and
 an idle radio. Signed feeds and archives are required. This updates the Mac
 application, not radio firmware. The first upgrade from 2.285 is manual.
-The signed product-server feed delivers reviewed releases; v2.291 establishes
+The signed product-server feed delivers reviewed releases. Version 2.294 includes
 the updater for users upgrading manually from v2.285.
 See [application update setup and release procedure](docs/APP-UPDATES.md).
 

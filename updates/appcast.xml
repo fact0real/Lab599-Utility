@@ -9,6 +9,21 @@ IMPORTANT: This file was signed by Sparkle. Any modifications to this file requi
         <description>Reviewed macOS application releases. No firmware updates are delivered through this feed.</description>
         <language>en</language>
         <item>
+            <title>2.294</title>
+            <pubDate>Mon, 09 Nov 2026 16:16:57 +0330</pubDate>
+            <sparkle:version>300</sparkle:version>
+            <sparkle:shortVersionString>2.294</sparkle:shortVersionString>
+            <sparkle:minimumSystemVersion>12.0</sparkle:minimumSystemVersion>
+            <description sparkle:format="markdown"><![CDATA[# Lab599 Utility 2.294 — Build 300
+
+- Adds opt-in Radio Utility Family presence so another computer can see that Lab599 Utility is open.
+- Publishes app identity, version/build, selected model and heartbeat timestamp every 15 seconds to the shared iCloud Drive family folder.
+- Adds a Preferences control and live peer status view. Presence is off by default.
+- Reports radio/CAT state as unverified and does not accept remote radio-control commands.
+]]></description>
+            <enclosure url="https://lab599-utility.asis.sh/releases/Lab599-Utility-2.294.zip" length="9184648" type="application/octet-stream" sparkle:edSignature="aZck1QATjzBFaLwN1kD4IgP/S5KAo8Z6Oem4gHXkBRpmOXjBLqxOMixCkVwjiBE0Xgw6agg+MD2+nKRsliRVDQ=="/>
+        </item>
+        <item>
             <title>2.293</title>
             <pubDate>Sun, 08 Nov 2026 19:52:24 +0330</pubDate>
             <sparkle:version>299</sparkle:version>
@@ -66,6 +81,6 @@ firmware, audio-interface and cloud-provider behavior retain their documented li
     </channel>
 </rss>
 <!-- sparkle-signatures:
-edSignature: rSNtWzlz1eabPYWg1fglUDMSGnPhqFFb9vthzKM7osjLyXR22k4nPPYEQ84OGW41coQG+9F6rgzj5nyyoYdSAQ==
-length: 5155
+edSignature: F/KfFIDvA+rrCu6Y+aTm0ag1ghL+mXgk54xgRLmG5c6Y73RrJI8RgTDPJC4W2iG55rvY9yG6D9JxV5dVk1WCAA==
+length: 6273
 -->

@@ -104,6 +104,7 @@
 		100001E2 /* Network.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 200001E2 /* Network.framework */; };
         10000710 /* TX500PowerCalibration.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000710; };
         10000711 /* TX500PowerCalibrationController.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000711; };
+        10000720 /* Lab599FamilyFleet.m in Sources */ = {isa = PBXBuildFile; fileRef = 20000720; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -267,6 +268,8 @@
         20000711 /* TX500PowerCalibrationController.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TX500PowerCalibrationController.m; sourceTree = "<group>"; };
         20000712 /* TX500PowerCalibration.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TX500PowerCalibration.h; sourceTree = "<group>"; };
         20000713 /* TX500PowerCalibrationController.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TX500PowerCalibrationController.h; sourceTree = "<group>"; };
+        20000720 /* Lab599FamilyFleet.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = Lab599FamilyFleet.m; sourceTree = "<group>"; };
+        20000721 /* Lab599FamilyFleet.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = Lab599FamilyFleet.h; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -336,6 +339,7 @@
 				20000600 /* Lab599AppUpdater.m */,
                 FA196002FA196002FA196002 /* RadioFamilySupport.m */,
                 20000001 /* Lab599Utility.m */,
+                20000720 /* Lab599FamilyFleet.m */,
 				20000002 /* Lab599FirmwareCatalog.m */,
 				20000003 /* TX500Transfer.m */,
 				20000007 /* TX500TimeSync.m */,
@@ -600,6 +604,7 @@
 				10000600 /* Lab599AppUpdater.m in Sources */,
                 FA196001FA196001FA196001 /* RadioFamilySupport.m in Sources */,
                 10000001 /* Lab599Utility.m in Sources */,
+                10000720 /* Lab599FamilyFleet.m in Sources */,
 				10000002 /* Lab599FirmwareCatalog.m in Sources */,
 				10000003 /* TX500Transfer.m in Sources */,
 				10000007 /* TX500TimeSync.m in Sources */,
